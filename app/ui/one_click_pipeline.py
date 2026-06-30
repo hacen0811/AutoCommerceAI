@@ -14,7 +14,9 @@ from modules.video.video_path_resolver import VideoPathResolver
 from modules.project.repository import ProjectRepository
 
 
+UI_VERSION = "0630-final-stable-selected-sources"
 SELECTED_DIR = Path("exports/selected_sources")
+RESULT_DIR = Path("exports/one_click_results")
 
 
 def read_file_text(path):
@@ -25,6 +27,16 @@ def read_file_text(path):
     except Exception:
         return ""
     return ""
+
+
+def read_json(path, default=None):
+    try:
+        p = Path(path)
+        if p.exists():
+            return json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return default
+    return default
 
 
 def write_json(path, data):
@@ -63,6 +75,24 @@ def save_selected_sources(project, sources):
         if isinstance(source, dict):
             clean_sources.append(source)
     write_json(selected_sources_path(project), clean_sources)
+
+
+def latest_result_path(project):
+    return RESULT_DIR / f"{safe_project_id(project)}_latest_result.json"
+
+
+def load_latest_result(project):
+    data = read_json(latest_result_path(project), {})
+    return data if isinstance(data, dict) else {}
+
+
+def save_latest_result(project, result):
+    if isinstance(result, dict) and result:
+        write_json(latest_result_path(project), result)
+
+
+def pipeline_result_session_key(project):
+    return f"one_click_pipeline_result_{safe_project_id(project)}"
 
 
 def show_download_button(label, path, mime="text/plain"):
@@ -239,18 +269,16 @@ def show_candidate_card(project, platform, item):
 
         with b2:
             if st.button(
-                "이 후보 채택",
-                key=key_prefix,
-                use_container_width=True,
-            ):
-                added = select_source(project, platform, item, url)
-                st.session_state[selected_notice_key(project)] = (
-                    "후보를 채택하고 저장했습니다."
-                    if added
-                    else "이미 채택한 후보입니다. 중복 저장하지 않았습니다."
-                )
-                st.rerun()
+                 "이 후보 채택",
+                 key=key_prefix,
+                 use_container_width=True,
+):
+                 added = select_source(project, platform, item, url)
 
+                 if added:
+                     st.success("후보를 채택하고 저장했습니다.")
+                 else:
+                     st.info("이미 채택한 후보입니다.")
 
 def show_top10(project, title, platform, items):
     if not items:
@@ -385,14 +413,14 @@ def show_pipeline_result(project, result, path_debug):
         product_plan = outputs.get("product_plan", {})
         keywords = product_plan.get("keywords", {})
 
+        show_selected_sources(project)
+
         if keywords:
             show_search_links(keywords)
             show_top10(project, "타오바오 TOP10", "taobao", keywords.get("taobao_top10", []))
             show_top10(project, "도우인 TOP10", "douyin", keywords.get("douyin_top10", []))
         else:
             st.info("상품 기획 키워드 결과가 없습니다.")
-
-        show_selected_sources(project)
 
         real_vision = outputs.get("real_vision") or state.get("results", {}).get("real_vision", {})
         if real_vision:
@@ -443,14 +471,13 @@ def show_pipeline_result(project, result, path_debug):
 def show_one_click_pipeline():
     st.title("⚡ 원클릭 파이프라인")
     st.caption("상품 계획 → 소스 영상 → Vision 분석 → CapCut → 콘텐츠 생성까지 한 번에 실행합니다.")
+    st.caption("UI 버전: sprint5-result-persist-001")
 
     selector = ProjectSelector()
     projects = selector.all_projects()
 
     if not projects:
         st.info("프로젝트가 없습니다. 먼저 🛒 제품 AI에서 프로젝트를 생성해주세요.")
-        if st.button("제품 AI로 이동 안내", use_container_width=True):
-            st.warning("왼쪽 메뉴에서 🛒 제품 AI를 선택해 쿠팡 링크로 프로젝트를 생성하세요.")
         return
 
     labels = selector.labels(projects)
@@ -459,13 +486,34 @@ def show_one_click_pipeline():
     project = ProjectRepository().get(project.id) or project
     init_selected_sources(project)
 
+    project_safe_id = safe_project_id(project)
+    result_key = f"one_click_result_{project_safe_id}"
+    result_dir = Path("exports/one_click_results")
+    result_path = result_dir / f"{project_safe_id}_latest_result.json"
+
+    def save_result(result):
+        result_dir.mkdir(parents=True, exist_ok=True)
+        result_path.write_text(
+            json.dumps(result, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+    def load_result():
+        if not result_path.exists():
+            return None
+        try:
+            data = json.loads(result_path.read_text(encoding="utf-8"))
+            return data if isinstance(data, dict) else None
+        except Exception:
+            return None
+
     path_debug = VideoPathResolver().debug(project)
     project_name = project.product_name or project.title
 
     st.success(f"선택된 프로젝트: {project_name}")
 
     if not path_debug.get("exists"):
-        st.warning("이 프로젝트에는 아직 원본 영상이 없습니다. 영상관리 또는 소스 비디오 AI에서 영상을 등록하면 Vision 분석까지 이어집니다.")
+        st.warning("이 프로젝트에는 아직 원본 영상이 없습니다.")
     else:
         st.caption(f"영상: {path_debug.get('video_path')} / {path_debug.get('size_mb')}MB")
 
@@ -476,13 +524,27 @@ def show_one_click_pipeline():
     if c1.button("현재 프로젝트 원클릭 실행", use_container_width=True):
         with st.spinner("One Click Pipeline 실행 중입니다..."):
             result = WorkflowEngine().run_project(project, sample_count=sample_count)
-        show_pipeline_result(project, result, path_debug)
+
+        st.session_state[result_key] = result
+        save_result(result)
+        st.success("원클릭 실행 결과를 저장했습니다.")
 
     if c2.button("큐에 추가", use_container_width=True):
         job = JobQueue().add(project.id, project_name)
         st.success(f"큐 추가 완료: {job.get('job_id')}")
 
-    show_selected_sources(project)
+    result = st.session_state.get(result_key)
+
+    if not result:
+        result = load_result()
+        if result:
+            st.session_state[result_key] = result
+            st.caption(f"최근 원클릭 결과를 복원했습니다: {result_path}")
+
+    if result:
+        show_pipeline_result(project, result, path_debug)
+    else:
+        show_selected_sources(project)
 
     st.divider()
     st.subheader("작업 큐")
@@ -497,3 +559,4 @@ def show_one_click_pipeline():
     st.subheader("최근 Pipeline 상태")
     for f in PipelineState().list_recent(10):
         st.write(f"• {f.name}")
+    
