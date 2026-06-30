@@ -189,63 +189,54 @@ def clear_selected_sources(project):
     st.session_state[key] = []
     save_selected_sources(project, [])
 
-
 def show_selected_sources(project):
     key = init_selected_sources(project)
-    selected_sources = st.session_state.get(key, [])
+    selected = st.session_state.get(key, [])
 
-    st.divider()
     st.subheader("🎬 채택한 영상 후보")
 
-    notice_key = selected_notice_key(project)
-    notice = st.session_state.pop(notice_key, None)
-    if notice:
-        st.success(notice)
-
-    if not selected_sources:
+    if not selected:
         st.info("아직 채택한 영상 후보가 없습니다.")
-        st.caption(f"저장 위치: {selected_sources_path(project)}")
         return
 
-    for idx, item in enumerate(selected_sources, start=1):
-        platform = item.get("platform", "")
-        query = item.get("query", "")
-        purpose = item.get("purpose", "")
-        score = item.get("score", "")
-        url = item.get("url", "")
-
+    for i, item in enumerate(selected):
         with st.container(border=True):
-            st.markdown(f"**{idx}. [{platform}] {query}**")
-            st.write(f"목적: {purpose} / 점수: {score}점")
+            st.markdown(f"**{i + 1}. [{item.get('platform')}] {item.get('query', '')}**")
+            st.caption(
+                f"목적: {item.get('purpose', '-')} / "
+                f"점수: {item.get('score', '-')}점"
+            )
+
+            url = item.get("url")
             if url:
-                st.link_button("검색 다시 열기", url, use_container_width=True)
-            else:
-                st.caption("검색 URL이 없습니다.")
+                st.link_button("영상 링크 열기", url)
 
-    c1, c2 = st.columns(2)
+            c1, c2, c3 = st.columns(3)
 
-    with c1:
-        selected_json = json.dumps(selected_sources, ensure_ascii=False, indent=2)
-        st.download_button(
-            "채택 후보 JSON 다운로드",
-            data=selected_json,
-            file_name=f"{safe_project_id(project)}_selected_sources.json",
-            mime="application/json",
-            use_container_width=True,
-        )
+            with c1:
+                if st.button("⬆️ 위로", key=f"selected_up_{project.id}_{i}", disabled=i == 0):
+                    selected[i - 1], selected[i] = selected[i], selected[i - 1]
+                    st.session_state[key] = selected
+                    save_selected_sources(project, selected)
+                    st.success("순서를 위로 이동했습니다.")
+                    st.rerun()
 
-    with c2:
-        if st.button(
-            "채택 후보 초기화",
-            key=f"clear_selected_sources_{safe_project_id(project)}",
-            use_container_width=True,
-        ):
-            clear_selected_sources(project)
-            st.session_state[notice_key] = "채택 후보를 초기화했습니다."
-            st.rerun()
+            with c2:
+                if st.button("⬇️ 아래로", key=f"selected_down_{project.id}_{i}", disabled=i == len(selected) - 1):
+                    selected[i + 1], selected[i] = selected[i], selected[i + 1]
+                    st.session_state[key] = selected
+                    save_selected_sources(project, selected)
+                    st.success("순서를 아래로 이동했습니다.")
+                    st.rerun()
 
-    st.caption(f"저장 위치: {selected_sources_path(project)}")
+            with c3:
+                if st.button("🗑 삭제", key=f"selected_delete_{project.id}_{i}"):
+                    selected.pop(i)
+                    st.session_state[key] = selected
+                    st.success("후보를 삭제했습니다.")
+                    st.rerun()
 
+    st.caption("현재 순서가 CapCut 내보내기와 TXT 생성 순서의 기준이 됩니다.")
 
 def show_candidate_card(project, platform, item):
     query = item.get("query", "")
