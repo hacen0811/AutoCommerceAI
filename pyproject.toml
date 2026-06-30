@@ -1,0 +1,9 @@
+[project]
+name = "autocommerceai"
+version = "1.1.0"
+description = "AI shopping shorts production platform"
+requires-python = ">=3.10"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

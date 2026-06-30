@@ -1,0 +1,7 @@
+# AutoCommerceAI 1.0 실제 AI 모델 선택 설치
+# 먼저 기본 requirements 설치 후, 필요할 때 아래 파일을 설치하세요.
+# python -m pip install -r requirements_ai_install.txt
+
+ultralytics>=8.3.0
+paddleocr>=2.8.0
+paddlepaddle>=2.6.0

@@ -1,0 +1,5 @@
+# 선택 설치용 AI 모델 패키지
+# 설치가 오래 걸릴 수 있습니다.
+ultralytics>=8.3.0
+paddleocr>=2.8.0
+paddlepaddle>=2.6.0

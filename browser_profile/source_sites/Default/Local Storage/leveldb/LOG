@@ -1,0 +1,17 @@
+2026/06/30-18:41:05.223 6370 Creating DB C:\Users\user\Downloads\AutoCommerceAI_4.0_PlaywrightSourceCollector-0630\browser_profile\source_sites\Default\Local Storage\leveldb since it was missing.
+2026/06/30-18:41:05.241 6370 Reusing MANIFEST C:\Users\user\Downloads\AutoCommerceAI_4.0_PlaywrightSourceCollector-0630\browser_profile\source_sites\Default\Local Storage\leveldb/MANIFEST-000001
+2026/06/30-18:41:14.544 5d10 Level-0 table #5: started
+2026/06/30-18:41:14.555 5d10 Level-0 table #5: 188035 bytes OK
+2026/06/30-18:41:14.556 5d10 Delete type=0 #3
+2026/06/30-18:41:18.869 5d10 Level-0 table #7: started
+2026/06/30-18:41:18.875 5d10 Level-0 table #7: 42710 bytes OK
+2026/06/30-18:41:18.876 5d10 Delete type=0 #4
+2026/06/30-18:41:26.773 5d10 Level-0 table #9: started
+2026/06/30-18:41:26.783 5d10 Level-0 table #9: 245091 bytes OK
+2026/06/30-18:41:26.785 5d10 Delete type=0 #6
+2026/06/30-18:41:29.102 5d10 Level-0 table #11: started
+2026/06/30-18:41:29.109 5d10 Level-0 table #11: 103400 bytes OK
+2026/06/30-18:41:29.110 5d10 Delete type=0 #8
+2026/06/30-18:41:38.950 5d10 Level-0 table #13: started
+2026/06/30-18:41:38.957 5d10 Level-0 table #13: 86138 bytes OK
+2026/06/30-18:41:38.958 5d10 Delete type=0 #10

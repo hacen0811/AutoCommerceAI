@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.venv/
+venv/
+env/
+
+# Streamlit
+.streamlit/secrets.toml
+
+# Local DB / exports / media
+database/*.db
+database/*.sqlite
+exports/
+assets/videos/
+assets/images/
+backups/
+logs/
+
+# AI model files
+*.pt
+*.onnx
+models/
+runs/
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
