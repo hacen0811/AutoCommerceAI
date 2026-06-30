@@ -35,6 +35,7 @@ class StudioPipelineEngine:
             category=category,
             image_url=image_url,
             partner_url=partner_url,
+            sample_count=sample_count,
         )
         if not package.get("ok"):
             return package
@@ -237,6 +238,7 @@ class StudioPipelineEngine:
         return f"{name}, 자주 쓰는 공간에 두면 훨씬 편합니다."
 
     def build_capcut_plan(self, pname, keyword, vision):
+
         timeline = [
             {"time": "0~2초", "edit": "가장 강한 사용 장면으로 시작 / Zoom In 105~115% / Pop 35%"},
             {"time": "2~5초", "edit": "불편한 Before 장면 / 자막 2줄 이하 / BGM 10~12%"},
@@ -244,8 +246,10 @@ class StudioPipelineEngine:
             {"time": "10~15초", "edit": "After 결과 컷 / Whoosh 30% / 밝기 살짝 보정"},
             {"time": "15~20초", "edit": f"CTA 고정 자막: 댓글에 '{keyword}' 남겨주세요 👇 / Bounce"},
         ]
+
         if vision.get("ratio") == "16:9/가로":
             timeline.insert(0, {"time": "편집 전", "edit": "가로 영상은 9:16 캔버스에 맞추고 중앙 크롭/배경 블러 적용"})
+
         return {
             "voice": "Typecast 지안 또는 일반 여성 내레이션 / 음성 18~20dB",
             "bgm": "CapCut 검색: 밝은 브이로그, fresh, daily / 볼륨 8~12%",

@@ -202,6 +202,7 @@ def show_selected_sources(project):
     for i, item in enumerate(selected):
         with st.container(border=True):
             st.markdown(f"**{i + 1}. [{item.get('platform')}] {item.get('query', '')}**")
+
             st.caption(
                 f"목적: {item.get('purpose', '-')} / "
                 f"점수: {item.get('score', '-')}점"
