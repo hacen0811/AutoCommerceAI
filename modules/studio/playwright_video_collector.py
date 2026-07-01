@@ -218,24 +218,43 @@ class PlaywrightVideoCollector:
     def _allowed_link(self, platform: str, href: str) -> bool:
         if not href or href.startswith("javascript") or href.startswith("mailto:"):
             return False
+
         h = href.lower()
+
         if platform == "douyin":
-            return "douyin.com" in h and any(x in h for x in ["/video/", "/note/", "/user/", "modal_id=", "aweme"])
+            if "/user/self" in h:
+                return False
+
+            return (
+                "douyin.com" in h
+                and any(x in h for x in ["/video/", "/note/", "modal_id=", "aweme"])
+            )
+
         if platform == "taobao":
             return any(d in h for d in ["item.taobao.com", "detail.tmall.com", "world.taobao.com/item"])
+
         if platform == "1688":
             return "1688.com" in h and ("offer/" in h or "detail" in h)
+
         return False
 
     def _junk_link(self, platform: str, href: str, text: str) -> bool:
         h = href.lower()
+
+        if "/user/self" in h:
+            return True
+
         junk = ["login", "passport", "buyer", "seller", "cart", "order", "trade", "member", "help", "notice", "feedback", "download"]
+
         if any(j in h for j in junk):
             return True
+
         if platform == "douyin" and ("/search/" in h and "/video/" not in h and "modal_id=" not in h):
             return True
+
         if len((text or "").strip()) <= 1 and not any(x in h for x in ["item", "offer", "video", "aweme"]):
             return True
+
         return False
 
     def _dedupe(self, rows: List[LiveVideoResult]) -> List[LiveVideoResult]:
