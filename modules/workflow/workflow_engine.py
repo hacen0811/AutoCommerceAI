@@ -9,7 +9,7 @@ from modules.editor.auto_editor_engine import AutoEditorEngine
 from modules.editor.capcut_project_exporter import CapCutProjectExporter
 from modules.workflow.pipeline_state import PipelineState
 from modules.video.video_path_resolver import VideoPathResolver
-
+from modules.studio.video_sourcing_engine import VideoSourcingEngine
 
 class WorkflowEngine:
     """
@@ -78,10 +78,23 @@ class WorkflowEngine:
             videos = SourceVideoEngine().list_project_videos(project)
             ranked = SourceVideoRanker().rank(videos, sample_count=4)
             outputs["source_rank"] = ranked
-            state.update_step(job_id, "source_rank", "done", {"count": len(ranked), "top": ranked[:3]})
+            state.update_step(
+                     job_id,
+                     "source_rank",
+                     "done",
+                {"count": len(ranked), "top": ranked[:3]},
+            )
         except Exception as exc:
             ranked = []
             state.update_step(job_id, "source_rank", "failed", error=exc)
+    
+        try:
+            live_sources = VideoSourcingEngine().collect({
+                "name": getattr(project, "product_name", ""),
+                "keyword": getattr(project, "keyword", ""), })
+            outputs["video_sources"] = live_sources
+        except Exception:
+            pass
 
         # 4. Real Vision
         try:

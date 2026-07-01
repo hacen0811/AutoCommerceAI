@@ -127,12 +127,28 @@ class PlaywrightVideoCollector:
                         except Exception:
                             pass
                         anchors = page.locator("a").evaluate_all(
-                            """els => els.slice(0, 220).map(a => ({
-                                text: (a.innerText || a.getAttribute('aria-label') || a.title || '').trim(),
-                                href: a.href || '',
-                                img: (a.querySelector('img') && (a.querySelector('img').src || a.querySelector('img').getAttribute('data-src'))) || ''
-                            }))"""
-                        )
+                            """els => els.slice(0, 220).map(a => {
+                                const img = a.querySelector('img');
+                                const parent = a.closest('div, li, section, article') || a;
+                                const text = (a.innerText || a.getAttribute('aria-label') || a.title || '').trim();
+                                const parentText = (parent.innerText || '').trim();
+
+                                return {
+                                            text: text,
+                                    href: a.href || '',
+                                    img: img ? (img.src || img.getAttribute('data-src') || img.getAttribute('data-original') || '') : '',
+                                    thumbnail_url: img ? (img.src || img.getAttribute('data-src') || img.getAttribute('data-original') || '') : '',
+                                    title: text || parentText.split('\\n')[0] || '',
+                                    raw_text: parentText,
+                                    author: '',
+                                    duration: '',
+                                    views: '',
+                                    likes: '',
+                                    platform_hint: location.hostname
+                                };
+                        })"""
+)
+                                  
                         extracted = self._score_links(platform, keyword, anchors, body_text, shot, limit_per_platform)
                         results.extend(extracted)
                         diagnostics.append({
