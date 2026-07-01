@@ -282,6 +282,62 @@ def show_top10(project, title, platform, items):
         if isinstance(item, dict):
             show_candidate_card(project, platform, item)
 
+def show_top10(project, title, platform, items):
+    if not items:
+        return
+
+    st.markdown(f"## {title}")
+
+    for item in items:
+        if isinstance(item, dict):
+            show_candidate_card(project, platform, item)
+
+def show_live_sources(project, live_sources):
+    if not live_sources:
+        return
+
+    if live_sources.get("live_collection"):
+        live_sources = live_sources.get("live_collection", {})
+
+    results = live_sources.get("results", [])
+    if not results:
+        st.info("실제 웹 수집 결과가 없습니다.")
+        return
+
+    st.divider()
+    st.markdown("## 실제 Playwright 수집 결과")
+
+    st.caption(
+        f"상태: ok={live_sources.get('ok')} / "
+        f"ready={live_sources.get('status', {}).get('ready')}"
+    )
+
+    for i, item in enumerate(results, start=1):
+        if not isinstance(item, dict):
+            continue
+
+        title = item.get("title") or item.get("text") or "제목 없음"
+        url = item.get("url") or item.get("link") or ""
+        thumbnail = item.get("thumbnail") or item.get("thumbnail_url") or item.get("image") or ""
+        views = item.get("views") or item.get("view_count") or "-"
+        likes = item.get("likes") or item.get("like_count") or "-"
+        duration = item.get("duration") or item.get("video_length") or item.get("length") or "-"
+
+        with st.container(border=True):
+            cols = st.columns([1, 3])
+
+            with cols[0]:
+                if thumbnail:
+                    st.image(thumbnail, use_container_width=True)
+                else:
+                    st.caption("썸네일 없음")
+
+            with cols[1]:
+                st.markdown(f"### {i}. {title}")
+                st.caption(f"조회수: {views} / 좋아요: {likes} / 길이: {duration}")
+
+                if url:
+                    st.link_button("영상 열기", url, use_container_width=True)
 
 def show_search_links(keywords):
     taobao_keyword = keywords.get("taobao_keyword", "")
@@ -406,6 +462,16 @@ def show_pipeline_result(project, result, path_debug):
         keywords = product_plan.get("keywords", {})
 
         show_selected_sources(project)
+
+        live_sources = (
+            outputs.get("video_sources")
+            or outputs.get("live_collection")
+            or state.get("results", {}).get("video_sources", {})
+            or state.get("results", {}).get("live_collection", {})
+            or {}
+        )
+
+        show_live_sources(project, live_sources)
 
         if keywords:
             show_search_links(keywords)
