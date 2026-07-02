@@ -11,10 +11,16 @@ from modules.workflow.pipeline_state import PipelineState
 from modules.video.video_path_resolver import VideoPathResolver
 from modules.studio.video_sourcing_engine import VideoSourcingEngine
 
+
 class WorkflowEngine:
     """
     One Click Pipeline 핵심 엔진.
     가능한 단계는 계속 진행하고, 실패한 단계는 errors에 기록합니다.
+
+    Sprint 7-4:
+    - source_rank 1위 영상을 자동으로 project.video_path에 꽂지 않습니다.
+    - Real Vision은 반드시 현재 프로젝트에 저장된 video_path만 사용합니다.
+    - 엉뚱한 assets/videos 영상이 현재 프로젝트에 섞이는 문제를 방지합니다.
     """
 
     STEP_NAMES = [
@@ -42,9 +48,14 @@ class WorkflowEngine:
     def run_project(self, project, sample_count=6):
         resolver = VideoPathResolver()
         project = resolver.resolve_project(project)
+
         job_id = uuid4().hex[:12]
         state = PipelineState()
-        state.create(job_id, getattr(project, "product_name", "") or getattr(project, "title", ""), self.steps())
+        state.create(
+            job_id,
+            getattr(project, "product_name", "") or getattr(project, "title", ""),
+            self.steps(),
+        )
 
         outputs = {}
 
@@ -79,38 +90,73 @@ class WorkflowEngine:
             ranked = SourceVideoRanker().rank(videos, sample_count=4)
             outputs["source_rank"] = ranked
             state.update_step(
-                     job_id,
-                     "source_rank",
-                     "done",
-                {"count": len(ranked), "top": ranked[:3]},
+                job_id,
+                "source_rank",
+                "done",
+                {
+                    "count": len(ranked),
+                    "top": ranked[:3],
+                    "note": "Sprint 7-4: 랭킹 영상은 후보 표시용이며 Real Vision에 자동 연결하지 않습니다.",
+                },
             )
         except Exception as exc:
             ranked = []
             state.update_step(job_id, "source_rank", "failed", error=exc)
-    
+
+        # 3-1. Live Source Collection
         try:
             live_sources = VideoSourcingEngine().collect({
                 "name": getattr(project, "product_name", ""),
-                "keyword": getattr(project, "keyword", ""), })
+                "keyword": getattr(project, "keyword", ""),
+            })
             outputs["video_sources"] = live_sources
         except Exception:
             pass
 
         # 4. Real Vision
         try:
-            # 등록된 소스 영상 1위가 있으면 임시로 사용하되, 없으면 DB에 저장된 원본 영상을 유지
-            original_video = resolver.resolve_path(project)
-            if ranked and ranked[0].get("path") and resolver.exists(ranked[0].get("path")):
-                project.video_path = ranked[0].get("path")
+            current_video = resolver.resolve_path(project)
+
+            if current_video and resolver.exists(current_video):
+                project.video_path = current_video
+                real_vision = RealVisionRunner().run(
+                    project,
+                    sample_count=sample_count,
+                    use_yolo=True,
+                    use_paddle=True,
+                )
             else:
-                project.video_path = original_video
-            real_vision = RealVisionRunner().run(project, sample_count=sample_count, use_yolo=True, use_paddle=True)
-            project.video_path = original_video
+                real_vision = {
+                    "ok": False,
+                    "summary": "현재 프로젝트에 연결된 video_path가 없습니다. 영상 후보를 열어 해당 프로젝트에 영상을 먼저 연결하세요.",
+                    "status": {
+                        "video_ai": False,
+                        "vision_ai": False,
+                        "yolo": False,
+                        "paddleocr": False,
+                        "object_fallback": False,
+                    },
+                    "project": {
+                        "id": getattr(project, "id", None),
+                        "product_name": getattr(project, "product_name", ""),
+                        "keyword": getattr(project, "keyword", ""),
+                        "video_path": current_video,
+                    },
+                }
+
             outputs["real_vision"] = real_vision
-            state.update_step(job_id, "real_vision", "done" if real_vision.get("ok") else "failed", {
-                "summary": real_vision.get("summary"),
-                "status": real_vision.get("status"),
-            }, None if real_vision.get("ok") else real_vision.get("summary"))
+            state.update_step(
+                job_id,
+                "real_vision",
+                "done" if real_vision.get("ok") else "failed",
+                {
+                    "summary": real_vision.get("summary"),
+                    "status": real_vision.get("status"),
+                    "video_path": real_vision.get("project", {}).get("video_path", current_video),
+                },
+                None if real_vision.get("ok") else real_vision.get("summary"),
+            )
+
         except Exception as exc:
             real_vision = {}
             state.update_step(job_id, "real_vision", "failed", error=exc)
@@ -124,8 +170,15 @@ class WorkflowEngine:
                     getattr(project, "product_name", ""),
                     getattr(project, "keyword", "정보"),
                 )
+
             outputs["auto_editor"] = editor_plan
-            state.update_step(job_id, "auto_editor", "done", {"timeline_count": len(editor_plan.get("timeline", []))})
+            state.update_step(
+                job_id,
+                "auto_editor",
+                "done",
+                {"timeline_count": len(editor_plan.get("timeline", []))},
+            )
+
         except Exception as exc:
             editor_plan = {}
             state.update_step(job_id, "auto_editor", "failed", error=exc)
@@ -134,7 +187,12 @@ class WorkflowEngine:
         try:
             content = ContentFactory().build(project)
             outputs["content_factory"] = content
-            state.update_step(job_id, "content_factory", "done", {"sections": list(content.keys())})
+            state.update_step(
+                job_id,
+                "content_factory",
+                "done",
+                {"sections": list(content.keys())},
+            )
         except Exception as exc:
             content = {}
             state.update_step(job_id, "content_factory", "failed", error=exc)
@@ -149,6 +207,7 @@ class WorkflowEngine:
             state.update_step(job_id, "capcut_export", "failed", error=exc)
 
         final_state = state.load(job_id)
+
         return {
             "job_id": job_id,
             "state": final_state,
@@ -159,8 +218,10 @@ class WorkflowEngine:
     def summary(self, state):
         errors = state.get("errors", [])
         progress = state.get("progress", 0)
+
         if errors:
             return f"One Click Pipeline {progress}% 완료, 오류 {len(errors)}건이 있습니다. 가능한 단계는 계속 진행했습니다."
+
         return f"One Click Pipeline {progress}% 완료되었습니다."
 
     def _compact(self, product_plan):

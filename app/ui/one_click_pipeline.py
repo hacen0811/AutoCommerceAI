@@ -1,5 +1,6 @@
 import json
 import re
+import shutil
 from pathlib import Path
 from urllib.parse import quote_plus
 
@@ -10,8 +11,9 @@ from modules.workflow.workflow_engine import WorkflowEngine
 from modules.workflow.job_queue import JobQueue
 from modules.workflow.pipeline_state import PipelineState
 from app.ui.render import copybox
-
+from app.ui.ai_content_pack import show_content_pack_view
 from app.ui.ai_product_analysis import show_ai_product_analysis
+
 from app.ui.download_center import show_download_center
 
 from modules.video.video_path_resolver import VideoPathResolver
@@ -445,6 +447,121 @@ def clear_selected_sources(project):
     st.session_state[key] = []
     save_selected_sources(project, [])
 
+
+
+def safe_file_name(text, fallback="video"):
+    text = str(text or fallback).strip()
+    text = re.sub(r"[^0-9A-Za-z가-힣._-]+", "_", text)
+    text = re.sub(r"_+", "_", text).strip("_")
+    return text[:80] or fallback
+
+
+def project_source_video_dir(project):
+    project_id = safe_project_id(project)
+    project_name = safe_file_name(
+        getattr(project, "product_name", "") or getattr(project, "title", ""),
+        "project",
+    )
+    folder = Path("assets") / "source_videos" / f"project_{project_id}_{project_name}"
+    folder.mkdir(parents=True, exist_ok=True)
+    return folder
+
+
+def download_folders():
+    folders = []
+    home_downloads = Path.home() / "Downloads"
+    folders.append(home_downloads)
+
+    # Windows 기본 다운로드 폴더 보조 탐색
+    for candidate in [
+        Path(r"C:\Users\user\Downloads"),
+        Path(r"C:\Users\user\다운로드"),
+        Path.home() / "다운로드",
+    ]:
+        if candidate not in folders:
+            folders.append(candidate)
+
+    return [folder for folder in folders if folder.exists()]
+
+
+def latest_downloaded_video(max_age_minutes=240):
+    allowed = {".mp4", ".mov", ".webm"}
+    candidates = []
+
+    for folder in download_folders():
+        try:
+            for path in folder.iterdir():
+                if not path.is_file():
+                    continue
+                if path.suffix.lower() not in allowed:
+                    continue
+                if path.name.lower().endswith(".crdownload") or path.name.lower().endswith(".part"):
+                    continue
+                candidates.append(path)
+        except Exception:
+            pass
+
+    if not candidates:
+        return None
+
+    candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    latest = candidates[0]
+
+    try:
+        age_seconds = __import__("time").time() - latest.stat().st_mtime
+        if age_seconds > max_age_minutes * 60:
+            # 오래된 파일이라도 후보로 반환하되 UI에서 경고할 수 있게 둡니다.
+            return latest
+    except Exception:
+        pass
+
+    return latest
+
+
+def connect_latest_download_to_project(project, item=None, index=0):
+    latest = latest_downloaded_video()
+    if not latest:
+        return {
+            "ok": False,
+            "message": "Downloads 폴더에서 mp4/mov/webm 파일을 찾지 못했습니다.",
+            "source_path": "",
+            "video_path": "",
+        }
+
+    out_dir = project_source_video_dir(project)
+    project_name = safe_file_name(getattr(project, "product_name", "") or getattr(project, "title", ""), "project")
+    query = safe_file_name((item or {}).get("query", "candidate"), "candidate")
+    ext = latest.suffix.lower()
+    target = out_dir / f"candidate_{index + 1:02d}_{project_name}_{query}{ext}"
+
+    if target.exists():
+        stem = target.stem
+        n = 2
+        while target.exists():
+            target = out_dir / f"{stem}_{n}{ext}"
+            n += 1
+
+    try:
+        shutil.copy2(str(latest), str(target))
+        ProjectRepository().update_links_and_media(
+            getattr(project, "id"),
+            video_path=str(target),
+        )
+        return {
+            "ok": True,
+            "message": "다운로드된 최신 영상을 현재 프로젝트에 연결했습니다.",
+            "source_path": str(latest),
+            "video_path": str(target),
+            "size_mb": round(target.stat().st_size / (1024 * 1024), 2),
+        }
+    except Exception as exc:
+        return {
+            "ok": False,
+            "message": f"영상 연결 실패: {exc}",
+            "source_path": str(latest),
+            "video_path": "",
+        }
+
 def show_selected_sources(project):
     key = init_selected_sources(project)
     selected = st.session_state.get(key, [])
@@ -454,6 +571,27 @@ def show_selected_sources(project):
     if not selected:
         st.info("아직 채택한 영상 후보가 없습니다.")
         return
+
+    resolver = VideoPathResolver()
+    path_debug = resolver.debug(project)
+
+    if path_debug.get("exists"):
+        st.success(
+            f"현재 연결된 영상: {path_debug.get('video_path')} / "
+            f"{path_debug.get('size_mb')}MB"
+        )
+    else:
+        st.warning("현재 프로젝트에 연결된 영상이 없습니다. 영상 링크에서 MP4를 다운로드한 뒤 자동 연결 버튼을 눌러주세요.")
+
+    latest_video = latest_downloaded_video()
+    if latest_video:
+        try:
+            latest_size = round(latest_video.stat().st_size / (1024 * 1024), 2)
+            st.caption(f"Downloads 최신 영상 감지: {latest_video.name} / {latest_size}MB")
+        except Exception:
+            st.caption(f"Downloads 최신 영상 감지: {latest_video.name}")
+    else:
+        st.caption("Downloads 폴더에서 최근 mp4/mov/webm 파일을 아직 찾지 못했습니다.")
 
     for i, item in enumerate(selected):
         with st.container(border=True):
@@ -466,7 +604,30 @@ def show_selected_sources(project):
 
             url = item.get("url")
             if url:
-                st.link_button("영상 링크 열기", url)
+                st.link_button("영상 링크 열기", url, use_container_width=True)
+
+            if st.button(
+                "⬇ 다운로드 완료 후 자동 연결",
+                key=f"auto_connect_latest_download_{project.id}_{i}",
+                use_container_width=True,
+            ):
+                result = connect_latest_download_to_project(project, item=item, index=i)
+
+                if result.get("ok"):
+                    item["video_path"] = result.get("video_path", "")
+                    item["download_source_path"] = result.get("source_path", "")
+                    item["download_connected"] = True
+                    selected[i] = item
+                    st.session_state[key] = selected
+                    save_selected_sources(project, selected)
+
+                    st.success(result.get("message"))
+                    st.caption(f"연결된 영상: {result.get('video_path')} / {result.get('size_mb')}MB")
+                    st.rerun()
+                else:
+                    st.error(result.get("message"))
+                    if result.get("source_path"):
+                        st.caption(f"감지된 파일: {result.get('source_path')}")
 
             c1, c2, c3 = st.columns(3)
 
@@ -490,13 +651,14 @@ def show_selected_sources(project):
                 if st.button("🗑 삭제", key=f"selected_delete_{project.id}_{i}"):
                     selected.pop(i)
                     st.session_state[key] = selected
+                    save_selected_sources(project, selected)
                     st.success("후보를 삭제했습니다.")
                     st.rerun()
 
     st.caption("현재 순서가 CapCut 내보내기와 TXT 생성 순서의 기준이 됩니다.")
-    
+
     show_content_pack_view(project)
-  
+
     show_ai_product_analysis(project, selected)
 
     content_pack = st.session_state.get(
@@ -892,4 +1054,4 @@ def show_one_click_pipeline():
     st.subheader("최근 Pipeline 상태")
     for f in PipelineState().list_recent(10):
         st.write(f"• {f.name}")
-    
+       

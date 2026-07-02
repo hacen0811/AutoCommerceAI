@@ -17,6 +17,9 @@ class CollectedVideo:
     source: str = "playwright-dom"
     thumbnail: str = ""
     screenshot: str = ""
+    video_path: str = ""
+    downloaded: bool = False
+    download_error: str = ""
     views: str = ""
     likes: str = ""
     duration: str = ""
@@ -74,9 +77,15 @@ class BaseSiteCollector:
         except Exception:
             url = ""
             title = ""
+
         t = f"{url}\n{title}\n{body_text}".lower()
-        if any(x in t for x in ["captcha", "verify", "verification", "安全", "验证", "扫码", "登录", "login", "로봇", "로그인", "punish", "x5sec"]):
+
+        if any(x in t for x in [
+            "captcha", "verify", "verification", "安全", "验证", "扫码",
+            "登录", "login", "로봇", "로그인", "punish", "x5sec"
+        ]):
             return "로그인/보안 인증/캡차가 필요할 수 있습니다."
+
         return ""
 
     def normalize_url(self, href: str) -> str:
@@ -85,36 +94,53 @@ class BaseSiteCollector:
     def is_junk_text(self, text: str, href: str = "") -> bool:
         t = (text or "").lower()
         h = (href or "").lower()
+
         junk = [
             "get app", "download", "open app", "login", "sign in", "signup",
             "协议", "用户协议", "隐私", "privacy", "service", "客服", "帮助",
             "about", "广告", "sponsor", "promotion", "client", "客户端",
             "精选", "terms", "policy", "cookie", "copyright",
         ]
+
         return any(x in t or x in h for x in junk)
 
     def score_item(self, keyword: str, title: str, href: str, thumb: str = "") -> int:
         text = f"{title}\n{href}"
         key_tokens = [t for t in re.split(r"\s+", keyword or "") if len(t) >= 2]
+
         score = 20
+
         if thumb:
             score += 20
+
         score += sum(10 for t in key_tokens if t in text)
-        if any(w in text for w in ["视频", "实拍", "开箱", "推荐", "好物", "후기", "리뷰", "사용", "수납", "정리", "収納", "主图视频", "买家秀"]):
+
+        if any(w in text for w in [
+            "视频", "实拍", "开箱", "推荐", "好物", "후기", "리뷰", "사용",
+            "수납", "정리", "収納", "主图视频", "买家秀"
+        ]):
             score += 25
-        if any(w in href.lower() for w in ["video", "aweme", "item", "detail", "offer", "product"]):
+
+        if any(w in href.lower() for w in [
+            "video", "aweme", "item", "detail", "offer", "product"
+        ]):
             score += 30
+
         return min(score, 99)
 
     def dedupe(self, rows: List[CollectedVideo], limit: int = 10) -> List[CollectedVideo]:
         seen = set()
         out = []
+
         for r in sorted(rows, key=lambda x: x.score, reverse=True):
             key = re.sub(r"[?#].*$", "", r.url)
+
             if not key or key in seen:
                 continue
+
             seen.add(key)
             out.append(r)
+
         return out[:limit]
 
     def to_dicts(self, rows: List[CollectedVideo]) -> List[Dict]:

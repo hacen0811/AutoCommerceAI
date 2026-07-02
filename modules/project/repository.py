@@ -31,10 +31,9 @@ class ProjectRepository:
             checklist = Checklist(project_id=item.id, source_video=bool(item.video_path))
             db.add(checklist)
             db.commit()
-            ProjectBackup().auto_export_on_change()
+
             ProjectBackup().auto_export_on_change()
             return item
-
 
     def find_by_coupang_url(self, coupang_url):
         with SessionLocal() as db:
@@ -53,6 +52,7 @@ class ProjectRepository:
             item = db.get(Project, project_id)
             if not item:
                 return None
+
             item.status = status
             db.commit()
             ProjectBackup().auto_export_on_change()
@@ -63,9 +63,11 @@ class ProjectRepository:
             item = db.get(Project, project_id)
             if not item:
                 return None
+
             for key, value in kwargs.items():
                 if hasattr(item, key):
                     setattr(item, key, value)
+
             db.commit()
             db.refresh(item)
             ProjectBackup().auto_export_on_change()
@@ -87,9 +89,28 @@ class ProjectRepository:
             if not item:
                 item = Checklist(project_id=project_id)
                 db.add(item)
+
             for key, value in kwargs.items():
                 if hasattr(item, key):
                     setattr(item, key, bool(value))
+
             db.commit()
             db.refresh(item)
+            return item
+
+    def clear_video_path(self, project_id):
+        with SessionLocal() as db:
+            item = db.get(Project, project_id)
+            if not item:
+                return None
+
+            item.video_path = ""
+
+            checklist = db.scalar(select(Checklist).where(Checklist.project_id == project_id))
+            if checklist:
+                checklist.source_video = False
+
+            db.commit()
+            db.refresh(item)
+            ProjectBackup().auto_export_on_change()
             return item

@@ -446,7 +446,7 @@ class TaobaoCollector(BaseSiteCollector):
                 sourceVideos,
                 hints,
                 images,
-                html: document.documentElement.innerHTML.slice(0, 250000)
+                html: document.documentElement.innerHTML
             };
         }
         """) or {}

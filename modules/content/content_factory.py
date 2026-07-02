@@ -1,11 +1,84 @@
 import json
+import os
 from pathlib import Path
+from typing import Any, Dict, List
 
 from modules.content.prompts import PRODUCT_ANALYSIS_PROMPT, CONTENT_PACK_PROMPT
 
 
 class ContentFactory:
-    def analyze_product(self, selected_sources):
+    def status(self) -> Dict[str, Any]:
+        openai_key = bool(os.getenv("OPENAI_API_KEY"))
+        return {
+            "openai_key": openai_key,
+            "available": openai_key,
+            "provider": "openai" if openai_key else "offline-template",
+        }
+
+    def _json_from_text(self, text: str) -> Dict[str, Any]:
+        text = (text or "").strip()
+
+        if text.startswith("```"):
+            text = text.strip("`").strip()
+            if text.lower().startswith("json"):
+                text = text[4:].strip()
+
+        start = text.find("{")
+        end = text.rfind("}")
+
+        if start >= 0 and end > start:
+            text = text[start : end + 1]
+
+        return json.loads(text)
+
+    def _call_openai_json(self, prompt: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        try:
+            from openai import OpenAI  # type: ignore
+
+            client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+            user_content = (
+                prompt.strip()
+                + "\n\n[입력 데이터]\n"
+                + json.dumps(payload, ensure_ascii=False, indent=2)
+            )
+
+            resp = client.chat.completions.create(
+                model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
+                messages=[
+                    {
+                        "role": "user",
+                        "content": user_content,
+                    }
+                ],
+                temperature=0.7,
+                response_format={"type": "json_object"},
+            )
+
+            return self._json_from_text(resp.choices[0].message.content or "{}")
+
+        except Exception as e:
+            return {
+                "ok": False,
+                "provider": "openai",
+                "message": f"OpenAI 연결 실패: {e}",
+            }
+
+    def _source_payload(self, selected_sources: List[Dict[str, Any]]) -> Dict[str, Any]:
+        main = selected_sources[0] if selected_sources else {}
+
+        return {
+            "main": {
+                "query": str(main.get("query", "선택 상품")).strip(),
+                "platform": str(main.get("platform", "-")).strip(),
+                "purpose": str(main.get("purpose", "-")).strip(),
+                "score": str(main.get("score", "-")).strip(),
+                "url": str(main.get("url", "")).strip(),
+            },
+            "selected_sources": selected_sources,
+        }
+
+    def _fallback_analysis(self, selected_sources: List[Dict[str, Any]]) -> Dict[str, Any]:
         main = selected_sources[0] if selected_sources else {}
 
         query = str(main.get("query", "선택 상품")).strip()
@@ -15,6 +88,8 @@ class ContentFactory:
         url = str(main.get("url", "")).strip()
 
         return {
+            "ok": False,
+            "provider": "offline-template",
             "product_name": query,
             "platform": platform,
             "purpose": purpose,
@@ -52,7 +127,32 @@ class ContentFactory:
             ],
         }
 
-    def build_content_pack(self, project, selected_sources=None, analysis=None):
+    def analyze_product(self, selected_sources):
+        selected_sources = selected_sources or []
+        payload = self._source_payload(selected_sources)
+
+        if self.status()["available"]:
+            data = self._call_openai_json(PRODUCT_ANALYSIS_PROMPT, payload)
+
+            if data.get("ok") is False:
+                return self._fallback_analysis(selected_sources)
+
+            main = payload["main"]
+            data["ok"] = True
+            data["provider"] = "openai"
+            data["platform"] = main.get("platform", "-")
+            data["purpose"] = main.get("purpose", "-")
+            data["score"] = main.get("score", "-")
+            data["url"] = main.get("url", "")
+
+            if not data.get("product_name"):
+                data["product_name"] = main.get("query", "선택 상품")
+
+            return data
+
+        return self._fallback_analysis(selected_sources)
+
+    def _fallback_content_pack(self, project, selected_sources=None, analysis=None):
         selected_sources = selected_sources or []
         analysis = analysis or self.analyze_product(selected_sources)
 
@@ -120,6 +220,40 @@ class ContentFactory:
             },
         }
 
+    def build_content_pack(self, project, selected_sources=None, analysis=None):
+        selected_sources = selected_sources or []
+        analysis = analysis or self.analyze_product(selected_sources)
+
+        project_name = (
+            analysis.get("product_name")
+            or getattr(project, "product_name", "")
+            or getattr(project, "title", "")
+            or "선택 상품"
+        )
+
+        payload = {
+            "project_id": getattr(project, "id", ""),
+            "project_name": project_name,
+            "analysis": analysis,
+            "selected_sources": selected_sources,
+        }
+
+        if self.status()["available"]:
+            data = self._call_openai_json(CONTENT_PACK_PROMPT, payload)
+
+            if data.get("ok") is False:
+                return self._fallback_content_pack(project, selected_sources, analysis)
+
+            data["ok"] = True
+            data["provider"] = "openai"
+            data["project_id"] = getattr(project, "id", "")
+            data["project_name"] = project_name
+            data["analysis"] = analysis
+
+            return data
+
+        return self._fallback_content_pack(project, selected_sources, analysis)
+
     def save_content_pack(self, project, content_pack):
         out_dir = Path("exports/content_packs")
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -149,6 +283,7 @@ class ContentFactory:
         lines.append("[AI 콘텐츠 팩]")
         lines.append("")
         lines.append(f"프로젝트: {content_pack.get('project_name', '')}")
+        lines.append(f"생성방식: {content_pack.get('provider', 'offline-template')}")
         lines.append("")
 
         lines.append("[상품 분석]")
@@ -168,12 +303,22 @@ class ContentFactory:
         lines.append("")
         lines.append("[대본]")
         for line in content_pack.get("shorts", {}).get("script", []):
-            lines.append(f"- {line}")
+            if isinstance(line, dict):
+                lines.append(
+                    f"- {line.get('time', '')} / {line.get('role', '')} / {line.get('line', '')}"
+                )
+            else:
+                lines.append(f"- {line}")
 
         lines.append("")
         lines.append("[CapCut]")
         for item in content_pack.get("capcut", {}).get("timeline", []):
-            lines.append(f"- {item.get('time')} / {item.get('scene')} / {item.get('caption')}")
+            if isinstance(item, dict):
+                lines.append(
+                    f"- {item.get('time')} / {item.get('scene')} / {item.get('caption')}"
+                )
+            else:
+                lines.append(f"- {item}")
 
         lines.append("")
         lines.append("[썸네일]")
@@ -188,5 +333,6 @@ class ContentFactory:
         upload = content_pack.get("upload", {})
         lines.append(upload.get("youtube_title", ""))
         lines.append(upload.get("youtube_desc", ""))
+        lines.append(upload.get("instagram_body", ""))
 
         return "\n".join(lines)
