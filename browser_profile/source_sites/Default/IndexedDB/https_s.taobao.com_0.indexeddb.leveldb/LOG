@@ -1,2 +1,3 @@
-2026/06/30-18:41:24.813 308c Creating DB C:\Users\user\Downloads\AutoCommerceAI_4.0_PlaywrightSourceCollector-0630\browser_profile\source_sites\Default\IndexedDB\https_s.taobao.com_0.indexeddb.leveldb since it was missing.
-2026/06/30-18:41:24.818 308c Reusing MANIFEST C:\Users\user\Downloads\AutoCommerceAI_4.0_PlaywrightSourceCollector-0630\browser_profile\source_sites\Default\IndexedDB\https_s.taobao.com_0.indexeddb.leveldb/MANIFEST-000001
+2026/07/02-03:41:48.226 67b0 Reusing MANIFEST C:\Users\user\Downloads\AutoCommerceAI_4.0_PlaywrightSourceCollector-0630\browser_profile\source_sites\Default\IndexedDB\https_s.taobao.com_0.indexeddb.leveldb/MANIFEST-000001
+2026/07/02-03:41:48.226 67b0 Recovering log #3
+2026/07/02-03:41:48.227 67b0 Reusing old log C:\Users\user\Downloads\AutoCommerceAI_4.0_PlaywrightSourceCollector-0630\browser_profile\source_sites\Default\IndexedDB\https_s.taobao.com_0.indexeddb.leveldb/000003.log 

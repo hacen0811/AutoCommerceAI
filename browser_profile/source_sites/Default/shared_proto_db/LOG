@@ -1,2 +1,3 @@
-2026/06/30-18:41:05.583 4fb8 Creating DB C:\Users\user\Downloads\AutoCommerceAI_4.0_PlaywrightSourceCollector-0630\browser_profile\source_sites\Default\shared_proto_db since it was missing.
-2026/06/30-18:41:05.589 4fb8 Reusing MANIFEST C:\Users\user\Downloads\AutoCommerceAI_4.0_PlaywrightSourceCollector-0630\browser_profile\source_sites\Default\shared_proto_db/MANIFEST-000001
+2026/07/02-03:41:45.263 37c0 Reusing MANIFEST C:\Users\user\Downloads\AutoCommerceAI_4.0_PlaywrightSourceCollector-0630\browser_profile\source_sites\Default\shared_proto_db/MANIFEST-000001
+2026/07/02-03:41:45.263 37c0 Recovering log #3
+2026/07/02-03:41:45.264 37c0 Reusing old log C:\Users\user\Downloads\AutoCommerceAI_4.0_PlaywrightSourceCollector-0630\browser_profile\source_sites\Default\shared_proto_db/000003.log 

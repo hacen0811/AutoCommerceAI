@@ -10,6 +10,10 @@ from modules.workflow.workflow_engine import WorkflowEngine
 from modules.workflow.job_queue import JobQueue
 from modules.workflow.pipeline_state import PipelineState
 from app.ui.render import copybox
+
+from app.ui.ai_product_analysis import show_ai_product_analysis
+from app.ui.download_center import show_download_center
+
 from modules.video.video_path_resolver import VideoPathResolver
 from modules.project.repository import ProjectRepository
 
@@ -17,6 +21,7 @@ from modules.project.repository import ProjectRepository
 UI_VERSION = "0630-final-stable-selected-sources"
 SELECTED_DIR = Path("exports/selected_sources")
 RESULT_DIR = Path("exports/one_click_results")
+CONTENT_PACK_DIR = Path("exports/content_packs")
 
 
 def read_file_text(path):
@@ -89,6 +94,257 @@ def load_latest_result(project):
 def save_latest_result(project, result):
     if isinstance(result, dict) and result:
         write_json(latest_result_path(project), result)
+
+
+
+
+def content_pack_path(project):
+    return CONTENT_PACK_DIR / f"{safe_project_id(project)}_content_pack.json"
+
+
+def content_pack_txt_path(project):
+    return CONTENT_PACK_DIR / f"{safe_project_id(project)}_content_pack.txt"
+
+
+def normalize_text(value, fallback=""):
+    if value is None:
+        return fallback
+    text = str(value).strip()
+    return text if text else fallback
+
+
+def build_ai_content_pack(project, selected_sources, latest_result=None):
+    """
+    Sprint 6-7 MVP content pack.
+    선택된 후보를 기준으로 쇼츠/CapCut/썸네일/인포크/업로드 패키지 초안을 생성합니다.
+    외부 API 호출 없이 즉시 생성되는 안정형 버전입니다.
+    """
+    latest_result = latest_result or {}
+    selected_sources = [s for s in (selected_sources or []) if isinstance(s, dict)]
+    primary = selected_sources[0] if selected_sources else {}
+
+    project_name = normalize_text(
+        getattr(project, "product_name", "") or getattr(project, "title", ""),
+        "선택 상품",
+    )
+    source_query = normalize_text(
+        primary.get("query") or primary.get("title") or project_name,
+        project_name,
+    )
+    source_url = normalize_text(primary.get("url"), "")
+    platform = normalize_text(primary.get("platform"), "source")
+
+    hooks = [
+        f"아직도 {source_query} 없이 불편하게 쓰고 계세요?",
+        f"이거 하나로 귀찮은 일이 확 줄어듭니다.",
+        f"살림할 때 이런 불편함 느껴보신 분들은 꼭 보세요.",
+        f"왜 이제 알았지 싶은 생활템입니다.",
+        f"작지만 매일 편해지는 아이템입니다.",
+    ]
+
+    script_lines = [
+        f"저는 평소에 {source_query} 관련해서 은근 불편한 순간이 많았어요.",
+        "처음에는 그냥 참고 썼는데, 매번 반복되니까 생각보다 스트레스가 되더라고요.",
+        f"그래서 찾아보다가 이 {source_query} 상품을 봤는데요.",
+        "핵심은 복잡한 기능보다, 자주 겪는 불편함을 간단하게 줄여준다는 점이에요.",
+        "공간을 많이 차지하지 않고, 쓰는 방법도 어렵지 않아서 생활템 쇼츠로 보여주기 좋습니다.",
+        "특히 Before / After 장면으로 보여주면 차이가 바로 느껴질 것 같아요.",
+        "제품 정보가 궁금하시면 댓글에 키워드를 남겨주세요.",
+    ]
+
+    capcut_timeline = [
+        {"time": "0-3초", "scene": "불편한 상황 클로즈업", "caption": hooks[0], "capcut": "자막 크게, 효과음 Pop 35%, 빠른 줌인"},
+        {"time": "3-8초", "scene": "기존 방식의 번거로움", "caption": "매번 이게 은근 귀찮더라고요", "capcut": "컷 전환 빠르게, BGM 15%"},
+        {"time": "8-16초", "scene": "선택 상품 등장", "caption": f"그래서 찾은 {source_query}", "capcut": "제품 이미지 중앙, 바운스 애니메이션"},
+        {"time": "16-32초", "scene": "핵심 기능 3가지", "caption": "간단함 / 정리 / 편리함", "capcut": "3분할 자막, 체크 효과음"},
+        {"time": "32-45초", "scene": "Before / After 비교", "caption": "차이가 바로 보이죠?", "capcut": "좌우 비교, 강조색 #FFD54F"},
+        {"time": "45-55초", "scene": "마무리와 CTA", "caption": "댓글에 키워드 남겨주세요 👇", "capcut": "하단 CTA 고정, BGM 25%"},
+    ]
+
+    pack = {
+        "version": "sprint-6-7-content-pack-mvp",
+        "project_id": getattr(project, "id", ""),
+        "project_name": project_name,
+        "primary_source": primary,
+        "selected_sources": selected_sources,
+        "content_strategy": {
+            "main_angle": "문제 해결형 쇼핑쇼츠",
+            "target": "생활 불편을 빠르게 해결하고 싶은 사용자",
+            "selling_points": ["반복되는 불편함 해결", "사용법이 쉬움", "Before / After 연출이 쉬움"],
+            "recommended_format": "40~60초 쇼츠 / 릴스",
+        },
+        "shorts": {
+            "titles": [
+                f"{source_query}, 왜 이제 알았을까?",
+                f"생활이 편해지는 {source_query} 추천",
+                f"불편함 줄여주는 살림템 {source_query}",
+            ],
+            "thumbnail_phrases": [
+                "왜 이제 알았지?",
+                "이거 하나로 끝",
+                "생활이 편해집니다",
+            ],
+            "hooks": hooks,
+            "script": "\n".join(script_lines),
+            "cta": "댓글에 제품 키워드 남겨주세요 👇",
+            "capcut_timeline": capcut_timeline,
+        },
+        "thumbnail": {
+            "size": "9:16",
+            "main_text": "왜 이제 알았지?",
+            "sub_text": source_query,
+            "layout": "제품 크게 + 왼쪽 상단 후킹 문구 + 하단 짧은 설명",
+            "image_prompt": f"9:16 vertical shopping shorts thumbnail, clean Korean ecommerce style, product concept: {source_query}, bright home background, large bold Korean text area, realistic product-focused composition",
+        },
+        "inpock": {
+            "size": "1000x1000",
+            "title": source_query,
+            "main_text": "생활이 편해지는 추천템",
+            "sub_text": "제품 정보는 링크에서 확인",
+            "image_prompt": f"1000x1000 square product promo image for Inpock link page, clean Korean shopping design, product concept: {source_query}, white background, neat layout, space for Korean title text",
+        },
+        "upload_bundle": {
+            "youtube_title": f"{source_query} 추천템 #shorts",
+            "youtube_desc": "🔗 제품 정보는 영상 아래 설명란 링크 또는 프로필 링크를 확인해주세요.\n\n쿠팡파트너스 활동을 통해 일정액의 수수료를 제공받을 수 있습니다.",
+            "instagram_body": f"왜 이제 알았지 싶은 생활템 ✨\n\n{source_query}처럼 매일 쓰는 제품은 작은 차이가 크게 느껴지더라고요.\n\n제품 정보가 궁금하시면 댓글에 키워드 남겨주세요 👇",
+            "hashtags": ["#쇼핑쇼츠", "#생활용품추천", "#살림템", "#쿠팡추천", "#shorts", "#릴스"],
+            "source_url": source_url,
+            "platform": platform,
+        },
+    }
+    return pack
+
+
+def content_pack_to_txt(pack):
+    shorts = pack.get("shorts", {})
+    upload = pack.get("upload_bundle", {})
+    thumb = pack.get("thumbnail", {})
+    inpock = pack.get("inpock", {})
+
+    lines = []
+    lines.append("# AI 콘텐츠 팩")
+    lines.append("")
+    lines.append(f"프로젝트: {pack.get('project_name', '')}")
+    lines.append(f"대표 상품/검색어: {pack.get('primary_source', {}).get('query', '')}")
+    lines.append("")
+    lines.append("## 쇼츠 제목")
+    for title in shorts.get("titles", []):
+        lines.append(f"- {title}")
+    lines.append("")
+    lines.append("## 후킹")
+    for hook in shorts.get("hooks", []):
+        lines.append(f"- {hook}")
+    lines.append("")
+    lines.append("## 대본")
+    lines.append(shorts.get("script", ""))
+    lines.append("")
+    lines.append("## CapCut 타임라인")
+    for item in shorts.get("capcut_timeline", []):
+        lines.append(f"- {item.get('time')} / {item.get('scene')} / {item.get('caption')} / {item.get('capcut')}")
+    lines.append("")
+    lines.append("## 썸네일")
+    lines.append(f"메인 문구: {thumb.get('main_text', '')}")
+    lines.append(f"보조 문구: {thumb.get('sub_text', '')}")
+    lines.append(f"프롬프트: {thumb.get('image_prompt', '')}")
+    lines.append("")
+    lines.append("## 인포크 1000x1000")
+    lines.append(f"메인 문구: {inpock.get('main_text', '')}")
+    lines.append(f"보조 문구: {inpock.get('sub_text', '')}")
+    lines.append(f"프롬프트: {inpock.get('image_prompt', '')}")
+    lines.append("")
+    lines.append("## 업로드")
+    lines.append(f"유튜브 제목: {upload.get('youtube_title', '')}")
+    lines.append(f"유튜브 설명:\n{upload.get('youtube_desc', '')}")
+    lines.append(f"인스타 본문:\n{upload.get('instagram_body', '')}")
+    lines.append("해시태그: " + " ".join(upload.get("hashtags", [])))
+    return "\n".join(lines)
+
+
+def save_content_pack(project, pack):
+    json_path = content_pack_path(project)
+    txt_path = content_pack_txt_path(project)
+    write_json(json_path, pack)
+    txt_path.parent.mkdir(parents=True, exist_ok=True)
+    txt_path.write_text(content_pack_to_txt(pack), encoding="utf-8")
+    return {"json": str(json_path), "txt": str(txt_path)}
+
+
+def load_content_pack(project):
+    data = read_json(content_pack_path(project), {})
+    return data if isinstance(data, dict) else {}
+
+
+def show_content_pack_view(project, result=None):
+    key = init_selected_sources(project)
+    selected = st.session_state.get(key, [])
+
+    st.divider()
+    st.subheader("🚀 AI 콘텐츠 팩")
+
+    if not selected:
+        st.info("후보를 먼저 채택하면 AI 콘텐츠 팩을 생성할 수 있습니다.")
+        return
+
+    st.caption(f"채택 후보 {len(selected)}개 기준으로 쇼츠/CapCut/썸네일/인포크/업로드 패키지를 생성합니다.")
+
+    if st.button("🚀 AI 콘텐츠 팩 생성", key=f"content_pack_generate_{safe_project_id(project)}", type="primary", use_container_width=True):
+        pack = build_ai_content_pack(project, selected, result)
+        paths = save_content_pack(project, pack)
+        st.session_state[f"content_pack_{safe_project_id(project)}"] = pack
+        st.success("AI 콘텐츠 팩을 생성했습니다.")
+        st.caption(f"JSON: {paths.get('json')} / TXT: {paths.get('txt')}")
+
+    pack = st.session_state.get(f"content_pack_{safe_project_id(project)}") or load_content_pack(project)
+    if not pack:
+        return
+
+    shorts = pack.get("shorts", {})
+    upload = pack.get("upload_bundle", {})
+
+    tabs = st.tabs(["쇼츠", "CapCut", "썸네일", "인포크", "업로드", "JSON"])
+
+    with tabs[0]:
+        st.markdown("### 제목")
+        for title in shorts.get("titles", []):
+            st.write(f"- {title}")
+        st.markdown("### 후킹")
+        for hook in shorts.get("hooks", []):
+            st.write(f"- {hook}")
+        st.text_area("대본", shorts.get("script", ""), height=220)
+        st.write("CTA:", shorts.get("cta", ""))
+
+    with tabs[1]:
+        for item in shorts.get("capcut_timeline", []):
+            st.write(f"**{item.get('time')}** / {item.get('scene')}")
+            st.caption(f"자막: {item.get('caption')} / CapCut: {item.get('capcut')}")
+
+    with tabs[2]:
+        thumb = pack.get("thumbnail", {})
+        st.write("메인 문구:", thumb.get("main_text", ""))
+        st.write("보조 문구:", thumb.get("sub_text", ""))
+        st.text_area("썸네일 이미지 프롬프트", thumb.get("image_prompt", ""), height=120)
+
+    with tabs[3]:
+        inpock = pack.get("inpock", {})
+        st.write("규격:", inpock.get("size", "1000x1000"))
+        st.write("메인 문구:", inpock.get("main_text", ""))
+        st.write("보조 문구:", inpock.get("sub_text", ""))
+        st.text_area("인포크 이미지 프롬프트", inpock.get("image_prompt", ""), height=120)
+
+    with tabs[4]:
+        st.write("유튜브 제목:", upload.get("youtube_title", ""))
+        st.text_area("유튜브 설명", upload.get("youtube_desc", ""), height=130)
+        st.text_area("인스타 본문", upload.get("instagram_body", ""), height=150)
+        st.write("해시태그:", " ".join(upload.get("hashtags", [])))
+
+    with tabs[5]:
+        copybox("AI Content Pack JSON", json.dumps(pack, ensure_ascii=False, indent=2), 420)
+
+    d1, d2 = st.columns(2)
+    with d1:
+        show_download_button("AI 콘텐츠 팩 JSON 다운로드", str(content_pack_path(project)), "application/json")
+    with d2:
+        show_download_button("AI 콘텐츠 팩 TXT 다운로드", str(content_pack_txt_path(project)), "text/plain")
 
 
 def pipeline_result_session_key(project):
@@ -238,6 +494,20 @@ def show_selected_sources(project):
                     st.rerun()
 
     st.caption("현재 순서가 CapCut 내보내기와 TXT 생성 순서의 기준이 됩니다.")
+    
+    show_content_pack_view(project)
+  
+    show_ai_product_analysis(project, selected)
+
+    content_pack = st.session_state.get(
+        f"ai_content_pack_result_{project.id}",
+        {}
+    )
+
+    show_download_center(
+        project,
+        content_pack=content_pack
+    )
 
 def show_candidate_card(project, platform, item):
     query = item.get("query", "")
@@ -339,16 +609,29 @@ def show_live_sources(project, live_sources):
                 if url:
                     st.link_button("영상 열기", url, use_container_width=True)
 
+                source_item = {
+                    "rank": i,
+                    "query": title,
+                    "purpose": "실제 Playwright 수집 후보",
+                    "score": item.get("score", 80),
+                    "thumbnail": thumbnail,
+                }
+                if st.button("이 후보 채택", key=f"live_select_{safe_project_id(project)}_{i}", use_container_width=True):
+                    added = select_source(project, item.get("platform", "live"), source_item, url)
+                    if added:
+                        st.success("후보를 채택하고 저장했습니다.")
+                    else:
+                        st.info("이미 채택한 후보입니다.")
+
 def show_search_links(keywords):
     taobao_keyword = keywords.get("taobao_keyword", "")
-    douyin_keyword = keywords.get("douyin_keyword", "")
     main_keyword = keywords.get("main_keyword", "")
 
     st.subheader("검색 키워드")
     st.write("타오바오:", taobao_keyword)
-    st.write("도우인:", douyin_keyword)
+    st.write("1688:", taobao_keyword or main_keyword)
 
-    c1, c2, c3 = st.columns(3)
+    c1, c2 = st.columns(2)
 
     with c1:
         st.link_button(
@@ -358,13 +641,6 @@ def show_search_links(keywords):
         )
 
     with c2:
-        st.link_button(
-            "도우인 검색 열기",
-            make_search_url("douyin", douyin_keyword),
-            use_container_width=True,
-        )
-
-    with c3:
         st.link_button(
             "1688 검색 열기",
             make_search_url("1688", taobao_keyword or main_keyword),
@@ -476,7 +752,6 @@ def show_pipeline_result(project, result, path_debug):
         if keywords:
             show_search_links(keywords)
             show_top10(project, "타오바오 TOP10", "taobao", keywords.get("taobao_top10", []))
-            show_top10(project, "도우인 TOP10", "douyin", keywords.get("douyin_top10", []))
         else:
             st.info("상품 기획 키워드 결과가 없습니다.")
 
@@ -529,7 +804,7 @@ def show_pipeline_result(project, result, path_debug):
 def show_one_click_pipeline():
     st.title("⚡ 원클릭 파이프라인")
     st.caption("상품 계획 → 소스 영상 → Vision 분석 → CapCut → 콘텐츠 생성까지 한 번에 실행합니다.")
-    st.caption("UI 버전: sprint5-result-persist-001")
+    st.caption("UI 버전: sprint6-7-ai-content-pack-001")
 
     selector = ProjectSelector()
     projects = selector.all_projects()

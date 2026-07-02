@@ -10,8 +10,10 @@ import shutil
 
 try:
     from config.settings import EXPORTS_DIR
-except Exception:  # pragma: no cover
+except Exception:
     EXPORTS_DIR = Path("exports")
+
+from modules.studio.image_asset_resolver import ImageAssetResolver
 
 
 @dataclass
@@ -25,15 +27,23 @@ class VideoCandidate:
     search_url: str
     download_status: str = "수동 확인 필요"
     note: str = "공식 API/로그인 제한이 있어 현재는 후보 URL과 선택 기준을 제공합니다."
+    search_type: str = "text"
+    image_url: str = ""
+    image_path: str = ""
 
 
 class VideoSourcingEngine:
-    """Create practical Taobao/1688/Douyin video-source candidates.
+    """
+    Sprint 6-4 image-first source engine.
 
-    v3.9 목표는 '검색 URL만 제공'에서 한 단계 더 나아가 쇼츠 제작에 쓸
-    후보 목록, 추천 점수, 저장 폴더, 다음 작업을 한 번에 만들어주는 것입니다.
-    도우인/타오바오는 로그인/지역/봇 차단이 잦기 때문에, 실제 자동 수집은
-    Playwright 설치 및 로그인 세션이 준비된 경우에만 확장하도록 안전하게 설계했습니다.
+    기본 검색 대상:
+    1) Taobao 이미지 검색
+    2) 1688 이미지 검색
+    3) Taobao 텍스트 검색
+    4) 1688 텍스트 검색
+    5) TikTok 공개 검색
+
+    Douyin은 기본 파이프라인에서 제외합니다.
     """
 
     def __init__(self):
@@ -41,13 +51,33 @@ class VideoSourcingEngine:
         self.out_dir.mkdir(parents=True, exist_ok=True)
 
     def collect(self, product: Dict, max_candidates: int = 18) -> Dict:
-        name = product.get("name") or product.get("keyword") or "상품"
+        name = product.get("name") or product.get("product_name") or product.get("keyword") or "상품"
         keyword = product.get("keyword") or name
-        taobao_kw = product.get("taobao_keyword") or name
-        douyin_kw = product.get("douyin_keyword") or name
+        taobao_kw = product.get("taobao_keyword") or keyword or name
+
+        image_url = (
+            product.get("image_url")
+            or product.get("thumbnail")
+            or product.get("product_image")
+            or product.get("coupang_image_url")
+            or ""
+        )
+        image_path = product.get("image_path") or ""
         coupang = product.get("coupang", {}) or {}
 
-        seeds = self._build_seed_queries(name, keyword, taobao_kw, douyin_kw)
+        image_asset = ImageAssetResolver().resolve(
+            image_url=image_url,
+            image_path=image_path,
+            name=name,
+        )
+
+        seeds = self._build_seed_queries(
+            name=name,
+            keyword=keyword,
+            taobao_kw=taobao_kw,
+            image_asset=image_asset,
+        )
+
         candidates: List[VideoCandidate] = []
         rank = 1
         for platform, rows in seeds.items():
@@ -60,8 +90,15 @@ class VideoSourcingEngine:
                         keyword=row["keyword"],
                         purpose=row["purpose"],
                         score=row["score"],
-                        search_url=self._platform_url(platform, row["keyword"]),
-                        note=self._platform_note(platform),
+                        search_url=self._platform_url(
+                            platform=platform,
+                            keyword=row["keyword"],
+                            search_type=row.get("search_type", "text"),
+                        ),
+                        note=self._platform_note(platform, row.get("search_type", "text")),
+                        search_type=row.get("search_type", "text"),
+                        image_url=image_url if row.get("search_type") == "image" else "",
+                        image_path=image_asset.get("image_path", "") if row.get("search_type") == "image" else "",
                     )
                 )
                 rank += 1
@@ -70,32 +107,52 @@ class VideoSourcingEngine:
         for i, c in enumerate(candidates, 1):
             c.rank = i
 
-        best = candidates[:5]
+        best = candidates[:6]
         folder = self.out_dir / self._safe_name(name)
         folder.mkdir(parents=True, exist_ok=True)
+
         live_collection = self._try_live_collect([asdict(x) for x in candidates])
 
         manifest = {
             "ok": True,
-            "mode": "candidate-search-plus-live-ready",
+            "mode": "image-first-taobao-1688",
             "created_at": datetime.now().isoformat(timespec="seconds"),
             "product_name": name,
             "keyword": keyword,
+            "image_url": image_url,
+            "image_asset": image_asset,
             "coupang_product_id": coupang.get("product_id"),
-            "summary": "타오바오/1688/도우인 영상 후보를 추천하고, Playwright 설정 시 실제 검색 결과 수집까지 시도합니다.",
+            "summary": (
+                "도우인은 기본 검색에서 제외하고, 쿠팡 대표이미지를 기반으로 "
+                "타오바오/1688 동일상품 검색을 1순위로 시도합니다."
+            ),
             "automation_status": self.automation_status(),
+            "image_search": {
+                "enabled": bool(image_asset.get("ok")),
+                "image_url": image_url,
+                "image_path": image_asset.get("image_path", ""),
+                "priority": [
+                    "taobao_image_upload",
+                    "1688_image_upload",
+                    "taobao_text_search",
+                    "1688_text_search",
+                    "tiktok_text_search",
+                ],
+                "note": image_asset.get("message"),
+            },
             "live_collection": live_collection,
             "save_folder": str(folder),
             "best_candidates": [asdict(x) for x in best],
             "candidates": [asdict(x) for x in candidates],
             "how_to_use": [
-                "TOP 후보 URL을 클릭합니다.",
-                "상품 사용 장면이 있는 세로 영상 또는 상세 영상 위주로 확인합니다.",
-                "다운로드 가능한 영상은 videos/source_candidates 폴더에 저장합니다.",
-                "저장한 영상을 원본 영상에 업로드하면 Vision/CapCut/대본 생성이 이어집니다.",
+                "이미지 검색 후보가 1순위입니다.",
+                "타오바오/1688 이미지 업로드 결과에서 동일상품을 먼저 확인합니다.",
+                "상품 상세의 主图视频/实拍/买家秀/공장실사 영상을 우선 사용합니다.",
+                "이미지 검색이 부족하면 텍스트 검색 후보를 보조로 확인합니다.",
             ],
-            "next_version_target": "수집된 실제 후보 미리보기/선택/다운로드 자동화",
+            "next_version_target": "동일상품 자동 클릭 후 主图视频 추출과 다운로드 자동화",
         }
+
         manifest_path = folder / "video_source_manifest.json"
         manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
         manifest["manifest_path"] = str(manifest_path)
@@ -128,48 +185,100 @@ class VideoSourcingEngine:
                 "status": self.automation_status(),
             }
 
-    def _build_seed_queries(self, name: str, keyword: str, taobao_kw: str, douyin_kw: str) -> Dict[str, List[Dict]]:
+    def _build_seed_queries(self, name: str, keyword: str, taobao_kw: str, image_asset: Dict) -> Dict[str, List[Dict]]:
         cn_base = taobao_kw or name
-        kr_base = douyin_kw or name
-        return {
-            "douyin": [
-                {"title": f"{kr_base} 실사용 영상", "keyword": f"{kr_base} 使用 视频", "purpose": "사용 장면", "score": 98},
-                {"title": f"{kr_base} 추천/후기", "keyword": f"{kr_base} 推荐 好物", "purpose": "후기형 쇼츠", "score": 94},
-                {"title": f"{kr_base} 언박싱", "keyword": f"{kr_base} 开箱", "purpose": "언박싱", "score": 88},
-                {"title": f"{kr_base} 비교", "keyword": f"{kr_base} 对比", "purpose": "Before/After", "score": 84},
-                {"title": f"{kr_base} 꿀팁", "keyword": f"{kr_base} 技巧", "purpose": "생활꿀팁형", "score": 80},
-            ],
-            "taobao": [
-                {"title": f"{cn_base} 主图视频", "keyword": f"{cn_base} 主图视频", "purpose": "상세/대표 영상", "score": 96},
-                {"title": f"{cn_base} 实拍", "keyword": f"{cn_base} 实拍", "purpose": "실사 영상", "score": 93},
-                {"title": f"{cn_base} 买家秀", "keyword": f"{cn_base} 买家秀 视频", "purpose": "구매자 사용컷", "score": 87},
-                {"title": f"{cn_base} 同款", "keyword": f"{cn_base} 同款", "purpose": "동일/유사 상품", "score": 85},
-                {"title": f"{cn_base} 爆款", "keyword": f"{cn_base} 爆款 视频", "purpose": "인기 상품 영상", "score": 82},
-            ],
-            "1688": [
-                {"title": f"{cn_base} 批发视频", "keyword": f"{cn_base} 批发 视频", "purpose": "공급처 영상", "score": 90},
-                {"title": f"{cn_base} 工厂实拍", "keyword": f"{cn_base} 工厂 实拍", "purpose": "공장/공급처 실사", "score": 86},
-                {"title": f"{cn_base} 现货", "keyword": f"{cn_base} 现货 视频", "purpose": "재고/판매 영상", "score": 78},
-            ],
+        has_image = bool(image_asset.get("ok"))
+
+        seeds: Dict[str, List[Dict]] = {
+            "taobao": [],
+            "1688": [],
+            "tiktok": [],
         }
 
-    def _platform_url(self, platform: str, keyword: str) -> str:
-        q = quote_plus(keyword)
-        if platform == "douyin":
-            return f"https://www.douyin.com/search/{q}"
+        if has_image:
+            seeds["taobao"].extend([
+                {
+                    "title": f"{name} 타오바오 이미지 동일상품 검색",
+                    "keyword": name,
+                    "purpose": "쿠팡 이미지 기반 동일/유사 상품",
+                    "score": 130,
+                    "search_type": "image",
+                },
+                {
+                    "title": f"{name} 타오바오 이미지 + 主图视频",
+                    "keyword": f"{cn_base} 主图视频",
+                    "purpose": "동일상품 상세 대표 영상",
+                    "score": 122,
+                    "search_type": "image",
+                },
+            ])
+            seeds["1688"].extend([
+                {
+                    "title": f"{name} 1688 이미지 공급처 검색",
+                    "keyword": name,
+                    "purpose": "쿠팡 이미지 기반 공급처/공장 후보",
+                    "score": 128,
+                    "search_type": "image",
+                },
+                {
+                    "title": f"{name} 1688 이미지 + 工厂实拍",
+                    "keyword": f"{cn_base} 工厂 实拍",
+                    "purpose": "공급처 실사/공장 영상",
+                    "score": 118,
+                    "search_type": "image",
+                },
+            ])
+
+        seeds["taobao"].extend([
+            {"title": f"{cn_base} 主图视频", "keyword": f"{cn_base} 主图视频", "purpose": "상세/대표 영상", "score": 96, "search_type": "text"},
+            {"title": f"{cn_base} 实拍", "keyword": f"{cn_base} 实拍", "purpose": "실사 영상", "score": 93, "search_type": "text"},
+            {"title": f"{cn_base} 买家秀", "keyword": f"{cn_base} 买家秀 视频", "purpose": "구매자 사용컷", "score": 87, "search_type": "text"},
+            {"title": f"{cn_base} 同款", "keyword": f"{cn_base} 同款", "purpose": "동일/유사 상품", "score": 85, "search_type": "text"},
+        ])
+
+        seeds["1688"].extend([
+            {"title": f"{cn_base} 批发视频", "keyword": f"{cn_base} 批发 视频", "purpose": "공급처 영상", "score": 90, "search_type": "text"},
+            {"title": f"{cn_base} 工厂实拍", "keyword": f"{cn_base} 工厂 实拍", "purpose": "공장/공급처 실사", "score": 86, "search_type": "text"},
+        ])
+
+        seeds["tiktok"].extend([
+            {"title": f"{name} TikTok 사용 영상", "keyword": f"{name} review", "purpose": "TikTok 공개 리뷰/사용 영상", "score": 72, "search_type": "text"},
+        ])
+
+        return seeds
+
+    def _platform_url(self, platform: str, keyword: str, search_type: str = "text") -> str:
+        q = quote_plus(keyword or "")
+
         if platform == "taobao":
+            if search_type == "image":
+                return "https://s.taobao.com/search?tab=image"
             return f"https://s.taobao.com/search?q={q}"
+
         if platform == "1688":
+            if search_type == "image":
+                return "https://s.1688.com/selloffer/offer_search.htm"
             return f"https://s.1688.com/selloffer/offer_search.htm?keywords={q}"
+
+        if platform == "tiktok":
+            return f"https://www.tiktok.com/search?q={q}"
+
         return ""
 
-    def _platform_note(self, platform: str) -> str:
-        if platform == "douyin":
-            return "도우인은 로그인/지역 제한이 있을 수 있습니다. 세로 실사용 영상 후보를 우선 확인하세요."
+    def _platform_note(self, platform: str, search_type: str = "text") -> str:
         if platform == "taobao":
+            if search_type == "image":
+                return "타오바오 이미지 검색입니다. 쿠팡 대표이미지로 동일/유사 상품을 먼저 찾습니다."
             return "타오바오는 상품 상세의 主图视频/实拍 영상을 우선 확인하세요."
+
         if platform == "1688":
+            if search_type == "image":
+                return "1688 이미지 검색입니다. 쿠팡 대표이미지로 공급처/공장 후보를 먼저 찾습니다."
             return "1688은 공급처 상세 영상과 공장 실사 후보 확인에 유용합니다."
+
+        if platform == "tiktok":
+            return "TikTok은 보조 검색입니다. 타오바오/1688 이미지 검색이 우선입니다."
+
         return ""
 
     def _safe_name(self, text: str) -> str:
