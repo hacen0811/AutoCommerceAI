@@ -963,6 +963,37 @@ def show_pipeline_result(project, result, path_debug):
 
         show_selected_sources(project)
 
+        video_quality = outputs.get("video_quality") or state.get("results", {}).get("video_quality", {})
+        if video_quality:
+            st.divider()
+            st.subheader("AI 영상 품질 평가")
+
+            if video_quality.get("ok") is False:
+                st.warning(f"영상 품질 평가 실패: {video_quality.get('reason', '알 수 없는 오류')}")
+            else:
+                score = video_quality.get("score")
+                grade = video_quality.get("grade")
+                summary = (
+                    video_quality.get("summary")
+                    or video_quality.get("reason")
+                    or video_quality.get("recommendation")
+                )
+
+                col1, col2 = st.columns(2)
+
+                with col1:
+                    st.metric("품질 점수", score if score is not None else "-")
+
+                with col2:
+                    st.metric("등급", grade if grade else "-")
+
+                if summary:
+                    st.write(summary)
+
+                recommendation = video_quality.get("recommendation")
+                if recommendation:
+                    st.success(f"추천 판단: {recommendation}")
+
         live_sources = (
             outputs.get("video_sources")
             or outputs.get("live_collection")
@@ -984,6 +1015,41 @@ def show_pipeline_result(project, result, path_debug):
             st.divider()
             st.subheader("Vision")
             st.write(real_vision.get("summary"))
+
+        video_quality = outputs.get("video_quality") or state.get("results", {}).get("video_quality", {})
+        if video_quality:
+            st.divider()
+            st.subheader("AI 영상 품질 평가")
+
+            if video_quality.get("ok") is False:
+                st.warning(f"영상 품질 평가 실패: {video_quality.get('reason', '알 수 없는 오류')}")
+        else:
+                score = video_quality.get("score")
+                grade = video_quality.get("grade")
+                summary = (
+                    video_quality.get("summary")
+                    or video_quality.get("reason")
+                    or video_quality.get("recommendation")
+                )
+                col1, col2 = st.columns(2)
+
+                with col1:
+                    st.metric("품질 점수", score if score is not None else "-")
+
+                with col2:
+                    st.metric("등급", grade if grade else "-")
+
+                if summary:
+                    st.write(summary)
+                recommendation = video_quality.get("recommendation")
+                
+                if recommendation:
+                    st.success(f"추천 판단: {recommendation}")   
+
+                details = video_quality.get("details")
+                if details:
+                    with st.expander("상세 품질 분석 보기"):
+                        st.json(details) 
 
         capcut_export = outputs.get("capcut_export") or state.get("results", {}).get("capcut_export", {})
         if capcut_export:

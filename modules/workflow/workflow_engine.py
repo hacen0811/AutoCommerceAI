@@ -11,6 +11,7 @@ from modules.editor.capcut_project_exporter import CapCutProjectExporter
 from modules.workflow.pipeline_state import PipelineState
 from modules.video.video_path_resolver import VideoPathResolver
 from modules.studio.video_sourcing_engine import VideoSourcingEngine
+from modules.video.video_quality_engine import VideoQualityEngine
 from modules.project.repository import ProjectRepository
 from modules.video.download_utils import (
     latest_downloaded_video,
@@ -228,7 +229,19 @@ class WorkflowEngine:
         except Exception as exc:
             real_vision = {}
             state.update_step(job_id, "real_vision", "failed", error=exc)
+        # 4-1. Video Quality
+        try:
+            current_video = resolver.resolve_path(project)
 
+            quality = VideoQualityEngine().score(current_video)
+
+            outputs["video_quality"] = quality
+
+        except Exception as exc:
+            outputs["video_quality"] = {
+                "ok": False,
+                "reason": str(exc),
+            }
         # 5. Auto Editor
         try:
             if real_vision.get("auto_editor"):
