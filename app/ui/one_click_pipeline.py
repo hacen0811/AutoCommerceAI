@@ -387,6 +387,18 @@ def make_search_url(platform, query):
 
     return ""
 
+def open_with_login_browser(url):
+    if not url:
+        return False
+
+    subprocess.Popen(
+        [
+            sys.executable,
+            "tools/open_source_url.py",
+            url,
+        ]
+    )
+    return True
 
 def selected_session_key(project):
     return f"selected_sources_{safe_project_id(project)}"
@@ -612,9 +624,7 @@ def show_selected_sources(project):
                     key=f"open_source_url_{project.id}_{i}",
                     use_container_width=True,
                 ):
-                    subprocess.Popen(
-                        [sys.executable, "tools/open_source_url.py", url]
-                    )
+                    open_with_login_browser(url)
                     st.success("Playwright 로그인 브라우저로 열었습니다.")
 
             if st.button(
@@ -725,13 +735,7 @@ def show_candidate_card(project, platform, item):
                     key=f"search_{platform}_{rank}_{query}",
                     use_container_width=True,
                 ):
-                    subprocess.Popen(
-                        [
-                            sys.executable,
-                            "tools/open_source_url.py",
-                            url,
-                        ]
-                    )
+                    open_with_login_browser(url)
                     st.success("Playwright 로그인 브라우저로 열었습니다.")
 
         with b2:
@@ -842,11 +846,7 @@ def show_search_links(keywords):
         if st.button("타오바오 검색 열기", use_container_width=True):
             url = make_search_url("taobao", taobao_keyword)
 
-            subprocess.Popen([
-                sys.executable,
-                "tools/open_source_uri.py",
-                url,
-            ])
+            open_with_login_browser(url)
 
             st.success("Playwright 로그인 브라우저를 열었습니다.")
 
@@ -854,11 +854,7 @@ def show_search_links(keywords):
         if st.button("1688 검색 열기", use_container_width=True):
             url = make_search_url("1688", taobao_keyword or main_keyword)
 
-            subprocess.Popen([
-                sys.executable,
-                "tools/open_source_uri.py",
-                url,
-            ])
+            open_with_login_browser(url)
 
             st.success("Playwright 로그인 브라우저를 열었습니다.")
 
