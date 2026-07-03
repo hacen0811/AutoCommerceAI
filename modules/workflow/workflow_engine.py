@@ -12,6 +12,7 @@ from modules.workflow.pipeline_state import PipelineState
 from modules.video.video_path_resolver import VideoPathResolver
 from modules.studio.video_sourcing_engine import VideoSourcingEngine
 from modules.video.video_quality_engine import VideoQualityEngine
+from modules.video.video_candidate_selector import VideoCandidateSelector
 from modules.project.repository import ProjectRepository
 from modules.video.download_utils import (
     latest_downloaded_video,
@@ -19,15 +20,11 @@ from modules.video.download_utils import (
     safe_file_name,
 )
 
+
 class WorkflowEngine:
     """
     One Click Pipeline 핵심 엔진.
     가능한 단계는 계속 진행하고, 실패한 단계는 errors에 기록합니다.
-
-    Sprint 7-4:
-    - source_rank 1위 영상을 자동으로 project.video_path에 꽂지 않습니다.
-    - Real Vision은 반드시 현재 프로젝트에 저장된 video_path만 사용합니다.
-    - 엉뚱한 assets/videos 영상이 현재 프로젝트에 섞이는 문제를 방지합니다.
     """
 
     STEP_NAMES = [
@@ -51,7 +48,7 @@ class WorkflowEngine:
             "capcut_export": "편집 지시서 내보내기",
         }
         return [{"name": name, "label": labels[name], "status": "pending"} for name in self.STEP_NAMES]
-    
+
     def auto_connect_latest_download(self, project):
         resolver = VideoPathResolver()
         current_video = resolver.resolve_path(project)
@@ -59,9 +56,9 @@ class WorkflowEngine:
 
         if current_video and resolver.exists(current_video):
             return {
-               "ok": False,
-               "message": "이미 연결된 영상이 있습니다.",
-               "video_path": current_video,
+                "ok": False,
+                "message": "이미 연결된 영상이 있습니다.",
+                "video_path": current_video,
             }
 
         latest = latest_downloaded_video()
@@ -76,7 +73,7 @@ class WorkflowEngine:
 
         out_dir = project_source_video_dir(project)
         out_dir.mkdir(parents=True, exist_ok=True)
-       
+
         project_name = safe_file_name(
             getattr(project, "product_name", "") or getattr(project, "title", ""),
             "project",
@@ -106,7 +103,6 @@ class WorkflowEngine:
             "message": "Downloads 최신 영상을 자동 연결했습니다.",
             "video_path": str(target),
         }
-
 
     def run_project(self, project, sample_count=6):
         resolver = VideoPathResolver()
@@ -177,9 +173,23 @@ class WorkflowEngine:
                 "name": getattr(project, "product_name", ""),
                 "keyword": getattr(project, "keyword", ""),
             })
+
             outputs["video_sources"] = live_sources
-        except Exception:
-            pass
+
+            video_candidates = (
+                live_sources.get("best_candidates", [])
+                or live_sources.get("candidates", [])
+                or live_sources.get("results", [])
+            )
+
+            outputs["video_candidates"] = video_candidates
+
+        except Exception as exc:
+            outputs["video_sources"] = {
+                "ok": False,
+                "reason": str(exc),
+            }
+            outputs["video_candidates"] = []
 
         # 4. Real Vision
         try:
@@ -228,20 +238,43 @@ class WorkflowEngine:
 
         except Exception as exc:
             real_vision = {}
+            outputs["real_vision"] = real_vision
             state.update_step(job_id, "real_vision", "failed", error=exc)
+
         # 4-1. Video Quality
         try:
             current_video = resolver.resolve_path(project)
-
-            quality = VideoQualityEngine().score(current_video)
-
+            quality = VideoQualityEngine().score(current_video, real_vision)
             outputs["video_quality"] = quality
-
         except Exception as exc:
             outputs["video_quality"] = {
                 "ok": False,
                 "reason": str(exc),
             }
+
+        # 4-2. AI Candidate Selection
+        try:
+            video_candidates = outputs.get("video_candidates", [])
+
+            enriched_candidates = []
+            for item in video_candidates:
+                new_item = dict(item)
+                new_item["video_quality"] = outputs.get("video_quality", {})
+                new_item["shopping_shorts_fit"] = outputs.get("shopping_shorts_fit", {})
+                new_item["real_vision"] = outputs.get("real_vision", {})
+                enriched_candidates.append(new_item)
+
+            candidate_selection = VideoCandidateSelector().select(enriched_candidates)
+            outputs["candidate_selection"] = candidate_selection
+
+        except Exception as exc:
+            outputs["candidate_selection"] = {
+                "ok": False,
+                "reason": str(exc),
+                "top3": [],
+                "all": [],
+            }
+
         # 5. Auto Editor
         try:
             if real_vision.get("auto_editor"):
