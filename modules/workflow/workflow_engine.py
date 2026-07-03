@@ -1,4 +1,5 @@
 from uuid import uuid4
+import shutil
 
 from modules.product.product_engine import ProductEngine
 from modules.source.source_video_engine import SourceVideoEngine
@@ -10,7 +11,12 @@ from modules.editor.capcut_project_exporter import CapCutProjectExporter
 from modules.workflow.pipeline_state import PipelineState
 from modules.video.video_path_resolver import VideoPathResolver
 from modules.studio.video_sourcing_engine import VideoSourcingEngine
-
+from modules.project.repository import ProjectRepository
+from modules.video.download_utils import (
+    latest_downloaded_video,
+    project_source_video_dir,
+    safe_file_name,
+)
 
 class WorkflowEngine:
     """
@@ -44,10 +50,71 @@ class WorkflowEngine:
             "capcut_export": "편집 지시서 내보내기",
         }
         return [{"name": name, "label": labels[name], "status": "pending"} for name in self.STEP_NAMES]
+    
+    def auto_connect_latest_download(self, project):
+        resolver = VideoPathResolver()
+        current_video = resolver.resolve_path(project)
+        print("[AUTO] current_video =", current_video)
+
+        if current_video and resolver.exists(current_video):
+            return {
+               "ok": False,
+               "message": "이미 연결된 영상이 있습니다.",
+               "video_path": current_video,
+            }
+
+        latest = latest_downloaded_video()
+        print("[AUTO] latest =", latest)
+
+        if not latest:
+            return {
+                "ok": False,
+                "message": "Downloads 최신 영상 없음",
+                "video_path": "",
+            }
+
+        out_dir = project_source_video_dir(project)
+        out_dir.mkdir(parents=True, exist_ok=True)
+       
+        project_name = safe_file_name(
+            getattr(project, "product_name", "") or getattr(project, "title", ""),
+            "project",
+        )
+
+        ext = latest.suffix.lower()
+        target = out_dir / f"auto_{project_name}{ext}"
+
+        print("[AUTO] copy ->", target)
+
+        try:
+            shutil.copy2(str(latest), str(target))
+        except PermissionError:
+            return {
+                "ok": False,
+                "message": "기존 영상 파일이 사용 중입니다. 동영상 플레이어나 CapCut을 닫고 다시 시도해주세요.",
+                "video_path": str(target),
+            }
+
+        ProjectRepository().update_links_and_media(
+            getattr(project, "id"),
+            video_path=str(target),
+        )
+
+        return {
+            "ok": True,
+            "message": "Downloads 최신 영상을 자동 연결했습니다.",
+            "video_path": str(target),
+        }
+
 
     def run_project(self, project, sample_count=6):
         resolver = VideoPathResolver()
         project = resolver.resolve_project(project)
+
+        auto_connected = self.auto_connect_latest_download(project)
+
+        if auto_connected.get("ok"):
+            project = resolver.resolve_project(project)
 
         job_id = uuid4().hex[:12]
         state = PipelineState()
@@ -116,6 +183,7 @@ class WorkflowEngine:
         # 4. Real Vision
         try:
             current_video = resolver.resolve_path(project)
+            print("[AUTO] current_video =", current_video)
 
             if current_video and resolver.exists(current_video):
                 project.video_path = current_video

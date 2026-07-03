@@ -1,6 +1,8 @@
 import json
 import re
 import shutil
+import subprocess
+import sys
 from pathlib import Path
 from urllib.parse import quote_plus
 
@@ -10,15 +12,15 @@ from modules.project.project_selector import ProjectSelector
 from modules.workflow.workflow_engine import WorkflowEngine
 from modules.workflow.job_queue import JobQueue
 from modules.workflow.pipeline_state import PipelineState
+
 from app.ui.render import copybox
 from app.ui.ai_content_pack import show_content_pack_view
 from app.ui.ai_product_analysis import show_ai_product_analysis
-
 from app.ui.download_center import show_download_center
 
 from modules.video.video_path_resolver import VideoPathResolver
+from modules.video.download_utils import latest_downloaded_video
 from modules.project.repository import ProjectRepository
-
 
 UI_VERSION = "0630-final-stable-selected-sources"
 SELECTED_DIR = Path("exports/selected_sources")
@@ -603,36 +605,59 @@ def show_selected_sources(project):
             )
 
             url = item.get("url")
+
             if url:
-                st.link_button("영상 링크 열기", url, use_container_width=True)
+                if st.button(
+                    "영상 링크 열기(로그인 브라우저)",
+                    key=f"open_source_url_{project.id}_{i}",
+                    use_container_width=True,
+                ):
+                    subprocess.Popen(
+                        [sys.executable, "tools/open_source_url.py", url]
+                    )
+                    st.success("Playwright 로그인 브라우저로 열었습니다.")
 
             if st.button(
                 "⬇ 다운로드 완료 후 자동 연결",
                 key=f"auto_connect_latest_download_{project.id}_{i}",
                 use_container_width=True,
             ):
-                result = connect_latest_download_to_project(project, item=item, index=i)
+                result = connect_latest_download_to_project(
+                    project,
+                    item=item,
+                    index=i,
+                )
 
                 if result.get("ok"):
                     item["video_path"] = result.get("video_path", "")
                     item["download_source_path"] = result.get("source_path", "")
                     item["download_connected"] = True
+
                     selected[i] = item
                     st.session_state[key] = selected
                     save_selected_sources(project, selected)
 
                     st.success(result.get("message"))
-                    st.caption(f"연결된 영상: {result.get('video_path')} / {result.get('size_mb')}MB")
+                    st.caption(
+                        f"연결된 영상: {result.get('video_path')} / "
+                        f"{result.get('size_mb')}MB"
+                    )
                     st.rerun()
+
                 else:
                     st.error(result.get("message"))
+
                     if result.get("source_path"):
                         st.caption(f"감지된 파일: {result.get('source_path')}")
 
             c1, c2, c3 = st.columns(3)
 
             with c1:
-                if st.button("⬆️ 위로", key=f"selected_up_{project.id}_{i}", disabled=i == 0):
+                if st.button(
+                    "⬆️ 위로",
+                    key=f"selected_up_{project.id}_{i}",
+                    disabled=i == 0,
+                ):
                     selected[i - 1], selected[i] = selected[i], selected[i - 1]
                     st.session_state[key] = selected
                     save_selected_sources(project, selected)
@@ -640,7 +665,11 @@ def show_selected_sources(project):
                     st.rerun()
 
             with c2:
-                if st.button("⬇️ 아래로", key=f"selected_down_{project.id}_{i}", disabled=i == len(selected) - 1):
+                if st.button(
+                    "⬇️ 아래로",
+                    key=f"selected_down_{project.id}_{i}",
+                    disabled=i == len(selected) - 1,
+                ):
                     selected[i + 1], selected[i] = selected[i], selected[i + 1]
                     st.session_state[key] = selected
                     save_selected_sources(project, selected)
@@ -648,7 +677,10 @@ def show_selected_sources(project):
                     st.rerun()
 
             with c3:
-                if st.button("🗑 삭제", key=f"selected_delete_{project.id}_{i}"):
+                if st.button(
+                    "🗑 삭제",
+                    key=f"selected_delete_{project.id}_{i}",
+                ):
                     selected.pop(i)
                     st.session_state[key] = selected
                     save_selected_sources(project, selected)
@@ -658,7 +690,6 @@ def show_selected_sources(project):
     st.caption("현재 순서가 CapCut 내보내기와 TXT 생성 순서의 기준이 됩니다.")
 
     show_content_pack_view(project)
-
     show_ai_product_analysis(project, selected)
 
     content_pack = st.session_state.get(
@@ -668,7 +699,7 @@ def show_selected_sources(project):
 
     show_download_center(
         project,
-        content_pack=content_pack
+        content_pack=content_pack,
     )
 
 def show_candidate_card(project, platform, item):
@@ -689,7 +720,19 @@ def show_candidate_card(project, platform, item):
 
         with b1:
             if url:
-                st.link_button("검색 열기", url, use_container_width=True)
+                if st.button(
+                    "검색 열기",
+                    key=f"search_{platform}_{rank}_{query}",
+                    use_container_width=True,
+                ):
+                    subprocess.Popen(
+                        [
+                            sys.executable,
+                            "tools/open_source_url.py",
+                            url,
+                        ]
+                    )
+                    st.success("Playwright 로그인 브라우저로 열었습니다.")
 
         with b2:
             if st.button(
@@ -796,18 +839,41 @@ def show_search_links(keywords):
     c1, c2 = st.columns(2)
 
     with c1:
-        st.link_button(
-            "타오바오 검색 열기",
-            make_search_url("taobao", taobao_keyword),
-            use_container_width=True,
-        )
+        if st.button("타오바오 검색 열기", use_container_width=True):
+            url = make_search_url("taobao", taobao_keyword)
+
+            subprocess.Popen([
+                sys.executable,
+                "tools/open_source_uri.py",
+                url,
+            ])
+
+            st.success("Playwright 로그인 브라우저를 열었습니다.")
 
     with c2:
-        st.link_button(
-            "1688 검색 열기",
-            make_search_url("1688", taobao_keyword or main_keyword),
-            use_container_width=True,
-        )
+        if st.button("1688 검색 열기", use_container_width=True):
+            url = make_search_url("1688", taobao_keyword or main_keyword)
+
+            subprocess.Popen([
+                sys.executable,
+                "tools/open_source_uri.py",
+                url,
+            ])
+
+            st.success("Playwright 로그인 브라우저를 열었습니다.")
+
+def open_with_login_browser(url):
+    if not url:
+        return False
+
+    subprocess.Popen(
+        [
+            sys.executable,
+            "tools/open_source_url.py",
+            url,
+        ]
+    )
+    return True
 
 
 def show_content_factory(content_factory):
