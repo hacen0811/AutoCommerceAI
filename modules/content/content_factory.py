@@ -42,7 +42,7 @@ class ContentFactory:
                 + "\n\n[입력 데이터]\n"
                 + json.dumps(payload, ensure_ascii=False, indent=2)
             )
-            
+
             print("\n========== CONTENT PACK PAYLOAD ==========")
             print(json.dumps(payload, ensure_ascii=False, indent=2))
             print("=========================================\n")
@@ -253,28 +253,94 @@ class ContentFactory:
             or "선택 상품"
         )
 
+        clean_analysis = self._clean_content_analysis(analysis, project_name)
+
         payload = {
             "project_id": getattr(project, "id", ""),
             "project_name": project_name,
-            "analysis": analysis,
-            "selected_sources": selected_sources,
+            "analysis": clean_analysis,
         }
 
         if self.status()["available"]:
             data = self._call_openai_json(CONTENT_PACK_PROMPT, payload)
 
             if data.get("ok") is False:
-                return self._fallback_content_pack(project, selected_sources, analysis)
+                return self._fallback_content_pack(project, selected_sources, clean_analysis)
 
             data["ok"] = True
             data["provider"] = "openai"
             data["project_id"] = getattr(project, "id", "")
             data["project_name"] = project_name
-            data["analysis"] = analysis
+            data["analysis"] = clean_analysis
+
+            data = self._normalize_content_pack_product_name(
+                data,
+                project_name,
+                selected_sources,
+            )
 
             return data
 
-        return self._fallback_content_pack(project, selected_sources, analysis)
+        data = self._fallback_content_pack(project, selected_sources, clean_analysis)
+        data = self._normalize_content_pack_product_name(
+            data,
+            project_name,
+            selected_sources,
+        )
+        return data
+
+    def _clean_content_analysis(self, analysis, project_name):
+        if not isinstance(analysis, dict):
+            return {"product_name": project_name}
+
+        cleaned = dict(analysis)
+        cleaned["product_name"] = project_name
+
+        for key in ["query", "source_query", "search_query"]:
+            cleaned.pop(key, None)
+
+        return cleaned
+
+    def _normalize_content_pack_product_name(
+        self,
+        data,
+        project_name,
+        selected_sources=None,
+    ):
+        if not isinstance(data, dict) or not project_name:
+            return data
+
+        selected_sources = selected_sources or []
+        bad_words = []
+
+        for source in selected_sources:
+            if not isinstance(source, dict):
+                continue
+
+            query = str(source.get("query", "")).strip()
+            if query and query != project_name:
+                bad_words.append(query)
+
+        bad_words = sorted(set(bad_words), key=len, reverse=True)
+
+        def replace_text(value):
+            if isinstance(value, str):
+                for word in bad_words:
+                    value = value.replace(word, project_name)
+                return value
+
+            if isinstance(value, list):
+                return [replace_text(item) for item in value]
+
+            if isinstance(value, dict):
+                return {
+                    key: replace_text(item)
+                    for key, item in value.items()
+                }
+
+            return value
+
+        return replace_text(data)
 
     def save_content_pack(self, project, content_pack):
         out_dir = Path("exports/content_packs")

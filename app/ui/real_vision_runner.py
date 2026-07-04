@@ -1,108 +1,112 @@
-import json
-from pathlib import Path
-import streamlit as st
+def analyze_product(product_name="", source_query=""):
+    """
+    Sprint 17-2
+    상품명/검색어 기반 상품 분석기.
+    콘텐츠 생성에 바로 쓸 수 있는 hook/problem/benefit/scene 후보까지 반환.
+    """
+    name = str(product_name or "")
+    query = str(source_query or "")
+    text = f"{name} {query}".lower()
 
-from modules.project.repository import ProjectRepository
-from modules.project.project_selector import ProjectSelector
-from modules.pipeline.real_vision_runner import RealVisionRunner
-from modules.pipeline.vision_result_repository import VisionResultRepository
-from app.ui.render import copybox
+    profile = {
+        "category": "생활용품",
+        "usage_place": "생활 공간",
+        "keyword": "제품",
+        "problem": "매일 쓰는 물건인데 은근 불편함이 반복되는 순간",
+        "solution": "생활 속 작은 불편을 줄여주는 아이템",
+        "benefit": "반복되는 귀찮음이 줄어 생활이 조금 더 편해져요",
+        "features": ["간편 사용", "정리 효과", "생활 편의"],
+        "scene": "생활 공간 / 제품 사용 전후",
+        "hook_candidates": [
+            "아직도 이 불편함을 그냥 참고 계세요?",
+            "매일 쓰는 물건인데 은근 불편하지 않으세요?",
+            "이거 하나로 반복되는 귀찮음이 줄어듭니다.",
+        ],
+        "problem_candidates": [
+            "쓸 때마다 불편한데 그냥 참고 쓰게 됩니다.",
+            "작은 불편이 반복되면 은근 스트레스가 됩니다.",
+        ],
+        "benefit_candidates": [
+            "생활 동선이 조금 더 편해집니다.",
+            "반복되는 귀찮음이 줄어듭니다.",
+        ],
+        "scene_candidates": [
+            "사용 전 불편한 장면",
+            "제품 첫 등장",
+            "사용 후 달라진 장면",
+        ],
+    }
 
+    if any(k in text for k in ["정리", "수납", "슬라이딩", "서랍", "선반", "보관", "抽拉"]):
+        profile.update({
+            "category": "수납/정리",
+            "usage_place": "싱크대 밑, 수납장, 화장대, 책상 아래",
+            "keyword": "정리",
+            "problem": "안쪽 물건 꺼내려고 앞에 있는 것까지 다 꺼내야 하는 순간",
+            "solution": "슬라이딩 방식으로 안쪽 물건까지 쉽게 꺼낼 수 있는 정리 아이템",
+            "benefit": "깊은 공간도 버리지 않고 깔끔하게 활용할 수 있어요",
+            "features": ["슬라이딩 수납", "공간 활용", "정리 시간 단축"],
+            "scene": "싱크대 밑 정리 전 / 슬라이딩으로 꺼내는 장면 / 정리 후",
+            "hook_candidates": [
+                "싱크대 밑, 아직도 다 꺼내고 찾으세요?",
+                "안쪽 물건 꺼내려면 앞에 있는 것부터 치우시나요?",
+                "정리했는데도 왜 금방 어질러질까요?",
+                "깊은 수납장, 그냥 방치하고 계셨나요?",
+                "꺼내기 힘든 안쪽 공간, 이제 이렇게 써보세요.",
+            ],
+            "problem_candidates": [
+                "깊숙한 곳에 넣어둔 물건은 꺼내기가 너무 불편합니다.",
+                "정리해도 안쪽 물건은 금방 잊혀지고 다시 어질러집니다.",
+                "공간은 있는데 제대로 활용하지 못하는 경우가 많습니다.",
+            ],
+            "benefit_candidates": [
+                "슬라이딩으로 안쪽 물건까지 한 번에 꺼낼 수 있습니다.",
+                "버려지던 깊은 공간까지 깔끔하게 활용할 수 있습니다.",
+                "찾는 시간과 정리 시간이 함께 줄어듭니다.",
+            ],
+            "scene_candidates": [
+                "싱크대 밑 어지러운 수납장 보여주기",
+                "앞 물건을 하나씩 꺼내는 불편한 장면",
+                "슬라이딩 정리함을 앞으로 당기는 장면",
+                "세제/양념/소품이 한눈에 보이는 장면",
+                "정리 전후 Before / After 비교",
+            ],
+        })
+
+    elif any(k in text for k in ["건조", "신발", "운동화", "제습"]):
+        profile.update({
+            "category": "신발 관리",
+            "usage_place": "현관, 세탁실",
+            "keyword": "신발",
+            "problem": "젖은 신발이나 냄새나는 운동화 때문에 신경 쓰이는 순간",
+            "solution": "신발 안쪽 습기와 냄새를 관리해주는 아이템",
+            "benefit": "비 오는 날이나 운동 후에도 신발을 더 깔끔하게 관리할 수 있어요",
+            "features": ["습기 관리", "냄새 관리", "간편 사용"],
+            "scene": "젖은 신발 / 제품 사용 / 건조 후",
+            "hook_candidates": [
+                "비 온 날 젖은 신발, 그냥 말리고 계세요?",
+                "운동화 냄새 때문에 신경 쓰인 적 있으시죠?",
+                "신발 안쪽 습기, 생각보다 오래 남습니다.",
+            ],
+            "problem_candidates": [
+                "젖은 신발은 잘 마르지 않고 냄새까지 남기 쉽습니다.",
+                "운동 후 신발 안쪽 습기가 오래 남으면 찝찝합니다.",
+            ],
+            "benefit_candidates": [
+                "신발 안쪽까지 더 깔끔하게 관리할 수 있습니다.",
+                "비 오는 날에도 신발 관리가 훨씬 쉬워집니다.",
+            ],
+            "scene_candidates": [
+                "젖은 운동화 클로즈업",
+                "제품을 신발 안에 넣는 장면",
+                "사용 후 신발을 다시 신는 장면",
+            ],
+        })
+
+    return profile
 
 def show_real_vision_runner():
-    st.title("🚀 Real Vision Runner")
-    st.caption("설치된 AI 모델은 실제 실행하고, 미설치 모델은 자동 대체 분석으로 이어갑니다.")
+    import streamlit as st
 
-    projects = ProjectSelector().all_projects()
-    if not projects:
-        st.info("프로젝트가 없습니다.")
-        return
-
-    labels = ProjectSelector().labels(projects)
-    project = labels[st.selectbox("프로젝트", list(labels.keys()))]
-
-    if not project.video_path:
-        st.warning("원본 영상이 없습니다. 영상관리에서 먼저 영상을 업로드하세요.")
-        return
-
-    c1, c2, c3 = st.columns(3)
-    sample_count = c1.slider("분석 프레임 수", 4, 20, 8, 2)
-    use_yolo = c2.checkbox("YOLO 실제 실행 시도", value=True)
-    use_paddle = c3.checkbox("PaddleOCR 실제 실행 시도", value=True)
-
-    if st.button("실제 Vision 분석 실행", use_container_width=True):
-        with st.spinner("영상 분석 중입니다. YOLO/PaddleOCR가 설치된 경우 시간이 오래 걸릴 수 있습니다..."):
-            result = RealVisionRunner().run(project, sample_count=sample_count, use_yolo=use_yolo, use_paddle=use_paddle)
-
-        if not result.get("ok"):
-            st.warning(result.get("summary"))
-            return
-
-        saved_path = VisionResultRepository().save(project, result)
-
-        st.success(result.get("summary"))
-        st.write("결과 저장:", saved_path)
-
-        status = result.get("status", {})
-        s1, s2, s3, s4 = st.columns(4)
-        s1.metric("Video AI", "OK" if status.get("video_ai") else "NO")
-        s2.metric("Vision AI", "OK" if status.get("vision_ai") else "NO")
-        s3.metric("YOLO", "OK" if status.get("yolo") else "대체")
-        s4.metric("PaddleOCR", "OK" if status.get("paddleocr") else "대체")
-
-        if result.get("fallback_used"):
-            st.info(" / ".join(result.get("fallback_used")))
-
-        tab1, tab2, tab3, tab4, tab5 = st.tabs(["다음 작업", "추천컷", "CapCut", "콘텐츠", "전체 결과"])
-
-        with tab1:
-            for item in result.get("next_actions", []):
-                st.write("✅", item)
-
-        with tab2:
-            smart = result.get("smart_cut", {})
-            hook = smart.get("hook_cut", {})
-            st.subheader("후킹 컷")
-            if hook.get("frame") and Path(hook.get("frame")).exists():
-                st.image(hook.get("frame"), width=320)
-            st.write("시간:", hook.get("time"))
-            st.write("점수:", hook.get("score"))
-            st.caption(hook.get("capcut"))
-
-            st.subheader("썸네일 후보")
-            for item in smart.get("thumbnail_candidates", [])[:5]:
-                with st.container(border=True):
-                    cols = st.columns([1, 3])
-                    if item.get("frame") and Path(item.get("frame")).exists():
-                        cols[0].image(item.get("frame"), width=160)
-                    cols[1].write(f"**{item.get('rank')}위 / {item.get('time')}초**")
-                    cols[1].write("점수:", item.get("score"))
-                    cols[1].caption(item.get("reason"))
-
-        with tab3:
-            editor = result.get("auto_editor", {})
-            st.subheader("CapCut 프리셋")
-            for k, v in editor.get("capcut_preset", {}).items():
-                st.write(f"**{k}**: {v}")
-
-            st.subheader("타임라인")
-            for cut in editor.get("timeline", []):
-                with st.container(border=True):
-                    st.write(f"**{cut.get('time')} / {cut.get('role') or cut.get('scene')}**")
-                    st.write("자막:", cut.get("caption"))
-                    st.caption(cut.get("capcut"))
-
-        with tab4:
-            shorts = result.get("shopping_shorts", {})
-            for name, lines in shorts.get("scripts", {}).items():
-                copybox(name, "\n".join(lines), 180)
-            for key, value in shorts.get("platform_copy", {}).items():
-                copybox(key, value, 120)
-
-        with tab5:
-            copybox("Real Vision Runner JSON", json.dumps(result, ensure_ascii=False, indent=2), 600)
-
-    st.divider()
-    st.subheader("최근 분석 결과")
-    for f in VisionResultRepository().latest_files(10):
-        st.write(f"• {f.name}")
+    st.subheader("YOLO 비전")
+    st.info("Real Vision Runner 화면은 현재 준비 중입니다.")

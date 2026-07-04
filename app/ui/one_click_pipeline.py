@@ -23,6 +23,8 @@ from modules.video.download_utils import latest_downloaded_video
 from modules.project.repository import ProjectRepository
 
 from app.ui.product_analyzer import analyze_product
+from app.ui.hook_generator import generate_hooks
+from app.ui.content_variant_generator import generate_content_variants
 
 UI_VERSION = "0630-final-stable-selected-sources"
 SELECTED_DIR = Path("exports/selected_sources")
@@ -173,23 +175,22 @@ def build_product_profile(product_name, source_query=""):
 
 
 def build_hooks(product_name, profile):
-    hooks = profile.get("hook_candidates") or profile.get("hooks") or []
+    hook_groups = generate_hooks(product_name, profile)
 
-    if hooks:
-        return hooks[:5]
+    if isinstance(hook_groups, dict):
+        flat_hooks = []
+        for group_name, hooks in hook_groups.items():
+            for hook in hooks:
+                hook = str(hook or "").strip()
+                if hook and hook not in flat_hooks:
+                    flat_hooks.append(hook)
 
-    category = profile.get("category", "")
+        return flat_hooks[:5]
+
+    if isinstance(hook_groups, list):
+        return hook_groups[:5]
+
     keyword = profile.get("keyword", "제품")
-
-    if "수납" in category or "정리" in category or keyword == "정리":
-        return [
-            "싱크대 밑, 아직도 다 꺼내고 찾으세요?",
-            "안쪽 물건 꺼내려면 앞에 있는 것부터 치우시나요?",
-            "정리했는데도 왜 금방 어질러질까요?",
-            "깊은 수납장, 그냥 방치하고 계셨나요?",
-            "꺼내기 힘든 안쪽 공간, 이제 이렇게 써보세요.",
-        ]
-
     return [
         f"아직도 {keyword} 때문에 불편하세요?",
         f"{product_name}, 왜 이제 알았지?",
@@ -197,7 +198,6 @@ def build_hooks(product_name, profile):
         "써보면 차이가 바로 느껴지는 생활템이에요.",
         "Before / After로 보면 더 확실합니다.",
     ]
-
 
 def build_script(product_name, profile):
     hooks = build_hooks(product_name, profile)
@@ -298,10 +298,19 @@ def build_ai_content_pack(project, selected_sources, latest_result=None):
     platform = normalize_text(primary.get("platform"), "source")
 
     profile = analyze_product(content_product_name, source_query)
+
+    hook_groups = generate_hooks(content_product_name, profile)
+
     hooks = build_hooks(content_product_name, profile)
     script = build_script(content_product_name, profile)
     capcut_timeline = build_capcut_timeline(content_product_name, hooks, profile)
-
+    
+    shorts_variants = generate_content_variants(
+        content_product_name,
+        profile,
+        hook_groups,
+    )
+    
     pack = {
         "version": "sprint-16-2-content-pack-upgrade",
         "project_id": getattr(project, "id", ""),
@@ -315,7 +324,7 @@ def build_ai_content_pack(project, selected_sources, latest_result=None):
             "selling_points": profile.get("features", []),
             "recommended_format": "40~50초 쇼츠 / 릴스",
         },
-        "shorts": {
+        "shorts": {  
             "titles": [
                 f"{content_product_name}, 왜 이제 알았지?",
                 f"불편함 줄여주는 {content_product_name}",
@@ -327,10 +336,14 @@ def build_ai_content_pack(project, selected_sources, latest_result=None):
                 "생활이 편해집니다",
             ],
             "hooks": hooks,
+            "hook_groups": hook_groups,
             "script": script,
             "cta": f"댓글에 '{profile['keyword']}' 남겨주세요 👇",
             "capcut_timeline": capcut_timeline,
         },
+
+        "shorts_variants": shorts_variants,
+
         "thumbnail": {
             "size": "9:16",
             "main_text": "왜 이제 알았지?",
@@ -442,6 +455,7 @@ def show_content_pack_view(project, result=None):
 
     shorts = pack.get("shorts", {})
     upload = pack.get("upload_bundle", {})
+    shorts_variants = pack.get("shorts_variants", [])
 
     tabs = st.tabs(["쇼츠", "CapCut", "썸네일", "인포크", "업로드", "JSON"])
 
@@ -449,11 +463,39 @@ def show_content_pack_view(project, result=None):
         st.markdown("### 제목")
         for title in shorts.get("titles", []):
             st.write(f"- {title}")
+
         st.markdown("### 후킹")
         for hook in shorts.get("hooks", []):
             st.write(f"- {hook}")
+
         st.text_area("대본", shorts.get("script", ""), height=220)
         st.write("CTA:", shorts.get("cta", ""))
+
+        if shorts_variants:
+            st.divider()
+            st.markdown("### 📦 콘텐츠 유형별 쇼츠")
+
+            for variant in shorts_variants:
+                with st.expander(f"📦 {variant.get('type', '유형')}"):
+                    st.markdown(f"**제목:** {variant.get('title', '')}")
+
+                    st.markdown("**후킹**")
+                    st.write(variant.get("hook", ""))
+
+                    st.markdown("**대본**")
+                    st.text_area(
+                        "유형별 대본",
+                        variant.get("script", ""),
+                        height=180,
+                        key=f"variant_script_{safe_project_id(project)}_{variant.get('type', '')}",
+                    )
+
+                    st.markdown("**CTA**")
+                    st.write(variant.get("cta", ""))
+
+                    st.markdown("**CapCut 타임라인**")
+                    for line in variant.get("capcut", []):
+                        st.write(f"- {line}")
 
     with tabs[1]:
         for item in shorts.get("capcut_timeline", []):
