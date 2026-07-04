@@ -22,6 +22,8 @@ from modules.video.video_path_resolver import VideoPathResolver
 from modules.video.download_utils import latest_downloaded_video
 from modules.project.repository import ProjectRepository
 
+from app.ui.product_analyzer import analyze_product
+
 UI_VERSION = "0630-final-stable-selected-sources"
 SELECTED_DIR = Path("exports/selected_sources")
 RESULT_DIR = Path("exports/one_click_results")
@@ -266,7 +268,7 @@ def build_ai_content_pack(project, selected_sources, latest_result=None):
     source_url = normalize_text(primary.get("url"), "")
     platform = normalize_text(primary.get("platform"), "source")
 
-    profile = build_product_profile(content_product_name, source_query)
+    profile = analyze_product(content_product_name, source_query)
     hooks = build_hooks(content_product_name, profile)
     script = build_script(content_product_name, profile)
     capcut_timeline = build_capcut_timeline(content_product_name, hooks, profile)
