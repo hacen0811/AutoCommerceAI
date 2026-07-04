@@ -458,6 +458,8 @@ def show_content_pack_view(project, result=None):
     pack = st.session_state.get(f"content_pack_{safe_project_id(project)}") or load_content_pack(project)
     if not pack:
         return
+    
+    selected_variant = pack.get("selected_variant")
 
     shorts = pack.get("shorts", {})
     upload = pack.get("upload_bundle", {})
@@ -466,6 +468,13 @@ def show_content_pack_view(project, result=None):
     tabs = st.tabs(["쇼츠", "CapCut", "썸네일", "인포크", "업로드", "JSON"])
 
     with tabs[0]:
+        if selected_variant:
+            st.success(
+                f"⭐ 현재 대표 콘텐츠: "
+                f"{selected_variant.get('type')} "
+                f"({selected_variant.get('score')}점)"
+            )
+    
         st.markdown("### 제목")
         for title in shorts.get("titles", []):
             st.write(f"- {title}")
@@ -497,6 +506,20 @@ def show_content_pack_view(project, result=None):
                     expander_title = f"{rank}위 · {variant.get('type')} ({score}점)"
 
                 with st.expander(expander_title):
+
+                    if st.button(
+                        "⭐ 대표 콘텐츠 선택",
+                        key=f"select_variant_{safe_project_id(project)}_{variant.get('type')}",
+                    ):
+                        pack["selected_variant"] = variant
+
+                        save_content_pack(project, pack)
+
+                        st.session_state[f"content_pack_{safe_project_id(project)}"] = pack
+
+                        st.success(f"{variant.get('type')}을 대표 콘텐츠로 선택했습니다.")
+                        st.rerun()
+
                     st.markdown(f"**제목:** {variant.get('title', '')}")
 
                     st.markdown("**후킹**")
