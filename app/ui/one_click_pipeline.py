@@ -173,28 +173,57 @@ def build_product_profile(product_name, source_query=""):
 
 
 def build_hooks(product_name, profile):
+    hooks = profile.get("hook_candidates") or profile.get("hooks") or []
+
+    if hooks:
+        return hooks[:5]
+
+    category = profile.get("category", "")
+    keyword = profile.get("keyword", "제품")
+
+    if "수납" in category or "정리" in category or keyword == "정리":
+        return [
+            "싱크대 밑, 아직도 다 꺼내고 찾으세요?",
+            "안쪽 물건 꺼내려면 앞에 있는 것부터 치우시나요?",
+            "정리했는데도 왜 금방 어질러질까요?",
+            "깊은 수납장, 그냥 방치하고 계셨나요?",
+            "꺼내기 힘든 안쪽 공간, 이제 이렇게 써보세요.",
+        ]
+
     return [
-        f"아직도 {profile['keyword']} 때문에 불편하세요?",
+        f"아직도 {keyword} 때문에 불편하세요?",
         f"{product_name}, 왜 이제 알았지?",
-        f"이거 하나로 매일 귀찮던 일이 줄어듭니다.",
-        f"써보면 차이가 바로 느껴지는 생활템이에요.",
-        f"Before / After로 보면 더 확실합니다.",
+        "이거 하나로 매일 귀찮던 일이 줄어듭니다.",
+        "써보면 차이가 바로 느껴지는 생활템이에요.",
+        "Before / After로 보면 더 확실합니다.",
     ]
 
 
 def build_script(product_name, profile):
+    hooks = build_hooks(product_name, profile)
+
+    problems = profile.get("problem_candidates") or []
+    benefits = profile.get("benefit_candidates") or []
+    features = profile.get("features") or []
+
+    hook = hooks[0] if hooks else f"아직도 {profile.get('keyword', '제품')} 때문에 불편하세요?"
+    problem_1 = problems[0] if problems else profile.get("problem", "")
+    problem_2 = problems[1] if len(problems) > 1 else "그냥 참고 쓰면 되겠지 했는데, 매번 반복되니까 은근 스트레스였어요."
+    benefit_1 = benefits[0] if benefits else profile.get("benefit", "")
+    benefit_2 = benefits[1] if len(benefits) > 1 else profile.get("benefit", "")
+
     lines = [
-        f"[Hook] 아직도 {profile['keyword']} 때문에 불편하게 쓰고 계세요?",
-        f"[Problem] 저는 {profile['problem']}이 생각보다 자주 있더라고요.",
-        "[Problem] 그냥 참고 쓰면 되겠지 했는데, 매번 반복되니까 은근 스트레스였어요.",
+        f"[Hook] {hook}",
+        f"[Problem] {problem_1}",
+        f"[Problem] {problem_2}",
         f"[Solution] 그래서 찾은 게 바로 {product_name}입니다.",
-        f"[Solution] 핵심은 {profile['solution']}이라는 점이에요.",
-        f"[Benefit] 특히 {', '.join(profile['features'])} 이 부분이 쇼츠에서 보여주기 좋습니다.",
-        f"[Benefit] 실제로 Before / After로 보여주면 {profile['benefit']}",
-        f"[CTA] 제품 정보가 궁금하시면 댓글에 '{profile['keyword']}' 남겨주세요 👇",
+        f"[Solution] 핵심은 {profile.get('solution', '생활 속 불편을 줄여주는 아이템')}이라는 점이에요.",
+        f"[Benefit] 특히 {', '.join(features)} 이 부분이 쇼츠에서 보여주기 좋습니다.",
+        f"[Benefit] {benefit_1}",
+        f"[Benefit] {benefit_2}",
+        f"[CTA] 제품 정보가 궁금하시면 댓글에 '{profile.get('keyword', '제품')}' 남겨주세요 👇",
     ]
     return "\n".join(lines)
-
 
 def build_capcut_timeline(product_name, hooks, profile):
     return [
