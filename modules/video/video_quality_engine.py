@@ -4,7 +4,7 @@ import json
 
 
 class VideoQualityEngine:
-    def score(self, video_path):
+    def score(self, video_path, real_vision=None):
         path = Path(video_path) if video_path else None
 
         if not path or not path.exists():
@@ -14,10 +14,14 @@ class VideoQualityEngine:
                 "grade": "D",
                 "recommendation": "분석 불가",
                 "reason": "영상 파일을 찾을 수 없습니다.",
+                "checks": [],
+                "suitability_score": 0,
+                "suitability_checks": [],
                 "video_path": str(video_path or ""),
             }
 
         meta = self._probe(path)
+        real_vision = real_vision or {}
 
         score = 10
         checks = ["영상 파일 존재"]
@@ -47,17 +51,22 @@ class VideoQualityEngine:
             score += 10
             checks.append("파일 용량 정상")
 
-        score = min(score, 100)
-        grade = self._grade(score)
-        recommendation = self._recommendation(score)
+        suitability_score, suitability_checks = self._score_suitability(real_vision)
+
+        final_score = min(score + suitability_score, 100)
+        grade = self._grade(final_score)
+        recommendation = self._recommendation(final_score)
 
         return {
             "ok": True,
-            "score": score,
+            "score": final_score,
+            "base_score": score,
             "grade": grade,
             "recommendation": recommendation,
-            "reason": "기본 메타데이터 기반 품질 평가 완료",
+            "reason": "메타데이터 + 쇼핑쇼츠 적합도 평가 완료",
             "checks": checks,
+            "suitability_score": suitability_score,
+            "suitability_checks": suitability_checks,
             "details": {
                 "width": width,
                 "height": height,
@@ -67,6 +76,32 @@ class VideoQualityEngine:
             },
             "video_path": str(path),
         }
+
+    def _score_suitability(self, real_vision):
+        suitability_score = 0
+        suitability_checks = []
+
+        summary = real_vision.get("summary", "")
+
+        if summary:
+            suitability_score += 10
+            suitability_checks.append("Real Vision 분석 결과 있음")
+
+        if "후킹" in summary:
+            suitability_score += 10
+            suitability_checks.append("후킹 컷 후보 있음")
+
+        if "중앙 하단" in summary:
+            suitability_score += 10
+            suitability_checks.append("자막 안전 위치 추천 있음")
+
+        status = real_vision.get("status", {})
+
+        if status.get("object_fallback") or status.get("video_ai"):
+            suitability_score += 10
+            suitability_checks.append("상품/장면 분석 사용 가능")
+
+        return suitability_score, suitability_checks
 
     def _probe(self, path):
         try:

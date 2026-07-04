@@ -936,7 +936,6 @@ def show_content_factory(content_factory):
         for key, value in inpock.items():
             st.write(f"{key}: {value}")
 
-
 def show_pipeline_result(project, result, path_debug):
     st.success(result.get("summary"))
     state = result.get("state", {})
@@ -961,6 +960,51 @@ def show_pipeline_result(project, result, path_debug):
         product_plan = outputs.get("product_plan", {})
         keywords = product_plan.get("keywords", {})
 
+        candidate_selection = (
+            outputs.get("candidate_selection")
+            or state.get("results", {}).get("candidate_selection", {})
+            or {}
+        )
+
+        if candidate_selection and candidate_selection.get("best"):
+            st.divider()
+            st.subheader("🤖 AI 추천 영상 후보")
+
+            best = candidate_selection.get("best", {})
+
+            st.success(
+                f"1순위 후보: {best.get('title', '-')} / "
+                f"AI 점수 {best.get('ai_score', '-')}점 / "
+                f"{best.get('ai_recommendation', '-')}"
+            )
+
+            if best.get("search_url"):
+                st.link_button(
+                    "추천 후보 열기",
+                    best.get("search_url"),
+                    use_container_width=True,
+                )
+
+            top3 = candidate_selection.get("top3", [])
+            if top3:
+                with st.expander("AI 추천 TOP3"):
+                    for item in top3:
+                        st.write(
+                            f"{item.get('rank')}위 | "
+                            f"{item.get('platform')} | "
+                            f"{item.get('title')} | "
+                            f"AI {item.get('ai_score')}점 | "
+                            f"{item.get('ai_recommendation')}"
+                        )
+
+                        reasons = item.get("ai_reasons", [])
+                        if reasons:
+                            st.caption("추천 이유")
+                            for reason in reasons:
+                                st.write(f"✅ {reason}")
+
+                        st.divider()
+
         show_selected_sources(project)
 
         video_quality = outputs.get("video_quality") or state.get("results", {}).get("video_quality", {})
@@ -978,14 +1022,21 @@ def show_pipeline_result(project, result, path_debug):
                     or video_quality.get("reason")
                     or video_quality.get("recommendation")
                 )
+                suitability_score = video_quality.get("suitability_score")
 
-                col1, col2 = st.columns(2)
+                col1, col2, col3 = st.columns(3)
 
                 with col1:
-                    st.metric("품질 점수", score if score is not None else "-")
+                    st.metric("총점", score if score is not None else "-")
 
                 with col2:
                     st.metric("등급", grade if grade else "-")
+
+                with col3:
+                    st.metric(
+                        "쇼핑쇼츠 적합도",
+                        f"+{suitability_score}" if suitability_score is not None else "-",
+                    )
 
                 if summary:
                     st.write(summary)
@@ -993,6 +1044,21 @@ def show_pipeline_result(project, result, path_debug):
                 recommendation = video_quality.get("recommendation")
                 if recommendation:
                     st.success(f"추천 판단: {recommendation}")
+
+                checks = video_quality.get("checks", [])
+                suitability_checks = video_quality.get("suitability_checks", [])
+
+                if checks or suitability_checks:
+                    with st.expander("품질 평가 기준 보기"):
+                        for item in checks:
+                            st.write(f"✅ {item}")
+                        for item in suitability_checks:
+                            st.write(f"🎯 {item}")
+
+                details = video_quality.get("details")
+                if details:
+                    with st.expander("상세 품질 분석 보기"):
+                        st.json(details)
 
         live_sources = (
             outputs.get("video_sources")
@@ -1015,41 +1081,6 @@ def show_pipeline_result(project, result, path_debug):
             st.divider()
             st.subheader("Vision")
             st.write(real_vision.get("summary"))
-
-        video_quality = outputs.get("video_quality") or state.get("results", {}).get("video_quality", {})
-        if video_quality:
-            st.divider()
-            st.subheader("AI 영상 품질 평가")
-
-            if video_quality.get("ok") is False:
-                st.warning(f"영상 품질 평가 실패: {video_quality.get('reason', '알 수 없는 오류')}")
-        else:
-                score = video_quality.get("score")
-                grade = video_quality.get("grade")
-                summary = (
-                    video_quality.get("summary")
-                    or video_quality.get("reason")
-                    or video_quality.get("recommendation")
-                )
-                col1, col2 = st.columns(2)
-
-                with col1:
-                    st.metric("품질 점수", score if score is not None else "-")
-
-                with col2:
-                    st.metric("등급", grade if grade else "-")
-
-                if summary:
-                    st.write(summary)
-                recommendation = video_quality.get("recommendation")
-                
-                if recommendation:
-                    st.success(f"추천 판단: {recommendation}")   
-
-                details = video_quality.get("details")
-                if details:
-                    with st.expander("상세 품질 분석 보기"):
-                        st.json(details) 
 
         capcut_export = outputs.get("capcut_export") or state.get("results", {}).get("capcut_export", {})
         if capcut_export:
@@ -1089,7 +1120,6 @@ def show_pipeline_result(project, result, path_debug):
             json.dumps(state, ensure_ascii=False, indent=2),
             420,
         )
-
 
 def show_one_click_pipeline():
     st.title("⚡ 원클릭 파이프라인")

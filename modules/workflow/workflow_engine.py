@@ -277,13 +277,12 @@ class WorkflowEngine:
 
         # 5. Auto Editor
         try:
-            if real_vision.get("auto_editor"):
-                editor_plan = real_vision.get("auto_editor")
-            else:
-                editor_plan = AutoEditorEngine().create_plan(
-                    getattr(project, "product_name", ""),
-                    getattr(project, "keyword", "정보"),
-                )
+            editor_plan = AutoEditorEngine().create_plan(
+                getattr(project, "product_name", ""),
+                getattr(project, "keyword", "정보"),
+                vision=real_vision,
+                candidate_selection=outputs.get("candidate_selection", {}),
+            )
 
             outputs["auto_editor"] = editor_plan
             state.update_step(

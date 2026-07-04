@@ -127,15 +127,19 @@ class ContentFactory:
             ],
         }
 
-    def analyze_product(self, selected_sources):
+    def analyze_product(self, selected_sources, project_name=""):
         selected_sources = selected_sources or []
         payload = self._source_payload(selected_sources)
+        payload["project_name"] = project_name
 
         if self.status()["available"]:
             data = self._call_openai_json(PRODUCT_ANALYSIS_PROMPT, payload)
 
             if data.get("ok") is False:
-                return self._fallback_analysis(selected_sources)
+                fallback = self._fallback_analysis(selected_sources)
+                if project_name:
+                    fallback["product_name"] = project_name
+                return fallback
 
             main = payload["main"]
             data["ok"] = True
@@ -145,19 +149,24 @@ class ContentFactory:
             data["score"] = main.get("score", "-")
             data["url"] = main.get("url", "")
 
-            if not data.get("product_name"):
+            if project_name:
+                data["product_name"] = project_name
+            elif not data.get("product_name"):
                 data["product_name"] = main.get("query", "선택 상품")
 
             return data
 
-        return self._fallback_analysis(selected_sources)
+        fallback = self._fallback_analysis(selected_sources)
+        if project_name:
+            fallback["product_name"] = project_name
+        return fallback
 
     def _fallback_content_pack(self, project, selected_sources=None, analysis=None):
         selected_sources = selected_sources or []
         analysis = analysis or self.analyze_product(selected_sources)
 
         project_name = (
-            analysis.get("product_name")
+            getattr(project, "product_name", "")
             or getattr(project, "product_name", "")
             or getattr(project, "title", "")
             or "선택 상품"
@@ -222,12 +231,21 @@ class ContentFactory:
 
     def build_content_pack(self, project, selected_sources=None, analysis=None):
         selected_sources = selected_sources or []
-        analysis = analysis or self.analyze_product(selected_sources)
+
+        project_name_from_project = (
+            getattr(project, "product_name", "")
+            or getattr(project, "title", "")
+            or "선택 상품"
+        )
+
+        analysis = analysis or self.analyze_product(
+            selected_sources,
+            project_name=project_name_from_project,
+        )
 
         project_name = (
-            analysis.get("product_name")
-            or getattr(project, "product_name", "")
-            or getattr(project, "title", "")
+            project_name_from_project
+            or analysis.get("product_name")
             or "선택 상품"
         )
 

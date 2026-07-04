@@ -22,6 +22,8 @@ PRODUCT_ANALYSIS_PROMPT = """
 - 확정적 효과 표현 금지
 - 생활 공감형, 문제 해결형 중심
 - hooks는 최소 5개
+- product_name은 반드시 입력된 project_name을 사용한다.
+- query는 검색 키워드이며 상품명으로 사용하지 않는다.
 """
 
 
