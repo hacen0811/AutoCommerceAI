@@ -398,6 +398,11 @@ class ContentFactory:
         json_path = out_dir / f"{project_id}_content_pack.json"
         txt_path = out_dir / f"{project_id}_content_pack.txt"
 
+        capcut_edit_txt_path = out_dir / f"{project_id}_capcut_edit.txt"
+        thumbnail_prompt_txt_path = out_dir / f"{project_id}_thumbnail_prompt.txt"
+        inpock_prompt_txt_path = out_dir / f"{project_id}_inpock_prompt.txt"
+        upload_txt_path = out_dir / f"{project_id}_upload_text.txt"
+
         json_path.write_text(
             json.dumps(content_pack, ensure_ascii=False, indent=2),
             encoding="utf-8",
@@ -406,15 +411,48 @@ class ContentFactory:
         txt_lines = self.to_text(content_pack)
         txt_path.write_text(txt_lines, encoding="utf-8")
 
+        selected_variant = content_pack.get("selected_variant") or {}
+        capcut = content_pack.get("capcut") or {}
+        thumbnail = content_pack.get("thumbnail") or {}
+        inpock = content_pack.get("inpock") or {}
+        upload_bundle = content_pack.get("upload_bundle") or {}
+
+        capcut_edit_txt_path.write_text(
+            self.to_capcut_edit_text(content_pack, selected_variant, capcut),
+            encoding="utf-8",
+        )
+
+        thumbnail_prompt_txt_path.write_text(
+            self.to_thumbnail_prompt_text(content_pack, selected_variant, thumbnail),
+            encoding="utf-8",
+        )
+
+        inpock_prompt_txt_path.write_text(
+            self.to_inpock_prompt_text(content_pack, selected_variant, inpock),
+            encoding="utf-8",
+        )
+
+        upload_txt_path.write_text(
+            self.to_upload_text(content_pack, selected_variant, upload_bundle),
+            encoding="utf-8",
+        )
+
         return {
             "json_path": str(json_path),
             "txt_path": str(txt_path),
+            "capcut_edit_txt_path": str(capcut_edit_txt_path),
+            "thumbnail_prompt_txt_path": str(thumbnail_prompt_txt_path),
+            "inpock_prompt_txt_path": str(inpock_prompt_txt_path),
+            "upload_txt_path": str(upload_txt_path),
             "data": content_pack,
         }
+    
+    
+
 
     def to_text(self, content_pack):
         lines = []
-       
+
         variants = content_pack.get("shorts_variants", [])
 
         selected = next(
@@ -479,6 +517,98 @@ class ContentFactory:
         lines.append(upload.get("instagram_body", ""))
 
         return "\n".join(lines)
+
+    def to_capcut_edit_text(self, content_pack, selected_variant, capcut):
+        lines = ["[CapCut 편집 TXT]", ""]
+
+        timeline = capcut.get("timeline", [])
+        if timeline:
+            lines.append("[타임라인]")
+            for item in timeline:
+                if isinstance(item, dict):
+                    lines.append(
+                        f"- {item.get('time', '')} / {item.get('scene', '')} / {item.get('caption', '')}"
+                    )
+                else:
+                    lines.append(f"- {item}")
+
+        lines.append("")
+        lines.append("[BGM]")
+        lines.append(str(capcut.get("bgm", "")))
+
+        lines.append("")
+        lines.append("[SFX]")
+        for item in capcut.get("sfx", []):
+            lines.append(f"- {item}")
+
+        lines.append("")
+        lines.append("[대표 대본]")
+        script = selected_variant.get("script") or content_pack.get("shorts", {}).get("script", [])
+        self._append_script_lines(lines, script)
+
+        return "\n".join(lines)
+
+    def to_thumbnail_prompt_text(self, content_pack, selected_variant, thumbnail):
+        lines = [
+            "[썸네일 Prompt TXT]",
+            "",
+            "[메인 문구]",
+            thumbnail.get("main_text", ""),
+            "",
+            "[서브 문구]",
+            thumbnail.get("sub_text", ""),
+            "",
+            "[이미지 프롬프트]",
+            thumbnail.get("image_prompt") or thumbnail.get("prompt") or "",
+        ]
+
+        return "\n".join(lines)
+
+    def to_inpock_prompt_text(self, content_pack, selected_variant, inpock):
+        lines = [
+            "[인포크 Prompt TXT]",
+            "",
+            "[사이즈]",
+            inpock.get("size", "1000x1000"),
+            "",
+            "[타이틀]",
+            inpock.get("title", ""),
+            "",
+            "[메인 문구]",
+            inpock.get("main_text", ""),
+            "",
+            "[서브 문구]",
+            inpock.get("sub_text", ""),
+            "",
+            "[이미지 프롬프트]",
+            inpock.get("image_prompt") or inpock.get("prompt") or "",
+        ]
+
+        return "\n".join(lines)
+
+    def to_upload_text(self, content_pack, selected_variant, upload_bundle):
+        upload = content_pack.get("upload", {})
+
+        lines = [
+            "[업로드 문구 TXT]",
+            "",
+            "[YouTube 제목]",
+            upload.get("youtube_title", ""),
+            "",
+            "[YouTube 설명]",
+            upload.get("youtube_desc", ""),
+            "",
+            "[Instagram 본문]",
+            upload.get("instagram_body", ""),
+            "",
+            "[해시태그]",
+        ]
+
+        for tag in upload.get("hashtags", []):
+            lines.append(tag)
+
+        return "\n".join(lines)
+
 
     def _append_script_lines(self, lines, script):
         if isinstance(script, list):

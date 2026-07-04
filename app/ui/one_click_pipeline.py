@@ -489,9 +489,14 @@ def show_content_pack_view(project, result=None):
     ):
         pack = build_ai_content_pack(project, selected, result)
         paths = save_content_pack(project, pack)
+
         st.session_state[f"content_pack_{safe_project_id(project)}"] = pack
+        st.session_state[f"ai_content_pack_export_{project.id}"] = paths
+
         st.success("AI 콘텐츠 팩을 생성했습니다.")
-        st.caption(f"JSON: {paths.get('json')} / TXT: {paths.get('txt')}")
+        st.caption(
+            f"JSON: {paths.get('json_path')} / TXT: {paths.get('txt_path')}"
+        )
 
     pack = st.session_state.get(f"content_pack_{safe_project_id(project)}") or load_content_pack(project)
     if not pack:
@@ -978,16 +983,19 @@ def show_selected_sources(project):
     show_content_pack_view(project)
     show_ai_product_analysis(project, selected)
 
-    content_pack = st.session_state.get(
-        f"ai_content_pack_result_{project.id}",
+    content_pack_result = st.session_state.get(
+        f"ai_content_pack_export_{project.id}",
         {}
     )
 
-    show_download_center(
-        project,
-        content_pack=content_pack,
-    )
+    if not content_pack_result:
+        content_pack_result = st.session_state.get(
+            f"ai_content_pack_result_{project.id}",
+            {}
+        )
 
+    show_download_center(content_pack_result)
+ 
 def show_candidate_card(project, platform, item):
     query = item.get("query", "")
     rank = item.get("rank", "")
