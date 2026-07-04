@@ -275,9 +275,8 @@ def build_capcut_timeline(product_name, hooks, profile):
 
 def build_ai_content_pack(project, selected_sources, latest_result=None):
     """
-    Sprint 16-2 content pack.
-    기존 구조 유지 + 후킹/대본/타임라인 분리.
-    내부 query는 유지하되 사용자 노출 문구는 project_name 기준으로 생성합니다.
+    Sprint 22 stable content pack.
+    대표 콘텐츠는 shorts_variants의 recommended=True 항목을 우선 사용합니다.
     """
     latest_result = latest_result or {}
     selected_sources = [s for s in (selected_sources or []) if isinstance(s, dict)]
@@ -294,43 +293,49 @@ def build_ai_content_pack(project, selected_sources, latest_result=None):
     )
 
     content_product_name = project_name
-
     source_url = normalize_text(primary.get("url"), "")
     platform = normalize_text(primary.get("platform"), "source")
 
     profile = analyze_product(content_product_name, source_query)
-
     hook_groups = generate_hooks(content_product_name, profile)
 
     hooks = build_hooks(content_product_name, profile)
     script = build_script(content_product_name, profile)
     capcut_timeline = build_capcut_timeline(content_product_name, hooks, profile)
-    
+
     shorts_variants = generate_content_variants(
         content_product_name,
         profile,
         hook_groups,
     )
-    
+
     shorts_variants = rank_content_variants(
-    profile,
-    shorts_variants,
+        profile,
+        shorts_variants,
     )
 
     selected_variant = None
-
     if shorts_variants:
         selected_variant = next(
             (v for v in shorts_variants if v.get("recommended")),
             shorts_variants[0],
         )
-        
+
+    active_content = selected_variant or {
+        "title": f"{content_product_name}, 왜 이제 알았지?",
+        "hook": hooks[0] if hooks else "왜 이제 알았지?",
+        "script": script,
+        "cta": f"댓글에 '{profile.get('keyword', '제품')}' 남겨주세요 👇",
+        "capcut": capcut_timeline,
+    }
+
     pack = {
-        "version": "sprint-16-2-content-pack-upgrade",
+        "version": "sprint-22-selected-variant-sync",
         "project_id": getattr(project, "id", ""),
         "project_name": content_product_name,
         "primary_source": primary,
         "selected_sources": selected_sources,
+        "selected_variant": active_content,
         "content_strategy": {
             "main_angle": "실전 쇼핑쇼츠 문제 해결형",
             "structure": "Hook → Problem → Solution → Benefit → CTA",
@@ -338,7 +343,7 @@ def build_ai_content_pack(project, selected_sources, latest_result=None):
             "selling_points": profile.get("features", []),
             "recommended_format": "40~50초 쇼츠 / 릴스",
         },
-        "shorts": {  
+        "shorts": {
             "titles": [
                 f"{content_product_name}, 왜 이제 알았지?",
                 f"불편함 줄여주는 {content_product_name}",
@@ -352,15 +357,13 @@ def build_ai_content_pack(project, selected_sources, latest_result=None):
             "hooks": hooks,
             "hook_groups": hook_groups,
             "script": script,
-            "cta": f"댓글에 '{profile['keyword']}' 남겨주세요 👇",
+            "cta": f"댓글에 '{profile.get('keyword', '제품')}' 남겨주세요 👇",
             "capcut_timeline": capcut_timeline,
         },
-
         "shorts_variants": shorts_variants,
-
         "thumbnail": {
             "size": "9:16",
-            "main_text": selected_variant.get("hook", "왜 이제 알았지?") if selected_variant else "왜 이제 알았지?",
+            "main_text": active_content.get("hook", "왜 이제 알았지?"),
             "sub_text": content_product_name,
             "layout": "제품 크게 + 왼쪽 상단 후킹 문구 + 하단 짧은 설명",
             "image_prompt": f"9:16 vertical shopping shorts thumbnail, clean Korean ecommerce style, product concept: {content_product_name}, bright home background, large bold Korean text area, realistic product-focused composition",
@@ -368,19 +371,19 @@ def build_ai_content_pack(project, selected_sources, latest_result=None):
         "inpock": {
             "size": "1000x1000",
             "title": content_product_name,
-            "main_text": selected_variant.get("hook", "생활이 편해지는 추천템") if selected_variant else "생활이 편해지는 추천템",
+            "main_text": active_content.get("hook", "생활이 편해지는 추천템"),
             "sub_text": "제품 정보는 링크에서 확인",
             "image_prompt": f"1000x1000 square product promo image for Inpock link page, clean Korean shopping design, product concept: {content_product_name}, white background, neat layout, space for Korean title text",
         },
         "upload_bundle": {
-            "youtube_title": selected_variant.get("title", f"{content_product_name} 추천템 #shorts") if selected_variant else f"{content_product_name} 추천템 #shorts",
+            "youtube_title": active_content.get("title", f"{content_product_name} 추천템 #shorts"),
             "youtube_desc": "🔗 제품 정보는 영상 아래 설명란 링크 또는 프로필 링크를 확인해주세요.\n\n쿠팡파트너스 활동을 통해 일정액의 수수료를 제공받을 수 있습니다.",
-            "instagram_body": f"왜 이제 알았지 싶은 생활템 ✨\n\n{content_product_name}처럼 매일 쓰는 제품은 작은 차이가 크게 느껴지더라고요.\n\n제품 정보가 궁금하시면 댓글에 '{profile['keyword']}' 남겨주세요 👇",
+            "instagram_body": f"왜 이제 알았지 싶은 생활템 ✨\n\n{content_product_name}처럼 매일 쓰는 제품은 작은 차이가 크게 느껴지더라고요.\n\n제품 정보가 궁금하시면 댓글에 '{profile.get('keyword', '제품')}' 남겨주세요 👇",
             "hashtags": ["#쇼핑쇼츠", "#생활용품추천", "#살림템", "#쿠팡추천", "#shorts", "#릴스"],
             "source_url": source_url,
             "platform": platform,
         },
-    }   
+    }
     return pack
 
 
@@ -389,6 +392,20 @@ def content_pack_to_txt(pack):
     upload = pack.get("upload_bundle", {})
     thumb = pack.get("thumbnail", {})
     inpock = pack.get("inpock", {})
+    variants = pack.get("shorts_variants", [])
+
+    active_content = (
+        pack.get("selected_variant")
+        or next((v for v in variants if v.get("recommended")), None)
+        or (variants[0] if variants else {})
+        or {}
+    )
+
+    title = active_content.get("title") or (shorts.get("titles", [""]) or [""])[0]
+    hook = active_content.get("hook") or (shorts.get("hooks", [""]) or [""])[0]
+    script = active_content.get("script") or shorts.get("script", "")
+    cta = active_content.get("cta") or shorts.get("cta", "")
+    capcut_items = active_content.get("capcut") or shorts.get("capcut_timeline", [])
 
     lines = []
     lines.append("# AI 콘텐츠 팩")
@@ -396,20 +413,28 @@ def content_pack_to_txt(pack):
     lines.append(f"프로젝트: {pack.get('project_name', '')}")
     lines.append(f"대표 상품/검색어: {pack.get('primary_source', {}).get('query', '')}")
     lines.append("")
+    lines.append("## 대표 콘텐츠")
+    if active_content.get("type"):
+        lines.append(f"유형: {active_content.get('type')} / 점수: {active_content.get('score', '-')}")
+    lines.append("")
     lines.append("## 쇼츠 제목")
-    for title in shorts.get("titles", []):
-        lines.append(f"- {title}")
+    lines.append(f"- {title}")
     lines.append("")
     lines.append("## 후킹")
-    for hook in shorts.get("hooks", []):
-        lines.append(f"- {hook}")
+    lines.append(f"- {hook}")
     lines.append("")
     lines.append("## 대본")
-    lines.append(shorts.get("script", ""))
+    lines.append(str(script))
+    lines.append("")
+    lines.append("## CTA")
+    lines.append(str(cta))
     lines.append("")
     lines.append("## CapCut 타임라인")
-    for item in shorts.get("capcut_timeline", []):
-        lines.append(f"- {item.get('time')} / {item.get('scene')} / {item.get('caption')} / {item.get('capcut')}")
+    for item in capcut_items:
+        if isinstance(item, dict):
+            lines.append(f"- {item.get('time')} / {item.get('scene')} / {item.get('caption')} / {item.get('capcut')}")
+        else:
+            lines.append(f"- {item}")
     lines.append("")
     lines.append("## 썸네일")
     lines.append(f"메인 문구: {thumb.get('main_text', '')}")
@@ -456,7 +481,12 @@ def show_content_pack_view(project, result=None):
 
     st.caption(f"채택 후보 {len(selected)}개 기준으로 쇼츠/CapCut/썸네일/인포크/업로드 패키지를 생성합니다.")
 
-    if st.button("🚀 AI 콘텐츠 팩 생성", key=f"content_pack_generate_{safe_project_id(project)}", type="primary", use_container_width=True):
+    if st.button(
+        "🚀 AI 콘텐츠 팩 생성",
+        key=f"content_pack_generate_{safe_project_id(project)}",
+        type="primary",
+        use_container_width=True,
+    ):
         pack = build_ai_content_pack(project, selected, result)
         paths = save_content_pack(project, pack)
         st.session_state[f"content_pack_{safe_project_id(project)}"] = pack
@@ -466,177 +496,121 @@ def show_content_pack_view(project, result=None):
     pack = st.session_state.get(f"content_pack_{safe_project_id(project)}") or load_content_pack(project)
     if not pack:
         return
-    
-    selected_variant = pack.get("selected_variant")
-    active_content = selected_variant or {}
 
     shorts = pack.get("shorts", {})
     upload = pack.get("upload_bundle", {})
     shorts_variants = pack.get("shorts_variants", [])
 
+    active_content = (
+        pack.get("selected_variant")
+        or next((v for v in shorts_variants if v.get("recommended")), None)
+        or (shorts_variants[0] if shorts_variants else {})
+        or {}
+    )
+
     tabs = st.tabs(["쇼츠", "CapCut", "썸네일", "인포크", "업로드", "JSON"])
 
     with tabs[0]:
-        if selected_variant:
+        if active_content:
             st.success(
-                f"⭐ 현재 대표 콘텐츠: "
-                f"{selected_variant.get('type')} "
-                f"({selected_variant.get('score')}점)"
+                f"⭐ 현재 대표 콘텐츠: {active_content.get('type', '추천안')} / "
+                f"{active_content.get('score', '-')}점"
             )
-    
+
         st.markdown("### 제목")
-        for title in shorts.get("titles", []):
-            st.write(f"- {title}")
+        st.write(f"- {active_content.get('title') or (shorts.get('titles', ['']) or [''])[0]}")
 
         st.markdown("### 후킹")
+        st.write(f"- {active_content.get('hook') or (shorts.get('hooks', ['']) or [''])[0]}")
 
-        if selected_variant:
-
-            st.write(f"- {selected_variant.get('hook', '')}")
-
-        else:
-
-            for hook in shorts.get("hooks", []):
-                st.write(f"- {hook}")
-
+        st.markdown("### 대본")
         st.text_area(
             "대본",
-            active_content.get("script", shorts.get("script", "")),
+            active_content.get("script") or shorts.get("script", ""),
             height=220,
         )
 
-        st.write(
-            "CTA:",
-            active_content.get("cta", shorts.get("cta", "")),
-        )
+        st.markdown("### CTA")
+        st.write(active_content.get("cta") or shorts.get("cta", ""))
 
         if shorts_variants:
             st.divider()
             st.markdown("### 📦 콘텐츠 유형별 쇼츠")
+            with st.expander("다른 콘텐츠 후보 보기 / 대표 콘텐츠 변경"):
+                for variant in shorts_variants:
+                    rank = variant.get("rank", "-")
+                    score = variant.get("score", 0)
+                    recommended = variant.get("recommended", False)
 
-            for variant in shorts_variants:
+                    if recommended:
+                        expander_title = f"🥇 {variant.get('type')} ({score}점) ⭐ AI 추천"
+                    elif rank == 2:
+                        expander_title = f"🥈 {variant.get('type')} ({score}점)"
+                    elif rank == 3:
+                        expander_title = f"🥉 {variant.get('type')} ({score}점)"
+                    else:
+                        expander_title = f"{rank}위 · {variant.get('type')} ({score}점)"
 
-                rank = variant.get("rank", "-")
-                score = variant.get("score", 0)
-                recommended = variant.get("recommended", False)
+                    with st.expander(expander_title):
+                        if st.button(
+                            "⭐ 대표 콘텐츠 선택",
+                            key=f"select_variant_{safe_project_id(project)}_{variant.get('type')}",
+                        ):
+                            pack["selected_variant"] = variant
+                            save_content_pack(project, pack)
+                            st.session_state[f"content_pack_{safe_project_id(project)}"] = pack
+                            st.success(f"{variant.get('type')}을 대표 콘텐츠로 선택했습니다.")
+                            st.rerun()
 
-                if recommended:
-                    expander_title = f"🥇 {variant.get('type')} ({score}점) ⭐ AI 추천"
-                elif rank == 2:
-                    expander_title = f"🥈 {variant.get('type')} ({score}점)"
-                elif rank == 3:
-                    expander_title = f"🥉 {variant.get('type')} ({score}점)"
-                else:
-                    expander_title = f"{rank}위 · {variant.get('type')} ({score}점)"
+                        st.markdown(f"**제목:** {variant.get('title', '')}")
+                        st.markdown("**후킹**")
+                        st.write(variant.get("hook", ""))
+                        st.markdown("**대본**")
+                        st.text_area(
+                            "유형별 대본",
+                            variant.get("script", ""),
+                            height=180,
+                            key=f"variant_script_{safe_project_id(project)}_{variant.get('type', '')}",
+                        )
+                        st.markdown("**CTA**")
+                        st.write(variant.get("cta", ""))
+                        st.markdown("**CapCut 타임라인**")
+                        for line in variant.get("capcut", []):
+                            st.write(f"- {line}")
 
-                with st.expander(expander_title):
+    with tabs[1]:
+        if active_content:
+            st.markdown(f"### 🎬 {active_content.get('type', '대표 콘텐츠')} CapCut")
+        else:
+            st.markdown("### 🎬 CapCut 타임라인")
 
-                    if st.button(
-                        "⭐ 대표 콘텐츠 선택",
-                        key=f"select_variant_{safe_project_id(project)}_{variant.get('type')}",
-                    ):
-                        pack["selected_variant"] = variant
-
-                        save_content_pack(project, pack)
-
-                        st.session_state[f"content_pack_{safe_project_id(project)}"] = pack
-
-                        st.success(f"{variant.get('type')}을 대표 콘텐츠로 선택했습니다.")
-                        st.rerun()
-
-                    st.markdown(f"**제목:** {variant.get('title', '')}")
-
-                    st.markdown("**후킹**")
-                    st.write(variant.get("hook", ""))
-
-                    st.markdown("**대본**")
-                    st.text_area(
-                        "유형별 대본",
-                        variant.get("script", ""),
-                        height=180,
-                        key=f"variant_script_{safe_project_id(project)}_{variant.get('type', '')}",
-                    )
-
-                    st.markdown("**CTA**")
-                    st.write(variant.get("cta", ""))
-
-                    st.markdown("**CapCut 타임라인**")
-                    for line in variant.get("capcut", []):
-                        st.write(f"- {line}")
-
-                with tabs[1]:
-
-                   if selected_variant:
-                       st.markdown(f"### 🎬 {selected_variant.get('type')} CapCut")
-                   else:
-                       st.markdown("### 🎬 CapCut 타임라인")
-
-                   timeline = active_content.get(
-                       "capcut",
-                       shorts.get("capcut_timeline", []),
-                   ) 
-
-                   for item in timeline:
-
-                        if isinstance(item, dict):
-
-                            st.write(
-                                f"**{item.get('time')}** / "
-                                f"{item.get('scene')}"
-                            )
-
-                            st.caption(
-                                f"자막: {item.get('caption')} / "
-                                f"CapCut: {item.get('capcut')}"
-                            )
-
-                        else:
-
-                            st.write(f"• {item}")
+        timeline = active_content.get("capcut") or shorts.get("capcut_timeline", [])
+        for item in timeline:
+            if isinstance(item, dict):
+                st.write(f"**{item.get('time')}** / {item.get('scene')}")
+                st.caption(f"자막: {item.get('caption')} / CapCut: {item.get('capcut')}")
+            else:
+                st.write(f"• {item}")
 
     with tabs[2]:
         thumb = pack.get("thumbnail", {})
-
-        main_text = thumb.get("main_text", "")
-
-        if selected_variant:
-            main_text = selected_variant.get("hook", main_text)
-
+        main_text = active_content.get("hook") or thumb.get("main_text", "")
         st.write("메인 문구:", main_text)
         st.write("보조 문구:", thumb.get("sub_text", ""))
-
-        st.text_area(
-            "썸네일 이미지 프롬프트",
-            thumb.get("image_prompt", ""),
-            height=120,
-        )
+        st.text_area("썸네일 이미지 프롬프트", thumb.get("image_prompt", ""), height=120)
 
     with tabs[3]:
         inpock = pack.get("inpock", {})
-
-        active_inpock = inpock.copy()
-
-        if selected_variant:
-            active_inpock["main_text"] = selected_variant.get("hook", "")
-
-        st.write("규격:", active_inpock.get("size", "1000x1000"))
-        st.write("메인 문구:", active_inpock.get("main_text", ""))
-        st.write("보조 문구:", active_inpock.get("sub_text", ""))
-
-        st.text_area(
-            "인포크 이미지 프롬프트",
-            active_inpock.get("image_prompt", ""),
-            height=120,
-        )
+        main_text = active_content.get("hook") or inpock.get("main_text", "")
+        st.write("규격:", inpock.get("size", "1000x1000"))
+        st.write("메인 문구:", main_text)
+        st.write("보조 문구:", inpock.get("sub_text", ""))
+        st.text_area("인포크 이미지 프롬프트", inpock.get("image_prompt", ""), height=120)
 
     with tabs[4]:
         active_upload = upload.copy()
-
-        if selected_variant:
-            active_upload["youtube_title"] = selected_variant.get(
-                "title",
-                upload.get("youtube_title", ""),
-            )
+        if active_content.get("title"):
+            active_upload["youtube_title"] = active_content.get("title")
 
         st.write("유튜브 제목:", active_upload.get("youtube_title", ""))
         st.text_area("유튜브 설명", active_upload.get("youtube_desc", ""), height=130)

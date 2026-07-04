@@ -49,12 +49,7 @@ class ContentFactory:
 
             resp = client.chat.completions.create(
                 model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
-                messages=[
-                    {
-                        "role": "user",
-                        "content": user_content,
-                    }
-                ],
+                messages=[{"role": "user", "content": user_content}],
                 temperature=0.7,
                 response_format={"type": "json_object"},
             )
@@ -171,7 +166,6 @@ class ContentFactory:
 
         project_name = (
             getattr(project, "product_name", "")
-            or getattr(project, "product_name", "")
             or getattr(project, "title", "")
             or "선택 상품"
         )
@@ -184,7 +178,7 @@ class ContentFactory:
                 "titles": [
                     f"{project_name}, 왜 이제 알았지?",
                     f"생활이 편해지는 {project_name}",
-                    f"아직도 불편하게 쓰고 계세요?",
+                    "아직도 불편하게 쓰고 계세요?",
                 ],
                 "hooks": analysis.get("hooks", []),
                 "script": [
@@ -210,13 +204,14 @@ class ContentFactory:
             },
             "thumbnail": {
                 "main_text": "왜 이제 알았지?",
-                "sub_text": "생활이 편해지는 아이템",
+                "sub_text": project_name,
                 "image_prompt": f"9:16 쇼핑쇼츠 썸네일, {project_name}, 밝은 배경, 제품 강조, 한국어 큰 글씨 공간",
             },
             "inpock": {
                 "size": "1000x1000",
                 "title": project_name,
                 "main_text": "생활이 편해지는 추천템",
+                "sub_text": "제품 정보는 링크에서 확인",
                 "image_prompt": f"1000x1000 인포크 링크 이미지, {project_name}, 깔끔한 쇼핑몰 스타일, 제품 중심",
             },
             "upload": {
@@ -265,13 +260,17 @@ class ContentFactory:
             data = self._call_openai_json(CONTENT_PACK_PROMPT, payload)
 
             if data.get("ok") is False:
-                return self._fallback_content_pack(project, selected_sources, clean_analysis)
-
-            data["ok"] = True
-            data["provider"] = "openai"
-            data["project_id"] = getattr(project, "id", "")
-            data["project_name"] = project_name
-            data["analysis"] = clean_analysis
+                data = self._fallback_content_pack(
+                    project,
+                    selected_sources,
+                    clean_analysis,
+                )
+            else:
+                data["ok"] = True
+                data["provider"] = "openai"
+                data["project_id"] = getattr(project, "id", "")
+                data["project_name"] = project_name
+                data["analysis"] = clean_analysis
 
             data = self._normalize_content_pack_product_name(
                 data,
@@ -279,15 +278,66 @@ class ContentFactory:
                 selected_sources,
             )
 
+            data = self.apply_selected_variant(data)
             return data
 
-        data = self._fallback_content_pack(project, selected_sources, clean_analysis)
+        data = self._fallback_content_pack(
+            project,
+            selected_sources,
+            clean_analysis,
+        )
+
         data = self._normalize_content_pack_product_name(
             data,
             project_name,
             selected_sources,
         )
+
+        data = self.apply_selected_variant(data)
         return data
+
+    def apply_selected_variant(self, content_pack):
+        shorts = content_pack.get("shorts", {})
+        titles = shorts.get("titles", [])
+        hooks = shorts.get("hooks", [])
+        script = shorts.get("script", [])
+
+        selected_variant = content_pack.get("selected_variant") or {}
+
+        if not selected_variant:
+            selected_variant = {
+                "title": titles[0] if titles else "",
+                "hook": hooks[0] if hooks else "",
+                "script": script,
+                "cta": shorts.get("cta", ""),
+            }
+
+        content_pack["selected_variant"] = selected_variant
+
+        title = selected_variant.get("title", "")
+        hook = selected_variant.get("hook", "")
+        cta = selected_variant.get("cta", "")
+
+        if title:
+            content_pack.setdefault("upload", {})
+            content_pack["upload"]["youtube_title"] = title
+
+        if hook:
+            content_pack.setdefault("thumbnail", {})
+            content_pack["thumbnail"]["main_text"] = hook
+
+            content_pack.setdefault("inpock", {})
+            content_pack["inpock"]["main_text"] = hook
+
+        if cta:
+            content_pack.setdefault("upload", {})
+            instagram_body = content_pack["upload"].get("instagram_body", "")
+            if cta not in instagram_body:
+                content_pack["upload"]["instagram_body"] = (
+                    instagram_body.rstrip() + "\n\n" + cta
+                )
+
+        return content_pack
 
     def _clean_content_analysis(self, analysis, project_name):
         if not isinstance(analysis, dict):
@@ -333,10 +383,7 @@ class ContentFactory:
                 return [replace_text(item) for item in value]
 
             if isinstance(value, dict):
-                return {
-                    key: replace_text(item)
-                    for key, item in value.items()
-                }
+                return {key: replace_text(item) for key, item in value.items()}
 
             return value
 
@@ -367,6 +414,13 @@ class ContentFactory:
 
     def to_text(self, content_pack):
         lines = []
+       
+        variants = content_pack.get("shorts_variants", [])
+
+        selected = next(
+            (v for v in variants if v.get("recommended")),
+            variants[0] if variants else {},
+        )
 
         lines.append("[AI 콘텐츠 팩]")
         lines.append("")
@@ -380,30 +434,31 @@ class ContentFactory:
 
         lines.append("")
         lines.append("[쇼츠 제목]")
-        for title in content_pack.get("shorts", {}).get("titles", []):
-            lines.append(f"- {title}")
+        if selected.get("title"):
+            lines.append(f"- {selected.get('title')}")
+        else:
+            for title in content_pack.get("shorts", {}).get("titles", []):
+                lines.append(f"- {title}")
 
         lines.append("")
         lines.append("[후킹]")
-        for hook in content_pack.get("shorts", {}).get("hooks", []):
-            lines.append(f"- {hook}")
+        if selected.get("hook"):
+            lines.append(f"- {selected.get('hook')}")
+        else:
+            for hook in content_pack.get("shorts", {}).get("hooks", []):
+                lines.append(f"- {hook}")
 
         lines.append("")
         lines.append("[대본]")
-        for line in content_pack.get("shorts", {}).get("script", []):
-            if isinstance(line, dict):
-                lines.append(
-                    f"- {line.get('time', '')} / {line.get('role', '')} / {line.get('line', '')}"
-                )
-            else:
-                lines.append(f"- {line}")
+        script = selected.get("script") or content_pack.get("shorts", {}).get("script", [])
+        self._append_script_lines(lines, script)
 
         lines.append("")
         lines.append("[CapCut]")
         for item in content_pack.get("capcut", {}).get("timeline", []):
             if isinstance(item, dict):
                 lines.append(
-                    f"- {item.get('time')} / {item.get('scene')} / {item.get('caption')}"
+                    f"- {item.get('time', '')} / {item.get('scene', '')} / {item.get('caption', '')}"
                 )
             else:
                 lines.append(f"- {item}")
@@ -424,3 +479,15 @@ class ContentFactory:
         lines.append(upload.get("instagram_body", ""))
 
         return "\n".join(lines)
+
+    def _append_script_lines(self, lines, script):
+        if isinstance(script, list):
+            for line in script:
+                if isinstance(line, dict):
+                    lines.append(
+                        f"- {line.get('time', '')} / {line.get('role', '')} / {line.get('line', '')}"
+                    )
+                else:
+                    lines.append(f"- {line}")
+        elif script:
+            lines.append(str(script))

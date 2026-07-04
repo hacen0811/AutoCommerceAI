@@ -51,3 +51,44 @@ def rank_content_variants(profile=None, variants=None):
         item["recommended"] = idx == 1
 
     return ranked
+
+def apply_selected_variant(self, content_pack):
+    shorts = content_pack.get("shorts", {})
+    titles = shorts.get("titles", [])
+    hooks = shorts.get("hooks", [])
+    script = shorts.get("script", [])
+
+    selected_variant = content_pack.get("selected_variant") or {}
+
+    if not selected_variant:
+        selected_variant = {
+            "title": titles[0] if titles else "",
+            "hook": hooks[0] if hooks else "",
+            "script": script,
+            "cta": "",
+        }
+
+    content_pack["selected_variant"] = selected_variant
+
+    title = selected_variant.get("title", "")
+    hook = selected_variant.get("hook", "")
+    cta = selected_variant.get("cta", "")
+
+    if title:
+        content_pack.setdefault("upload", {})
+        content_pack["upload"]["youtube_title"] = title
+
+    if hook:
+        content_pack.setdefault("thumbnail", {})
+        content_pack["thumbnail"]["main_text"] = hook
+
+        content_pack.setdefault("inpock", {})
+        content_pack["inpock"]["main_text"] = hook
+
+    if cta:
+        content_pack.setdefault("upload", {})
+        instagram_body = content_pack["upload"].get("instagram_body", "")
+        if cta not in instagram_body:
+            content_pack["upload"]["instagram_body"] = instagram_body + "\n\n" + cta
+
+    return content_pack

@@ -3,6 +3,29 @@ import streamlit as st
 from modules.content.content_factory import ContentFactory
 
 
+def _get_selected_variant(data):
+    variants = data.get("shorts_variants", [])
+
+    if not variants:
+        return {}
+
+    return next(
+        (v for v in variants if v.get("recommended")),
+        variants[0],
+    )
+
+
+def _write_script(script):
+    if isinstance(script, list):
+        for line in script:
+            st.write(f"- {line}")
+    elif isinstance(script, str):
+        for line in script.splitlines():
+            st.write(line)
+    else:
+        st.write(script)
+
+
 def show_content_pack_view(project, selected_sources=None, analysis=None):
     st.divider()
     st.subheader("🚀 AI 콘텐츠 팩")
@@ -13,11 +36,7 @@ def show_content_pack_view(project, selected_sources=None, analysis=None):
         use_container_width=True,
     ):
         factory = ContentFactory()
-         
-        st.warning("DEBUG: AI 콘텐츠 팩 생성 버튼 클릭됨")
-        st.write("project_name:", getattr(project, "product_name", ""))
-        st.write("selected_sources:", selected_sources or [])  
-        
+
         content_pack = factory.build_content_pack(
             project=project,
             selected_sources=selected_sources or [],
@@ -25,7 +44,6 @@ def show_content_pack_view(project, selected_sources=None, analysis=None):
         )
 
         saved = factory.save_content_pack(project, content_pack)
-
         st.session_state[f"ai_content_pack_result_{project.id}"] = saved
         st.success("AI 콘텐츠 팩을 생성했습니다.")
 
@@ -36,40 +54,55 @@ def show_content_pack_view(project, selected_sources=None, analysis=None):
         return None
 
     data = saved.get("data", {})
+    selected = _get_selected_variant(data)
 
     st.markdown("### 상품 분석")
     analysis_data = data.get("analysis", {})
     if analysis_data.get("summary"):
         st.write(analysis_data.get("summary"))
 
-    if analysis_data.get("hooks"):
-        st.markdown("**후킹 포인트**")
-        for hook in analysis_data.get("hooks", []):
-            st.write(f"- {hook}")
+    if selected:
+        st.info(
+            f"대표 콘텐츠: {selected.get('type', '추천안')} / "
+            f"점수 {selected.get('score', '-')}"
+        )
 
     st.markdown("### 쇼츠 제목")
-    for title in data.get("shorts", {}).get("titles", []):
-        st.write(f"- {title}")
+    if selected.get("title"):
+        st.write(f"- {selected.get('title')}")
+    else:
+        for title in data.get("shorts", {}).get("titles", []):
+            st.write(f"- {title}")
 
     st.markdown("### 후킹 문구")
-    for hook in data.get("shorts", {}).get("hooks", []):
-        st.write(f"- {hook}")
+    if selected.get("hook"):
+        st.write(f"- {selected.get('hook')}")
+    else:
+        for hook in data.get("shorts", {}).get("hooks", []):
+            st.write(f"- {hook}")
 
     st.markdown("### 대본")
-    for line in data.get("shorts", {}).get("script", []):
-        st.write(f"- {line}")
+    if selected.get("script"):
+        _write_script(selected.get("script"))
+    else:
+        _write_script(data.get("shorts", {}).get("script", []))
 
     st.markdown("### CapCut 타임라인")
-    for item in data.get("capcut", {}).get("timeline", []):
-        st.write(
-            f"- {item.get('time')} / "
-            f"{item.get('scene')} / "
-            f"{item.get('caption')}"
-        )
+    capcut_items = selected.get("capcut") or data.get("shorts", {}).get("capcut_timeline", [])
+
+    for item in capcut_items:
+        if isinstance(item, dict):
+            st.write(
+                f"- {item.get('time', '')} / "
+                f"{item.get('scene', '')} / "
+                f"{item.get('caption', '')}"
+            )
+        else:
+            st.write(f"- {item}")
 
     st.markdown("### 썸네일")
     thumbnail = data.get("thumbnail", {})
-    st.write(thumbnail.get("main_text", ""))
+    st.write(thumbnail.get("main_text", selected.get("hook", "")))
     if thumbnail.get("sub_text"):
         st.caption(thumbnail.get("sub_text"))
     if thumbnail.get("image_prompt"):
@@ -81,7 +114,7 @@ def show_content_pack_view(project, selected_sources=None, analysis=None):
 
     st.markdown("### 인포크")
     inpock = data.get("inpock", {})
-    st.write(inpock.get("main_text", ""))
+    st.write(inpock.get("main_text", selected.get("hook", "")))
     if inpock.get("image_prompt"):
         st.text_area(
             "인포크 이미지 프롬프트",
@@ -90,8 +123,8 @@ def show_content_pack_view(project, selected_sources=None, analysis=None):
         )
 
     st.markdown("### 업로드")
-    upload = data.get("upload", {})
-    st.write(upload.get("youtube_title", ""))
+    upload = data.get("upload_bundle") or data.get("upload", {})
+    st.write(upload.get("youtube_title", selected.get("title", "")))
     st.text_area(
         "유튜브 설명",
         upload.get("youtube_desc", ""),
