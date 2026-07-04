@@ -317,6 +317,14 @@ def build_ai_content_pack(project, selected_sources, latest_result=None):
     shorts_variants,
     )
 
+    selected_variant = None
+
+    if shorts_variants:
+        selected_variant = next(
+            (v for v in shorts_variants if v.get("recommended")),
+            shorts_variants[0],
+        )
+        
     pack = {
         "version": "sprint-16-2-content-pack-upgrade",
         "project_id": getattr(project, "id", ""),
@@ -352,7 +360,7 @@ def build_ai_content_pack(project, selected_sources, latest_result=None):
 
         "thumbnail": {
             "size": "9:16",
-            "main_text": "왜 이제 알았지?",
+            "main_text": selected_variant.get("hook", "왜 이제 알았지?") if selected_variant else "왜 이제 알았지?",
             "sub_text": content_product_name,
             "layout": "제품 크게 + 왼쪽 상단 후킹 문구 + 하단 짧은 설명",
             "image_prompt": f"9:16 vertical shopping shorts thumbnail, clean Korean ecommerce style, product concept: {content_product_name}, bright home background, large bold Korean text area, realistic product-focused composition",
@@ -360,19 +368,19 @@ def build_ai_content_pack(project, selected_sources, latest_result=None):
         "inpock": {
             "size": "1000x1000",
             "title": content_product_name,
-            "main_text": "생활이 편해지는 추천템",
+            "main_text": selected_variant.get("hook", "생활이 편해지는 추천템") if selected_variant else "생활이 편해지는 추천템",
             "sub_text": "제품 정보는 링크에서 확인",
             "image_prompt": f"1000x1000 square product promo image for Inpock link page, clean Korean shopping design, product concept: {content_product_name}, white background, neat layout, space for Korean title text",
         },
         "upload_bundle": {
-            "youtube_title": f"{content_product_name} 추천템 #shorts",
+            "youtube_title": selected_variant.get("title", f"{content_product_name} 추천템 #shorts") if selected_variant else f"{content_product_name} 추천템 #shorts",
             "youtube_desc": "🔗 제품 정보는 영상 아래 설명란 링크 또는 프로필 링크를 확인해주세요.\n\n쿠팡파트너스 활동을 통해 일정액의 수수료를 제공받을 수 있습니다.",
             "instagram_body": f"왜 이제 알았지 싶은 생활템 ✨\n\n{content_product_name}처럼 매일 쓰는 제품은 작은 차이가 크게 느껴지더라고요.\n\n제품 정보가 궁금하시면 댓글에 '{profile['keyword']}' 남겨주세요 👇",
             "hashtags": ["#쇼핑쇼츠", "#생활용품추천", "#살림템", "#쿠팡추천", "#shorts", "#릴스"],
             "source_url": source_url,
             "platform": platform,
         },
-    }
+    }   
     return pack
 
 
@@ -558,17 +566,17 @@ def show_content_pack_view(project, result=None):
 
                 with tabs[1]:
 
-                    if selected_variant:
-                        st.markdown(f"### 🎬 {selected_variant.get('type')} CapCut")
-                    else:
-                        st.markdown("### 🎬 CapCut 타임라인")
+                   if selected_variant:
+                       st.markdown(f"### 🎬 {selected_variant.get('type')} CapCut")
+                   else:
+                       st.markdown("### 🎬 CapCut 타임라인")
 
-                    timeline = active_content.get(
-                        "capcut",
-                        shorts.get("capcut_timeline", []),
-                    )
+                   timeline = active_content.get(
+                       "capcut",
+                       shorts.get("capcut_timeline", []),
+                   ) 
 
-                    for item in timeline:
+                   for item in timeline:
 
                         if isinstance(item, dict):
 
@@ -588,22 +596,52 @@ def show_content_pack_view(project, result=None):
 
     with tabs[2]:
         thumb = pack.get("thumbnail", {})
-        st.write("메인 문구:", thumb.get("main_text", ""))
+
+        main_text = thumb.get("main_text", "")
+
+        if selected_variant:
+            main_text = selected_variant.get("hook", main_text)
+
+        st.write("메인 문구:", main_text)
         st.write("보조 문구:", thumb.get("sub_text", ""))
-        st.text_area("썸네일 이미지 프롬프트", thumb.get("image_prompt", ""), height=120)
+
+        st.text_area(
+            "썸네일 이미지 프롬프트",
+            thumb.get("image_prompt", ""),
+            height=120,
+        )
 
     with tabs[3]:
         inpock = pack.get("inpock", {})
-        st.write("규격:", inpock.get("size", "1000x1000"))
-        st.write("메인 문구:", inpock.get("main_text", ""))
-        st.write("보조 문구:", inpock.get("sub_text", ""))
-        st.text_area("인포크 이미지 프롬프트", inpock.get("image_prompt", ""), height=120)
+
+        active_inpock = inpock.copy()
+
+        if selected_variant:
+            active_inpock["main_text"] = selected_variant.get("hook", "")
+
+        st.write("규격:", active_inpock.get("size", "1000x1000"))
+        st.write("메인 문구:", active_inpock.get("main_text", ""))
+        st.write("보조 문구:", active_inpock.get("sub_text", ""))
+
+        st.text_area(
+            "인포크 이미지 프롬프트",
+            active_inpock.get("image_prompt", ""),
+            height=120,
+        )
 
     with tabs[4]:
-        st.write("유튜브 제목:", upload.get("youtube_title", ""))
-        st.text_area("유튜브 설명", upload.get("youtube_desc", ""), height=130)
-        st.text_area("인스타 본문", upload.get("instagram_body", ""), height=150)
-        st.write("해시태그:", " ".join(upload.get("hashtags", [])))
+        active_upload = upload.copy()
+
+        if selected_variant:
+            active_upload["youtube_title"] = selected_variant.get(
+                "title",
+                upload.get("youtube_title", ""),
+            )
+
+        st.write("유튜브 제목:", active_upload.get("youtube_title", ""))
+        st.text_area("유튜브 설명", active_upload.get("youtube_desc", ""), height=130)
+        st.text_area("인스타 본문", active_upload.get("instagram_body", ""), height=150)
+        st.write("해시태그:", " ".join(active_upload.get("hashtags", [])))
 
     with tabs[5]:
         copybox("AI Content Pack JSON", json.dumps(pack, ensure_ascii=False, indent=2), 420)
