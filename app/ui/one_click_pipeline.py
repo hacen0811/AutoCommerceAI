@@ -117,11 +117,135 @@ def normalize_text(value, fallback=""):
     return text if text else fallback
 
 
+def build_product_profile(product_name, source_query=""):
+    text = f"{product_name} {source_query}".lower()
+
+    if any(k in text for k in ["건조", "신발", "제습", "말리"]):
+        return {
+            "problem": "젖거나 냄새나는 신발 때문에 은근 신경 쓰이는 순간",
+            "solution": "신발 안쪽까지 간편하게 관리해주는 아이템",
+            "benefit": "비 오는 날이나 운동 후에도 훨씬 깔끔하게 관리할 수 있어요",
+            "features": ["냄새 관리", "습기 제거", "간편 사용"],
+            "scene": "젖은 신발 / 운동화 / 현관",
+            "keyword": "신발",
+        }
+
+    if any(k in text for k in ["트레이", "얼음", "아이스", "보틀"]):
+        return {
+            "problem": "얼음 얼리고 빼는 과정이 매번 귀찮은 순간",
+            "solution": "얼음을 더 편하게 만들고 꺼낼 수 있는 아이템",
+            "benefit": "홈카페 준비가 훨씬 간단해져요",
+            "features": ["간편 분리", "공간 절약", "홈카페 활용"],
+            "scene": "얼음 트레이 / 컵 / 냉동실",
+            "keyword": "얼음",
+        }
+
+    if any(k in text for k in ["수전", "세면대", "연장", "탭"]):
+        return {
+            "problem": "세면대 물줄기가 짧아서 손 씻기나 청소가 불편한 순간",
+            "solution": "물줄기 방향을 더 편하게 바꿔주는 아이템",
+            "benefit": "세면대 사용과 청소가 훨씬 편해져요",
+            "features": ["각도 조절", "물튀김 감소", "간편 설치"],
+            "scene": "세면대 / 손 씻기 / 물줄기",
+            "keyword": "수전",
+        }
+
+    if any(k in text for k in ["장갑", "홀더", "비닐"]):
+        return {
+            "problem": "비닐장갑 꺼내고 끼는 과정이 매번 번거로운 순간",
+            "solution": "장갑을 더 깔끔하고 빠르게 꺼낼 수 있게 도와주는 아이템",
+            "benefit": "요리 전 준비 시간이 줄고 주방이 더 정리돼요",
+            "features": ["빠른 사용", "깔끔 정리", "주방 동선 개선"],
+            "scene": "주방 / 비닐장갑 / 싱크대",
+            "keyword": "장갑",
+        }
+
+    return {
+        "problem": "매일 쓰는 물건인데 은근 불편함이 반복되는 순간",
+        "solution": "생활 속 작은 불편을 줄여주는 아이템",
+        "benefit": "반복되는 귀찮음이 줄어 생활이 조금 더 편해져요",
+        "features": ["간편 사용", "정리 효과", "생활 편의"],
+        "scene": "생활 공간 / 제품 사용 전후",
+        "keyword": "제품",
+    }
+
+
+def build_hooks(product_name, profile):
+    return [
+        f"아직도 {profile['keyword']} 때문에 불편하세요?",
+        f"{product_name}, 왜 이제 알았지?",
+        f"이거 하나로 매일 귀찮던 일이 줄어듭니다.",
+        f"써보면 차이가 바로 느껴지는 생활템이에요.",
+        f"Before / After로 보면 더 확실합니다.",
+    ]
+
+
+def build_script(product_name, profile):
+    lines = [
+        f"[Hook] 아직도 {profile['keyword']} 때문에 불편하게 쓰고 계세요?",
+        f"[Problem] 저는 {profile['problem']}이 생각보다 자주 있더라고요.",
+        "[Problem] 그냥 참고 쓰면 되겠지 했는데, 매번 반복되니까 은근 스트레스였어요.",
+        f"[Solution] 그래서 찾은 게 바로 {product_name}입니다.",
+        f"[Solution] 핵심은 {profile['solution']}이라는 점이에요.",
+        f"[Benefit] 특히 {', '.join(profile['features'])} 이 부분이 쇼츠에서 보여주기 좋습니다.",
+        f"[Benefit] 실제로 Before / After로 보여주면 {profile['benefit']}",
+        f"[CTA] 제품 정보가 궁금하시면 댓글에 '{profile['keyword']}' 남겨주세요 👇",
+    ]
+    return "\n".join(lines)
+
+
+def build_capcut_timeline(product_name, hooks, profile):
+    return [
+        {
+            "time": "0-2초",
+            "scene": f"{profile['scene']} 불편한 장면 초근접",
+            "caption": hooks[0],
+            "capcut": "첫 자막 크게 / 빠른 줌인 / Pop 효과음 35% / BGM 12%",
+        },
+        {
+            "time": "2-6초",
+            "scene": "기존 방식 반복 장면",
+            "caption": "이게 매번 은근 귀찮더라고요",
+            "capcut": "0.5초 단위 빠른 컷 / 실패음 또는 딸깍 효과음 / 자막 하단 40%",
+        },
+        {
+            "time": "6-10초",
+            "scene": "제품 첫 등장",
+            "caption": f"그래서 찾은 {product_name}",
+            "capcut": "제품 중앙 배치 / 바운스 애니메이션 / 강조색 #FFD54F",
+        },
+        {
+            "time": "10-20초",
+            "scene": "핵심 기능 3가지",
+            "caption": "간편함 / 정리 / 편리함",
+            "capcut": "체크리스트 자막 / 체크 효과음 40% / 컷마다 1초 유지",
+        },
+        {
+            "time": "20-32초",
+            "scene": "사용 전후 비교",
+            "caption": "차이가 바로 보이죠?",
+            "capcut": "좌우 비교 화면 / Before After 텍스트 / 줌인 105%",
+        },
+        {
+            "time": "32-42초",
+            "scene": "실사용 장면 반복",
+            "caption": profile["benefit"],
+            "capcut": "속도 1.1배 / 밝기 살짝 보정 / BGM 18%",
+        },
+        {
+            "time": "42-50초",
+            "scene": "제품 클로즈업 + CTA",
+            "caption": f"댓글에 '{profile['keyword']}' 남겨주세요 👇",
+            "capcut": "CTA 하단 고정 / 자막 테두리 70 / BGM 22%",
+        },
+    ]
+
+
 def build_ai_content_pack(project, selected_sources, latest_result=None):
     """
-    Sprint 6-7 MVP content pack.
-    선택된 후보를 기준으로 쇼츠/CapCut/썸네일/인포크/업로드 패키지 초안을 생성합니다.
-    외부 API 호출 없이 즉시 생성되는 안정형 버전입니다.
+    Sprint 16-2 content pack.
+    기존 구조 유지 + 후킹/대본/타임라인 분리.
+    내부 query는 유지하되 사용자 노출 문구는 project_name 기준으로 생성합니다.
     """
     latest_result = latest_result or {}
     selected_sources = [s for s in (selected_sources or []) if isinstance(s, dict)]
@@ -131,57 +255,40 @@ def build_ai_content_pack(project, selected_sources, latest_result=None):
         getattr(project, "product_name", "") or getattr(project, "title", ""),
         "선택 상품",
     )
+
     source_query = normalize_text(
         primary.get("query") or primary.get("title") or project_name,
         project_name,
     )
+
+    content_product_name = project_name
+
     source_url = normalize_text(primary.get("url"), "")
     platform = normalize_text(primary.get("platform"), "source")
 
-    hooks = [
-        f"아직도 {source_query} 없이 불편하게 쓰고 계세요?",
-        f"이거 하나로 귀찮은 일이 확 줄어듭니다.",
-        f"살림할 때 이런 불편함 느껴보신 분들은 꼭 보세요.",
-        f"왜 이제 알았지 싶은 생활템입니다.",
-        f"작지만 매일 편해지는 아이템입니다.",
-    ]
-
-    script_lines = [
-        f"저는 평소에 {source_query} 관련해서 은근 불편한 순간이 많았어요.",
-        "처음에는 그냥 참고 썼는데, 매번 반복되니까 생각보다 스트레스가 되더라고요.",
-        f"그래서 찾아보다가 이 {source_query} 상품을 봤는데요.",
-        "핵심은 복잡한 기능보다, 자주 겪는 불편함을 간단하게 줄여준다는 점이에요.",
-        "공간을 많이 차지하지 않고, 쓰는 방법도 어렵지 않아서 생활템 쇼츠로 보여주기 좋습니다.",
-        "특히 Before / After 장면으로 보여주면 차이가 바로 느껴질 것 같아요.",
-        "제품 정보가 궁금하시면 댓글에 키워드를 남겨주세요.",
-    ]
-
-    capcut_timeline = [
-        {"time": "0-3초", "scene": "불편한 상황 클로즈업", "caption": hooks[0], "capcut": "자막 크게, 효과음 Pop 35%, 빠른 줌인"},
-        {"time": "3-8초", "scene": "기존 방식의 번거로움", "caption": "매번 이게 은근 귀찮더라고요", "capcut": "컷 전환 빠르게, BGM 15%"},
-        {"time": "8-16초", "scene": "선택 상품 등장", "caption": f"그래서 찾은 {source_query}", "capcut": "제품 이미지 중앙, 바운스 애니메이션"},
-        {"time": "16-32초", "scene": "핵심 기능 3가지", "caption": "간단함 / 정리 / 편리함", "capcut": "3분할 자막, 체크 효과음"},
-        {"time": "32-45초", "scene": "Before / After 비교", "caption": "차이가 바로 보이죠?", "capcut": "좌우 비교, 강조색 #FFD54F"},
-        {"time": "45-55초", "scene": "마무리와 CTA", "caption": "댓글에 키워드 남겨주세요 👇", "capcut": "하단 CTA 고정, BGM 25%"},
-    ]
+    profile = build_product_profile(content_product_name, source_query)
+    hooks = build_hooks(content_product_name, profile)
+    script = build_script(content_product_name, profile)
+    capcut_timeline = build_capcut_timeline(content_product_name, hooks, profile)
 
     pack = {
-        "version": "sprint-6-7-content-pack-mvp",
+        "version": "sprint-16-2-content-pack-upgrade",
         "project_id": getattr(project, "id", ""),
-        "project_name": project_name,
+        "project_name": content_product_name,
         "primary_source": primary,
         "selected_sources": selected_sources,
         "content_strategy": {
-            "main_angle": "문제 해결형 쇼핑쇼츠",
-            "target": "생활 불편을 빠르게 해결하고 싶은 사용자",
-            "selling_points": ["반복되는 불편함 해결", "사용법이 쉬움", "Before / After 연출이 쉬움"],
-            "recommended_format": "40~60초 쇼츠 / 릴스",
+            "main_angle": "실전 쇼핑쇼츠 문제 해결형",
+            "structure": "Hook → Problem → Solution → Benefit → CTA",
+            "target": "생활 속 불편을 빠르게 해결하고 싶은 사용자",
+            "selling_points": profile.get("features", []),
+            "recommended_format": "40~50초 쇼츠 / 릴스",
         },
         "shorts": {
             "titles": [
-                f"{source_query}, 왜 이제 알았을까?",
-                f"생활이 편해지는 {source_query} 추천",
-                f"불편함 줄여주는 살림템 {source_query}",
+                f"{content_product_name}, 왜 이제 알았지?",
+                f"불편함 줄여주는 {content_product_name}",
+                f"생활이 편해지는 추천템 {content_product_name}",
             ],
             "thumbnail_phrases": [
                 "왜 이제 알았지?",
@@ -189,28 +296,28 @@ def build_ai_content_pack(project, selected_sources, latest_result=None):
                 "생활이 편해집니다",
             ],
             "hooks": hooks,
-            "script": "\n".join(script_lines),
-            "cta": "댓글에 제품 키워드 남겨주세요 👇",
+            "script": script,
+            "cta": f"댓글에 '{profile['keyword']}' 남겨주세요 👇",
             "capcut_timeline": capcut_timeline,
         },
         "thumbnail": {
             "size": "9:16",
             "main_text": "왜 이제 알았지?",
-            "sub_text": source_query,
+            "sub_text": content_product_name,
             "layout": "제품 크게 + 왼쪽 상단 후킹 문구 + 하단 짧은 설명",
-            "image_prompt": f"9:16 vertical shopping shorts thumbnail, clean Korean ecommerce style, product concept: {source_query}, bright home background, large bold Korean text area, realistic product-focused composition",
+            "image_prompt": f"9:16 vertical shopping shorts thumbnail, clean Korean ecommerce style, product concept: {content_product_name}, bright home background, large bold Korean text area, realistic product-focused composition",
         },
         "inpock": {
             "size": "1000x1000",
-            "title": source_query,
+            "title": content_product_name,
             "main_text": "생활이 편해지는 추천템",
             "sub_text": "제품 정보는 링크에서 확인",
-            "image_prompt": f"1000x1000 square product promo image for Inpock link page, clean Korean shopping design, product concept: {source_query}, white background, neat layout, space for Korean title text",
+            "image_prompt": f"1000x1000 square product promo image for Inpock link page, clean Korean shopping design, product concept: {content_product_name}, white background, neat layout, space for Korean title text",
         },
         "upload_bundle": {
-            "youtube_title": f"{source_query} 추천템 #shorts",
+            "youtube_title": f"{content_product_name} 추천템 #shorts",
             "youtube_desc": "🔗 제품 정보는 영상 아래 설명란 링크 또는 프로필 링크를 확인해주세요.\n\n쿠팡파트너스 활동을 통해 일정액의 수수료를 제공받을 수 있습니다.",
-            "instagram_body": f"왜 이제 알았지 싶은 생활템 ✨\n\n{source_query}처럼 매일 쓰는 제품은 작은 차이가 크게 느껴지더라고요.\n\n제품 정보가 궁금하시면 댓글에 키워드 남겨주세요 👇",
+            "instagram_body": f"왜 이제 알았지 싶은 생활템 ✨\n\n{content_product_name}처럼 매일 쓰는 제품은 작은 차이가 크게 느껴지더라고요.\n\n제품 정보가 궁금하시면 댓글에 '{profile['keyword']}' 남겨주세요 👇",
             "hashtags": ["#쇼핑쇼츠", "#생활용품추천", "#살림템", "#쿠팡추천", "#shorts", "#릴스"],
             "source_url": source_url,
             "platform": platform,
