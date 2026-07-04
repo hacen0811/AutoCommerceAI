@@ -25,6 +25,7 @@ from modules.project.repository import ProjectRepository
 from app.ui.product_analyzer import analyze_product
 from app.ui.hook_generator import generate_hooks
 from app.ui.content_variant_generator import generate_content_variants
+from app.ui.content_ranker import rank_content_variants
 
 UI_VERSION = "0630-final-stable-selected-sources"
 SELECTED_DIR = Path("exports/selected_sources")
@@ -311,6 +312,11 @@ def build_ai_content_pack(project, selected_sources, latest_result=None):
         hook_groups,
     )
     
+    shorts_variants = rank_content_variants(
+    profile,
+    shorts_variants,
+    )
+
     pack = {
         "version": "sprint-16-2-content-pack-upgrade",
         "project_id": getattr(project, "id", ""),
@@ -476,7 +482,21 @@ def show_content_pack_view(project, result=None):
             st.markdown("### 📦 콘텐츠 유형별 쇼츠")
 
             for variant in shorts_variants:
-                with st.expander(f"📦 {variant.get('type', '유형')}"):
+
+                rank = variant.get("rank", "-")
+                score = variant.get("score", 0)
+                recommended = variant.get("recommended", False)
+
+                if recommended:
+                    expander_title = f"🥇 {variant.get('type')} ({score}점) ⭐ AI 추천"
+                elif rank == 2:
+                    expander_title = f"🥈 {variant.get('type')} ({score}점)"
+                elif rank == 3:
+                    expander_title = f"🥉 {variant.get('type')} ({score}점)"
+                else:
+                    expander_title = f"{rank}위 · {variant.get('type')} ({score}점)"
+
+                with st.expander(expander_title):
                     st.markdown(f"**제목:** {variant.get('title', '')}")
 
                     st.markdown("**후킹**")

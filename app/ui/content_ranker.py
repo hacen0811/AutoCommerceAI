@@ -1,0 +1,53 @@
+def rank_content_variants(profile=None, variants=None):
+    """
+    Sprint 19-1
+    콘텐츠 유형 추천 엔진.
+    기존 variants에 score, rank, recommended를 추가한다.
+    """
+    profile = profile or {}
+    variants = variants or []
+
+    category = profile.get("category", "")
+    features = profile.get("features") or []
+
+    weights = {
+        "공감형": 80,
+        "정보형": 75,
+        "충격형": 70,
+        "BeforeAfter형": 78,
+        "리뷰형": 72,
+    }
+
+    if "수납" in category or "정리" in category:
+        weights["공감형"] += 16
+        weights["BeforeAfter형"] += 15
+        weights["정보형"] += 10
+
+    if "신발" in category:
+        weights["BeforeAfter형"] += 18
+        weights["공감형"] += 12
+
+    if "생활 편의" in features:
+        weights["공감형"] += 4
+
+    ranked = []
+
+    for variant in variants:
+        item = dict(variant)
+
+        score = weights.get(item.get("type"), 70)
+
+        item["score"] = score
+
+        ranked.append(item)
+
+    ranked.sort(
+        key=lambda x: x["score"],
+        reverse=True,
+    )
+
+    for idx, item in enumerate(ranked, start=1):
+        item["rank"] = idx
+        item["recommended"] = idx == 1
+
+    return ranked
