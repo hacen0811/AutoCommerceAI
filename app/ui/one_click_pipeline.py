@@ -460,6 +460,7 @@ def show_content_pack_view(project, result=None):
         return
     
     selected_variant = pack.get("selected_variant")
+    active_content = selected_variant or {}
 
     shorts = pack.get("shorts", {})
     upload = pack.get("upload_bundle", {})
@@ -480,11 +481,26 @@ def show_content_pack_view(project, result=None):
             st.write(f"- {title}")
 
         st.markdown("### 후킹")
-        for hook in shorts.get("hooks", []):
-            st.write(f"- {hook}")
 
-        st.text_area("대본", shorts.get("script", ""), height=220)
-        st.write("CTA:", shorts.get("cta", ""))
+        if selected_variant:
+
+            st.write(f"- {selected_variant.get('hook', '')}")
+
+        else:
+
+            for hook in shorts.get("hooks", []):
+                st.write(f"- {hook}")
+
+        st.text_area(
+            "대본",
+            active_content.get("script", shorts.get("script", "")),
+            height=220,
+        )
+
+        st.write(
+            "CTA:",
+            active_content.get("cta", shorts.get("cta", "")),
+        )
 
         if shorts_variants:
             st.divider()
@@ -540,10 +556,35 @@ def show_content_pack_view(project, result=None):
                     for line in variant.get("capcut", []):
                         st.write(f"- {line}")
 
-    with tabs[1]:
-        for item in shorts.get("capcut_timeline", []):
-            st.write(f"**{item.get('time')}** / {item.get('scene')}")
-            st.caption(f"자막: {item.get('caption')} / CapCut: {item.get('capcut')}")
+                with tabs[1]:
+
+                    if selected_variant:
+                        st.markdown(f"### 🎬 {selected_variant.get('type')} CapCut")
+                    else:
+                        st.markdown("### 🎬 CapCut 타임라인")
+
+                    timeline = active_content.get(
+                        "capcut",
+                        shorts.get("capcut_timeline", []),
+                    )
+
+                    for item in timeline:
+
+                        if isinstance(item, dict):
+
+                            st.write(
+                                f"**{item.get('time')}** / "
+                                f"{item.get('scene')}"
+                            )
+
+                            st.caption(
+                                f"자막: {item.get('caption')} / "
+                                f"CapCut: {item.get('capcut')}"
+                            )
+
+                        else:
+
+                            st.write(f"• {item}")
 
     with tabs[2]:
         thumb = pack.get("thumbnail", {})
