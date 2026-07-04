@@ -42,6 +42,10 @@ class ContentFactory:
                 + "\n\n[입력 데이터]\n"
                 + json.dumps(payload, ensure_ascii=False, indent=2)
             )
+            
+            print("\n========== CONTENT PACK PAYLOAD ==========")
+            print(json.dumps(payload, ensure_ascii=False, indent=2))
+            print("=========================================\n")
 
             resp = client.chat.completions.create(
                 model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),

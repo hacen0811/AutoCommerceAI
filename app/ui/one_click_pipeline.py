@@ -1197,7 +1197,7 @@ def show_one_click_pipeline():
     if result:
         show_pipeline_result(project, result, path_debug)
     else:
-        show_selected_sources(project)
+        st.info("원클릭 결과가 아직 없습니다. 먼저 원클릭 실행을 완료해 주세요.")
 
     st.divider()
     st.subheader("작업 큐")

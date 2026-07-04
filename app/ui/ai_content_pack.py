@@ -13,7 +13,11 @@ def show_content_pack_view(project, selected_sources=None, analysis=None):
         use_container_width=True,
     ):
         factory = ContentFactory()
-
+         
+        st.warning("DEBUG: AI 콘텐츠 팩 생성 버튼 클릭됨")
+        st.write("project_name:", getattr(project, "product_name", ""))
+        st.write("selected_sources:", selected_sources or [])  
+        
         content_pack = factory.build_content_pack(
             project=project,
             selected_sources=selected_sources or [],
