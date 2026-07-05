@@ -3,6 +3,7 @@ from pathlib import Path
 from datetime import datetime
 
 from modules.video.cut_planner import CutPlanner
+from modules.capcut.export_builder import CapCutExportBuilder
 
 CONTENT_PACK_DIR = Path("exports/content_packs")
 
@@ -121,8 +122,12 @@ class ContentFactory:
                 "AI 컷 추천",
             ],
         }
-
+        
         pack["cut_plan"] = CutPlanner().build(pack)
+
+        pack["capcut_export"] = (
+            CapCutExportBuilder().build(pack)
+        )
 
         return pack
 
