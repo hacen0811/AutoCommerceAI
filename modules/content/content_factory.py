@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 from datetime import datetime
 
+from modules.video.cut_planner import CutPlanner
 
 CONTENT_PACK_DIR = Path("exports/content_packs")
 
@@ -117,8 +118,11 @@ class ContentFactory:
                 "썸네일 가이드",
                 "인포크 이미지 가이드",
                 "CapCut 편집 가이드",
+                "AI 컷 추천",
             ],
         }
+
+        pack["cut_plan"] = CutPlanner().build(pack)
 
         return pack
 
