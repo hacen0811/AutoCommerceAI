@@ -4,6 +4,7 @@ from datetime import datetime
 
 from modules.video.cut_planner import CutPlanner
 from modules.capcut.export_builder import CapCutExportBuilder
+from modules.video.capcut_draft_builder import CapCutDraftBuilder
 
 CONTENT_PACK_DIR = Path("exports/content_packs")
 
@@ -129,6 +130,10 @@ class ContentFactory:
             CapCutExportBuilder().build(pack)
         )
 
+        pack["capcut_draft"] = (
+            CapCutDraftBuilder().build(pack["capcut_export"])
+        )
+        
         return pack
 
     def save_content_pack(self, project, pack):
@@ -147,6 +152,12 @@ class ContentFactory:
             CONTENT_PACK_DIR
             / f"{project_id}_capcut_export_{timestamp}.json"
         )
+
+        capcut_draft_path = (
+            CONTENT_PACK_DIR
+            / f"{project_id}_capcut_draft_{timestamp}.json"
+        )
+
         json_path.write_text(
             json.dumps(pack, ensure_ascii=False, indent=2),
             encoding="utf-8",
@@ -165,11 +176,21 @@ class ContentFactory:
             ),
             encoding="utf-8",
         )
-        
+
+        capcut_draft_path.write_text(
+            json.dumps(
+                pack.get("capcut_draft", {}),
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+
         return {
             "json_path": str(json_path),
             "txt_path": str(txt_path),
             "capcut_export_json_path": str(capcut_export_path),
+            "capcut_draft_json_path": str(capcut_draft_path),
         }
 
     def _build_scene_plan(self, project_name, main_hook):
