@@ -14,9 +14,9 @@ from modules.workflow.job_queue import JobQueue
 from modules.workflow.pipeline_state import PipelineState
 
 from app.ui.render import copybox
-from app.ui.ai_content_pack import show_content_pack_view
 from app.ui.ai_product_analysis import show_ai_product_analysis
 from app.ui.download_center import show_download_center
+from app.ui.pipeline_result import show_pipeline_result
 
 from modules.video.video_path_resolver import VideoPathResolver
 from modules.video.download_utils import latest_downloaded_video
@@ -638,7 +638,31 @@ def show_content_pack_view(project, result=None):
         st.write("해시태그:", " ".join(active_upload.get("hashtags", [])))
 
     with tabs[5]:
-        st.write("DEBUG cut_plan:", pack.get("cut_plan"))
+        st.subheader("✂️ AI 컷 추천 / AI Edit Assistant")
+
+        if not st.checkbox("편집 AI 상세 보기", key=f"show_edit_ai_{safe_project_id(project)}"):
+            st.info("필요할 때만 편집 AI 상세 내용을 열어보세요.")
+        else:
+            cut_plan = pack.get("cut_plan", [])
+
+            if not cut_plan:
+                st.info("아직 AI 컷 추천이 없습니다. AI 콘텐츠 팩을 다시 생성해 주세요.")
+            else:
+                for cut in cut_plan:
+                    with st.container(border=True):
+                        st.markdown(f"#### Scene {cut.get('scene', '-')}")
+                        st.write(f"후보영상: {cut.get('candidate', '-')}")
+                        st.write(f"검색어: {cut.get('query', '-')}")
+                        st.write(f"추천 구간: {cut.get('start', '-')} ~ {cut.get('end', '-')}")
+                        st.write(f"Confidence: {cut.get('confidence', '-')}")
+                        st.write(f"추천 이유: {cut.get('reason', '-')}")
+                        st.write(f"효과음: {cut.get('effect', '-')}")
+                        st.write(f"줌: {cut.get('zoom', '-')}")
+                        st.write(f"자막: {cut.get('subtitle', '-')}")
+                        if cut.get("url"):
+                            st.link_button("후보영상 열기", cut.get("url"), use_container_width=True)
+
+        st.divider()
 
         edit = pack.get("edit_assistant", {})
 
@@ -648,8 +672,7 @@ def show_content_pack_view(project, result=None):
             st.info("아직 편집 AI 데이터가 없습니다.")
         else:
             st.markdown(f"**스타일:** {edit.get('style', '')}")
-            st.markdown(f"**목표:** {edit.get('goal', '')}")
-
+            st.markdown(f"**목표:** {edit.get('goal', '')}")   
             bgm = edit.get("bgm", {})
             st.markdown("### BGM")
             st.write(f"- 타입: {bgm.get('type', '')}")
@@ -699,8 +722,10 @@ def show_content_pack_view(project, result=None):
                 st.checkbox(task, key=f"edit_task_{task}")
 
     with tabs[6]:
-        copybox("AI Content Pack JSON", json.dumps(pack, ensure_ascii=False, indent=2), 420)
-
+            if st.checkbox("전체 JSON 보기", key=f"show_pack_json_{safe_project_id(project)}"):
+                copybox("AI Content Pack JSON", json.dumps(pack, ensure_ascii=False, indent=2), 420)
+            else:
+                st.caption("JSON은 필요할 때만 열어보세요.")
     d1, d2 = st.columns(2)
     with d1:
         show_download_button("AI 콘텐츠 팩 JSON 다운로드", str(content_pack_path(project)), "application/json")
@@ -1056,7 +1081,7 @@ def show_selected_sources(project):
 
     st.caption("현재 순서가 CapCut 내보내기와 TXT 생성 순서의 기준이 됩니다.")
 
-    show_content_pack_view(project)
+    
     show_ai_product_analysis(project, selected)
 
     content_pack_result = st.session_state.get(
@@ -1296,191 +1321,6 @@ def show_content_factory(content_factory):
         for key, value in inpock.items():
             st.write(f"{key}: {value}")
 
-def show_pipeline_result(project, result, path_debug):
-    st.success(result.get("summary"))
-    state = result.get("state", {})
-    outputs = result.get("outputs", {})
-    st.progress(int(state.get("progress", 0)))
-
-    st.subheader("단계별 상태")
-    for step in state.get("steps", []):
-        status = step.get("status")
-        icon = "✅" if status == "done" else "⚠️" if status == "failed" else "□"
-        st.write(f"{icon} {step.get('label')} / {status}")
-
-    if state.get("errors"):
-        st.subheader("오류")
-        for err in state.get("errors", []):
-            st.warning(f"{err.get('step')}: {err.get('error')}")
-            st.caption(f"영상 경로 확인: {path_debug}")
-
-    tab1, tab2, tab3 = st.tabs(["요약", "결과 JSON", "상태 JSON"])
-
-    with tab1:
-        product_plan = outputs.get("product_plan", {})
-        keywords = product_plan.get("keywords", {})
-
-        candidate_selection = (
-            outputs.get("candidate_selection")
-            or state.get("results", {}).get("candidate_selection", {})
-            or {}
-        )
-
-        if candidate_selection and candidate_selection.get("best"):
-            st.divider()
-            st.subheader("🤖 AI 추천 영상 후보")
-
-            best = candidate_selection.get("best", {})
-
-            st.success(
-                f"1순위 후보: {best.get('title', '-')} / "
-                f"AI 점수 {best.get('ai_score', '-')}점 / "
-                f"{best.get('ai_recommendation', '-')}"
-            )
-
-            if best.get("search_url"):
-                st.link_button(
-                    "추천 후보 열기",
-                    best.get("search_url"),
-                    use_container_width=True,
-                )
-
-            top3 = candidate_selection.get("top3", [])
-            if top3:
-                with st.expander("AI 추천 TOP3"):
-                    for item in top3:
-                        st.write(
-                            f"{item.get('rank')}위 | "
-                            f"{item.get('platform')} | "
-                            f"{item.get('title')} | "
-                            f"AI {item.get('ai_score')}점 | "
-                            f"{item.get('ai_recommendation')}"
-                        )
-
-                        reasons = item.get("ai_reasons", [])
-                        if reasons:
-                            st.caption("추천 이유")
-                            for reason in reasons:
-                                st.write(f"✅ {reason}")
-
-                        st.divider()
-
-        show_selected_sources(project)
-
-        video_quality = outputs.get("video_quality") or state.get("results", {}).get("video_quality", {})
-        if video_quality:
-            st.divider()
-            st.subheader("AI 영상 품질 평가")
-
-            if video_quality.get("ok") is False:
-                st.warning(f"영상 품질 평가 실패: {video_quality.get('reason', '알 수 없는 오류')}")
-            else:
-                score = video_quality.get("score")
-                grade = video_quality.get("grade")
-                summary = (
-                    video_quality.get("summary")
-                    or video_quality.get("reason")
-                    or video_quality.get("recommendation")
-                )
-                suitability_score = video_quality.get("suitability_score")
-
-                col1, col2, col3 = st.columns(3)
-
-                with col1:
-                    st.metric("총점", score if score is not None else "-")
-
-                with col2:
-                    st.metric("등급", grade if grade else "-")
-
-                with col3:
-                    st.metric(
-                        "쇼핑쇼츠 적합도",
-                        f"+{suitability_score}" if suitability_score is not None else "-",
-                    )
-
-                if summary:
-                    st.write(summary)
-
-                recommendation = video_quality.get("recommendation")
-                if recommendation:
-                    st.success(f"추천 판단: {recommendation}")
-
-                checks = video_quality.get("checks", [])
-                suitability_checks = video_quality.get("suitability_checks", [])
-
-                if checks or suitability_checks:
-                    with st.expander("품질 평가 기준 보기"):
-                        for item in checks:
-                            st.write(f"✅ {item}")
-                        for item in suitability_checks:
-                            st.write(f"🎯 {item}")
-
-                details = video_quality.get("details")
-                if details:
-                    with st.expander("상세 품질 분석 보기"):
-                        st.json(details)
-
-        live_sources = (
-            outputs.get("video_sources")
-            or outputs.get("live_collection")
-            or state.get("results", {}).get("video_sources", {})
-            or state.get("results", {}).get("live_collection", {})
-            or {}
-        )
-
-        show_live_sources(project, live_sources)
-
-        if keywords:
-            show_search_links(keywords)
-            show_top10(project, "타오바오 TOP10", "taobao", keywords.get("taobao_top10", []))
-        else:
-            st.info("상품 기획 키워드 결과가 없습니다.")
-
-        real_vision = outputs.get("real_vision") or state.get("results", {}).get("real_vision", {})
-        if real_vision:
-            st.divider()
-            st.subheader("Vision")
-            st.write(real_vision.get("summary"))
-
-        capcut_export = outputs.get("capcut_export") or state.get("results", {}).get("capcut_export", {})
-        if capcut_export:
-            st.divider()
-            st.subheader("CapCut 내보내기")
-            st.write(capcut_export)
-
-            json_path = capcut_export.get("json")
-            txt_path = capcut_export.get("txt")
-
-            d1, d2 = st.columns(2)
-
-            with d1:
-                show_download_button("CapCut JSON 다운로드", json_path, "application/json")
-
-            with d2:
-                show_download_button("CapCut TXT 다운로드", txt_path, "text/plain")
-
-        content_factory = (
-            outputs.get("content_factory")
-            or result.get("content_factory")
-            or state.get("results", {}).get("content_factory", {})
-            or {}
-        )
-        show_content_factory(content_factory)
-
-    with tab2:
-        copybox(
-            "One Click Result",
-            json.dumps(result, ensure_ascii=False, indent=2),
-            520,
-        )
-
-    with tab3:
-        copybox(
-            "Pipeline State",
-            json.dumps(state, ensure_ascii=False, indent=2),
-            420,
-        )
-
 def show_one_click_pipeline():
     st.title("⚡ 원클릭 파이프라인")
     st.caption("상품 계획 → 소스 영상 → Vision 분석 → CapCut → 콘텐츠 생성까지 한 번에 실행합니다.")
@@ -1503,6 +1343,8 @@ def show_one_click_pipeline():
     result_key = f"one_click_result_{project_safe_id}"
     result_dir = Path("exports/one_click_results")
     result_path = result_dir / f"{project_safe_id}_latest_result.json"
+
+
 
     def save_result(result):
         result_dir.mkdir(parents=True, exist_ok=True)
@@ -1556,6 +1398,8 @@ def show_one_click_pipeline():
 
     if result:
         show_pipeline_result(project, result, path_debug)
+        show_content_pack_view(project, result)
+
     else:
         st.info("원클릭 결과가 아직 없습니다. 먼저 원클릭 실행을 완료해 주세요.")
 
@@ -1572,4 +1416,6 @@ def show_one_click_pipeline():
     st.subheader("최근 Pipeline 상태")
     for f in PipelineState().list_recent(10):
         st.write(f"• {f.name}")
-       
+
+if __name__ == "__main__":
+    show_one_click_pipeline()      

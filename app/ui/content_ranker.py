@@ -70,9 +70,9 @@ def apply_selected_variant(self, content_pack):
 
     content_pack["selected_variant"] = selected_variant
 
-    title = selected_variant.get("title", "")
-    hook = selected_variant.get("hook", "")
-    cta = selected_variant.get("cta", "")
+    title = active_content.get("title", "")
+    hook = active_content.get("hook", "")
+    cta = active_content.get("cta", "")
 
     if title:
         content_pack.setdefault("upload", {})

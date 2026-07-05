@@ -13,6 +13,7 @@ from modules.video.video_path_resolver import VideoPathResolver
 from modules.studio.video_sourcing_engine import VideoSourcingEngine
 from modules.video.video_quality_engine import VideoQualityEngine
 from modules.video.video_candidate_selector import VideoCandidateSelector
+from modules.video.cut_planner import CutPlanner
 from modules.project.repository import ProjectRepository
 from modules.video.download_utils import (
     latest_downloaded_video,
