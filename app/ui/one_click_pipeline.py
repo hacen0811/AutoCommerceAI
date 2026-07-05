@@ -8,6 +8,12 @@ from urllib.parse import quote_plus
 
 import streamlit as st
 
+from app.utils.project_keys import (
+    safe_project_id,
+    selected_session_key,
+    selected_notice_key,
+)
+
 from modules.project.project_selector import ProjectSelector
 from modules.workflow.workflow_engine import WorkflowEngine
 from modules.workflow.job_queue import JobQueue
@@ -58,12 +64,6 @@ def read_json(path, default=None):
 def write_json(path, data):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-
-
-def safe_project_id(project):
-    """Return a filesystem/session safe project id without changing the project itself."""
-    raw_id = str(getattr(project, "id", "") or "unknown_project")
-    return re.sub(r"[^0-9A-Za-z가-힣._-]+", "_", raw_id).strip("_") or "unknown_project"
 
 
 def selected_sources_path(project):
@@ -781,14 +781,6 @@ def open_with_login_browser(url):
         ]
     )
     return True
-
-def selected_session_key(project):
-    return f"selected_sources_{safe_project_id(project)}"
-
-
-def selected_notice_key(project):
-    return f"selected_sources_notice_{safe_project_id(project)}"
-
 
 def init_selected_sources(project, force_reload=False):
     key = selected_session_key(project)
