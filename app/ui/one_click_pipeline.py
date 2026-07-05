@@ -21,6 +21,8 @@ from app.ui.download_center import show_download_center
 from modules.video.video_path_resolver import VideoPathResolver
 from modules.video.download_utils import latest_downloaded_video
 from modules.project.repository import ProjectRepository
+from modules.content.content_factory import ContentFactory
+from modules.video.cut_planner import CutPlanner
 
 from app.ui.product_analyzer import analyze_product
 from app.ui.hook_generator import generate_hooks
@@ -488,7 +490,12 @@ def show_content_pack_view(project, result=None):
         use_container_width=True,
     ):
         pack = build_ai_content_pack(project, selected, result)
-        paths = save_content_pack(project, pack)
+
+        pack = ContentFactory().apply_edit_assistant(pack)
+
+        pack["cut_plan"] = CutPlanner().build(pack)
+
+        paths = ContentFactory().save_content_pack(project, pack)
 
         st.session_state[f"content_pack_{safe_project_id(project)}"] = pack
         st.session_state[f"ai_content_pack_export_{project.id}"] = paths
@@ -513,7 +520,15 @@ def show_content_pack_view(project, result=None):
         or {}
     )
 
-    tabs = st.tabs(["쇼츠", "CapCut", "썸네일", "인포크", "업로드", "JSON"])
+    tabs = st.tabs([
+        "쇼츠",
+        "CapCut",
+        "썸네일",
+        "인포크",
+        "업로드",
+        "편집 AI",
+        "JSON",
+])
 
     with tabs[0]:
         if active_content:
@@ -623,6 +638,67 @@ def show_content_pack_view(project, result=None):
         st.write("해시태그:", " ".join(active_upload.get("hashtags", [])))
 
     with tabs[5]:
+        st.write("DEBUG cut_plan:", pack.get("cut_plan"))
+
+        edit = pack.get("edit_assistant", {})
+
+        st.subheader("🎬 AI Edit Assistant")
+
+        if not edit:
+            st.info("아직 편집 AI 데이터가 없습니다.")
+        else:
+            st.markdown(f"**스타일:** {edit.get('style', '')}")
+            st.markdown(f"**목표:** {edit.get('goal', '')}")
+
+            bgm = edit.get("bgm", {})
+            st.markdown("### BGM")
+            st.write(f"- 타입: {bgm.get('type', '')}")
+            st.write(f"- 볼륨: {bgm.get('volume', '')}")
+
+            subtitle = edit.get("subtitle", {})
+            st.markdown("### 자막 프리셋")
+            st.write(f"- 폰트: {subtitle.get('font', '')}")
+            st.write(f"- 크기: {subtitle.get('size', '')}")
+            st.write(f"- 색상: {subtitle.get('color', '')}")
+            st.write(f"- 강조색: {subtitle.get('highlight', '')}")
+            st.write(f"- 획: {subtitle.get('stroke', '')}")
+            st.write(f"- 위치: {subtitle.get('position', '')}")
+            st.write(f"- 애니메이션: {subtitle.get('animation', '')}")
+
+            st.markdown("### 장면별 편집 지시서")
+            for i, item in enumerate(edit.get("timeline", []), start=1):
+                with st.container(border=True):
+                    st.markdown(f"#### Scene {i}")
+                    st.write(f"컷: {item.get('cut', '')}")
+                    st.write(f"줌: {item.get('zoom', '')}")
+                    st.write(f"자막 위치: {item.get('subtitle_position', '')}")
+                    st.write(f"자막 애니메이션: {item.get('subtitle_animation', '')}")
+                    st.write(f"효과음: {item.get('sfx', '')}")
+                    st.write(f"BGM 볼륨: {item.get('bgm_volume', '')}")
+
+            st.markdown("### CTA")
+            st.write(edit.get("cta", ""))
+            st.markdown("---")
+            st.subheader("✅ 편집 체크리스트")
+
+            tasks = [
+                "컷 편집 완료",
+                "자동 자막 생성",
+                "자막 수정",
+                "강조색 적용",
+                "효과음 적용",
+                "BGM 적용",
+                "CTA 확인",
+                "썸네일 저장",
+                "인포크 저장",
+                "영상 내보내기",
+                "업로드",
+            ]
+
+            for task in tasks:
+                st.checkbox(task, key=f"edit_task_{task}")
+
+    with tabs[6]:
         copybox("AI Content Pack JSON", json.dumps(pack, ensure_ascii=False, indent=2), 420)
 
     d1, d2 = st.columns(2)

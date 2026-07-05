@@ -279,6 +279,7 @@ class ContentFactory:
             )
 
             data = self.apply_selected_variant(data)
+            data = self.apply_edit_assistant(data)
             return data
 
         data = self._fallback_content_pack(
@@ -294,6 +295,7 @@ class ContentFactory:
         )
 
         data = self.apply_selected_variant(data)
+        data = self.apply_edit_assistant(data)
         return data
 
     def apply_selected_variant(self, content_pack):
@@ -336,6 +338,51 @@ class ContentFactory:
                 content_pack["upload"]["instagram_body"] = (
                     instagram_body.rstrip() + "\n\n" + cta
                 )
+
+        return content_pack
+    
+    def apply_edit_assistant(self, content_pack):
+        selected = content_pack.get("selected_variant") or {}
+        variant_type = selected.get("type", "공감형")
+        script = selected.get("script", "")
+        cta = selected.get("cta", "")
+
+        capcut_items = selected.get("capcut") or []
+        timeline = []
+
+        if capcut_items:
+            for item in capcut_items:
+                timeline.append(
+                    {
+                        "cut": item,
+                        "zoom": "108%",
+                        "subtitle_position": "중앙 하단 40%",
+                        "subtitle_animation": "바운스",
+                        "sfx": "Pop / Whoosh / Click 중 선택",
+                        "bgm_volume": "12~22%",
+                    }
+                )
+
+        content_pack["edit_assistant"] = {
+            "style": variant_type,
+            "goal": "CapCut 편집 시간을 줄이기 위한 장면별 편집 지시서",
+            "bgm": {
+                "type": "밝고 경쾌한 생활템 BGM",
+                "volume": "12~22%",
+            },
+            "subtitle": {
+                "font": "Pretendard Bold",
+                "size": 58,
+                "color": "white",
+                "highlight": "#FFD54F",
+                "stroke": 70,
+                "position": "중앙 하단 40%",
+                "animation": "바운스",
+            },
+            "timeline": timeline,
+            "cta": cta,
+            "script_reference": script,
+        }
 
         return content_pack
 
@@ -447,9 +494,6 @@ class ContentFactory:
             "data": content_pack,
         }
     
-    
-
-
     def to_text(self, content_pack):
         lines = []
 

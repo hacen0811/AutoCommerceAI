@@ -1,75 +1,110 @@
-import streamlit as st
 from pathlib import Path
 
+import streamlit as st
 
-def show_download_button(label, file_path, mime):
+
+def show_download_button(label, file_path, mime="text/plain"):
     if not file_path:
         return
 
     path = Path(file_path)
 
     if not path.exists():
+        st.caption(f"{label} 파일을 찾을 수 없습니다.\n{file_path}")
         return
 
-    with open(path, "rb") as f:
-        st.download_button(
-            label=label,
-            data=f,
-            file_name=path.name,
-            mime=mime,
-            use_container_width=True,
-        )
+    st.download_button(
+        label=label,
+        data=path.read_bytes(),
+        file_name=path.name,
+        mime=mime,
+        use_container_width=True,
+    )
 
 
-def show_download_center(content_pack):
-    st.subheader("다운로드 센터")
+def show_download_center(content_pack_result):
+    st.divider()
+    st.subheader("📁 다운로드 센터")
 
-    col1, col2 = st.columns(2)
+    if not content_pack_result:
+        st.info("아직 생성된 콘텐츠 팩이 없습니다.")
+        return
 
-    with col1:
+    # json / txt 모두 지원
+    json_path = (
+        content_pack_result.get("json_path")
+        or content_pack_result.get("json")
+    )
+
+    txt_path = (
+        content_pack_result.get("txt_path")
+        or content_pack_result.get("txt")
+    )
+
+    capcut_edit_path = (
+        content_pack_result.get("capcut_edit_txt_path")
+        or content_pack_result.get("capcut_edit_txt")
+    )
+
+    thumbnail_prompt_path = (
+        content_pack_result.get("thumbnail_prompt_txt_path")
+        or content_pack_result.get("thumbnail_prompt_txt")
+    )
+
+    inpock_prompt_path = (
+        content_pack_result.get("inpock_prompt_txt_path")
+        or content_pack_result.get("inpock_prompt_txt")
+    )
+
+    upload_path = (
+        content_pack_result.get("upload_txt_path")
+        or content_pack_result.get("upload_txt")
+    )
+
+    st.markdown("### AI 콘텐츠 팩")
+
+    c1, c2 = st.columns(2)
+
+    with c1:
         show_download_button(
-            "AI 콘텐츠팩 JSON",
-            content_pack.get("json_path"),
+            "AI 콘텐츠팩 JSON 다운로드",
+            json_path,
             "application/json",
         )
 
-    with col2:
+    with c2:
         show_download_button(
-            "AI 콘텐츠팩 TXT",
-            content_pack.get("txt_path"),
+            "AI 콘텐츠팩 TXT 다운로드",
+            txt_path,
             "text/plain",
         )
 
-    st.divider()
+    st.markdown("### 제작 보조 TXT")
 
-    col1, col2 = st.columns(2)
+    c1, c2 = st.columns(2)
 
-    with col1:
+    with c1:
         show_download_button(
-            "CapCut 편집 TXT",
-            content_pack.get("capcut_edit_txt_path"),
-            "text/plain",
+            "CapCut 편집 TXT 다운로드",
+            capcut_edit_path,
         )
 
-    with col2:
+    with c2:
         show_download_button(
-            "썸네일 Prompt TXT",
-            content_pack.get("thumbnail_prompt_txt_path"),
-            "text/plain",
+            "썸네일 Prompt TXT 다운로드",
+            thumbnail_prompt_path,
         )
 
-    col1, col2 = st.columns(2)
+    c3, c4 = st.columns(2)
 
-    with col1:
+    with c3:
         show_download_button(
-            "인포크 Prompt TXT",
-            content_pack.get("inpock_prompt_txt_path"),
-            "text/plain",
+            "인포크 Prompt TXT 다운로드",
+            inpock_prompt_path,
         )
 
-    with col2:
+    with c4:
         show_download_button(
-            "업로드 문구 TXT",
-            content_pack.get("upload_txt_path"),
-            "text/plain",
+            "업로드 문구 TXT 다운로드",
+            upload_path,
         )

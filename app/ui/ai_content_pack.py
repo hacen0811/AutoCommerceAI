@@ -2,6 +2,7 @@ import streamlit as st
 
 from modules.content.content_factory import ContentFactory
 
+from modules.video.cut_planner import CutPlanner
 
 def _get_selected_variant(data):
     variants = data.get("shorts_variants", [])
@@ -43,6 +44,8 @@ def show_content_pack_view(project, selected_sources=None, analysis=None):
             analysis=analysis,
         )
 
+        content_pack["cut_plan"] = CutPlanner().build(content_pack)
+
         saved = factory.save_content_pack(project, content_pack)
         st.session_state[f"ai_content_pack_result_{project.id}"] = saved
         st.success("AI 콘텐츠 팩을 생성했습니다.")
@@ -56,6 +59,7 @@ def show_content_pack_view(project, selected_sources=None, analysis=None):
     data = saved.get("data", {})
     selected = _get_selected_variant(data)
 
+    st.write("DEBUG cut_plan:", data.get("cut_plan"))
     st.markdown("### 상품 분석")
     analysis_data = data.get("analysis", {})
     if analysis_data.get("summary"):
