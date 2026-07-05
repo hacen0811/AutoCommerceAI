@@ -28,7 +28,6 @@ from modules.video.video_path_resolver import VideoPathResolver
 from modules.video.download_utils import latest_downloaded_video
 from modules.project.repository import ProjectRepository
 from modules.content.content_factory import ContentFactory
-from modules.video.cut_planner import CutPlanner
 
 from app.ui.product_analyzer import analyze_product
 from app.ui.hook_generator import generate_hooks
@@ -492,11 +491,8 @@ def show_content_pack_view(project, result=None):
         pack = build_ai_content_pack(project, selected, result)
 
         pack = ContentFactory().apply_edit_assistant(pack)
-
-        pack["cut_plan"] = CutPlanner().build(pack)
-
+        
         paths = ContentFactory().save_content_pack(project, pack)
-
         st.session_state[f"content_pack_{safe_project_id(project)}"] = pack
         st.session_state[f"ai_content_pack_export_{project.id}"] = paths
 
@@ -1409,5 +1405,8 @@ def show_one_click_pipeline():
     for f in PipelineState().list_recent(10):
         st.write(f"• {f.name}")
 
+from app.pages.pipeline_page import show_pipeline_page
+
+
 if __name__ == "__main__":
-    show_one_click_pipeline()      
+    show_pipeline_page()     

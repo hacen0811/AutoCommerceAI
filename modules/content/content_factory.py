@@ -143,6 +143,10 @@ class ContentFactory:
         json_path = CONTENT_PACK_DIR / f"{project_id}_content_pack_{timestamp}.json"
         txt_path = CONTENT_PACK_DIR / f"{project_id}_content_pack_{timestamp}.txt"
 
+        capcut_export_path = (
+            CONTENT_PACK_DIR
+            / f"{project_id}_capcut_export_{timestamp}.json"
+        )
         json_path.write_text(
             json.dumps(pack, ensure_ascii=False, indent=2),
             encoding="utf-8",
@@ -153,9 +157,19 @@ class ContentFactory:
             encoding="utf-8",
         )
 
+        capcut_export_path.write_text(
+            json.dumps(
+                pack.get("capcut_export", {}),
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        
         return {
             "json_path": str(json_path),
             "txt_path": str(txt_path),
+            "capcut_export_json_path": str(capcut_export_path),
         }
 
     def _build_scene_plan(self, project_name, main_hook):

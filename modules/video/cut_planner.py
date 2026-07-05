@@ -49,6 +49,7 @@ class CutPlanner:
 
             plans.append(
                 {
+                    "planner_version": "sprint31-cutplanner-3.0",
                     "scene": idx,
                     "purpose": self._scene_purpose(idx),
                     "candidate": candidate.get("platform", "현재 연결 영상"),

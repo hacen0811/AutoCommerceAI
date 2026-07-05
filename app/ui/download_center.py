@@ -61,6 +61,11 @@ def show_download_center(content_pack_result):
         or content_pack_result.get("upload_txt")
     )
 
+    capcut_export_path = (
+        content_pack_result.get("capcut_export_json_path")
+        or content_pack_result.get("capcut_export_json")
+    )
+
     st.markdown("### AI 콘텐츠 팩")
 
     c1, c2 = st.columns(2)
@@ -78,6 +83,13 @@ def show_download_center(content_pack_result):
             txt_path,
             "text/plain",
         )
+    st.markdown("### CapCut Export")
+
+    show_download_button(
+        "CapCut Export JSON 다운로드",
+        capcut_export_path,
+        "application/json",
+    )        
 
     st.markdown("### 제작 보조 TXT")
 
