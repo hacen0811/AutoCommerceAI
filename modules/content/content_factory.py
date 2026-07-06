@@ -5,6 +5,7 @@ from datetime import datetime
 from modules.video.cut_planner import CutPlanner
 from modules.capcut.export_builder import CapCutExportBuilder
 from modules.video.capcut_draft_builder import CapCutDraftBuilder
+from modules.capcut.project_builder import CapCutProjectBuilder
 
 CONTENT_PACK_DIR = Path("exports/content_packs")
 
@@ -138,8 +139,8 @@ class ContentFactory:
 
     def save_content_pack(self, project, pack):
         """
-        콘텐츠 팩을 JSON/TXT 파일로 저장합니다.
-        기존 download_center와 호환되도록 json_path, txt_path를 반환합니다.
+        콘텐츠 팩을 JSON/TXT/CapCut 파일로 저장합니다.
+        다운로드 센터와 호환되도록 경로 정보를 반환합니다.
         """
 
         project_id = self._safe_project_id(project)
@@ -167,7 +168,7 @@ class ContentFactory:
             self._to_text(pack),
             encoding="utf-8",
         )
-
+    
         capcut_export_path.write_text(
             json.dumps(
                 pack.get("capcut_export", {}),
@@ -186,19 +187,28 @@ class ContentFactory:
             encoding="utf-8",
         )
 
+        project_paths = {}
+
+        if pack.get("capcut_draft"):
+            project_paths = CapCutProjectBuilder().build(
+                project,
+                pack["capcut_draft"],
+            )
+
         return {
             "json_path": str(json_path),
             "txt_path": str(txt_path),
 
-            # 다운로드 센터 호환 키
             "capcut_path": str(capcut_export_path),
             "capcut_export_path": str(capcut_export_path),
+
             "draft_path": str(capcut_draft_path),
             "capcut_draft_path": str(capcut_draft_path),
 
-            # 기존 키도 유지
             "capcut_export_json_path": str(capcut_export_path),
-            "capcut_draft_json_path": str(capcut_draft_path),
+        "capcut_draft_json_path": str(capcut_draft_path),
+    
+            **project_paths,
         }
 
     def _build_scene_plan(self, project_name, main_hook):
