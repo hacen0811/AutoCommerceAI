@@ -5,7 +5,7 @@ from modules.product.product_engine import ProductEngine
 from modules.source.source_video_engine import SourceVideoEngine
 from modules.source.video_ranker import SourceVideoRanker
 from modules.pipeline.real_vision_runner import RealVisionRunner
-from modules.ai.content_factory import ContentFactory
+from modules.content.content_factory import ContentFactory
 from modules.editor.auto_editor_engine import AutoEditorEngine
 from modules.editor.capcut_project_exporter import CapCutProjectExporter
 from modules.workflow.pipeline_state import PipelineState
@@ -299,13 +299,14 @@ class WorkflowEngine:
 
         # 6. Content Factory
         try:
-            content = ContentFactory().build(project)
+            content = {}
             outputs["content_factory"] = content
+
             state.update_step(
                 job_id,
                 "content_factory",
                 "done",
-                {"sections": list(content.keys())},
+                {"message": "AI 콘텐츠 팩은 UI 버튼에서 생성합니다."},
             )
         except Exception as exc:
             content = {}

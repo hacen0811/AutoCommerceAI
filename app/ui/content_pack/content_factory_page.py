@@ -1,9 +1,9 @@
 import json
 import streamlit as st
 
-from modules.project.repository import ProjectRepository
 from modules.project.project_selector import ProjectSelector
 from modules.content.content_factory import ContentFactory
+from app.ui.render import copybox
 
 
 def show_content_factory():
@@ -49,4 +49,9 @@ def show_content_factory():
         with tab4:
             for k, v in bundle.get("upload_bundle", {}).items():
                 copybox(k, v, 120)
-            copybox("전체 JSON", json.dumps(bundle, ensure_ascii=False, indent=2), 420)
+
+            copybox(
+                "전체 JSON",
+                json.dumps(bundle, ensure_ascii=False, indent=2),
+                420,
+            )

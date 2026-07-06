@@ -9,7 +9,7 @@ from app.ui.product_ai import show_product_ai
 from app.ui.video import show_video
 from app.ui.source_video_ai import show_source_video_ai
 from app.ui.auto_editor import show_auto_editor
-from app.ui.content_factory import show_content_factory
+from app.ui.content_pack.content_factory_page import show_content_factory
 from app.ui.capcut_export import show_capcut_export
 from app.ui.yolo_ai import show_yolo_ai
 from app.ui.object_ai import show_object_ai

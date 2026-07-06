@@ -1,7 +1,7 @@
-from app.ui.product_analyzer import analyze_product
-from app.ui.hook_generator import generate_hooks
-from app.ui.content_variant_generator import generate_content_variants
-from app.ui.content_ranker import rank_content_variants
+from modules.content.product_analyzer import analyze_product
+from modules.content.hook_generator import generate_hooks
+from modules.content.content_variant_generator import generate_content_variants
+from modules.content.content_ranker import rank_content_variants
 
 
 def normalize_text(value, default=""):
