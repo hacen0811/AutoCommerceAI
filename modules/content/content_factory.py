@@ -189,6 +189,14 @@ class ContentFactory:
         return {
             "json_path": str(json_path),
             "txt_path": str(txt_path),
+
+            # 다운로드 센터 호환 키
+            "capcut_path": str(capcut_export_path),
+            "capcut_export_path": str(capcut_export_path),
+            "draft_path": str(capcut_draft_path),
+            "capcut_draft_path": str(capcut_draft_path),
+
+            # 기존 키도 유지
             "capcut_export_json_path": str(capcut_export_path),
             "capcut_draft_json_path": str(capcut_draft_path),
         }
