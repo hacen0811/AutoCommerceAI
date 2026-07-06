@@ -1,6 +1,7 @@
 import streamlit as st
 
 from modules.content.content_factory import ContentFactory
+from modules.content.content_pack_service import build_ai_content_pack
 
 from app.ui.content_pack.tab_summary import show_summary_tab
 from app.ui.content_pack.tab_scripts import show_shorts_tab

@@ -39,15 +39,6 @@ RESULT_DIR = Path("exports/one_click_results")
 CONTENT_PACK_DIR = Path("exports/content_packs")
 
 
-def read_file_text(path):
-    try:
-        p = Path(path)
-        if p.exists():
-            return p.read_text(encoding="utf-8")
-    except Exception:
-        return ""
-    return ""
-
 
 def read_json(path, default=None):
     try:
