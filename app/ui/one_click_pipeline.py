@@ -24,6 +24,7 @@ from app.ui.ai_product_analysis import show_ai_product_analysis
 from app.ui.download_center import show_download_center
 from app.ui.pipeline_result import show_pipeline_result
 from app.ui.content_pack.content_pack_view import show_content_pack_view as show_content_pack_view_new
+from app.ui.candidate_card import show_candidate_card
 
 from modules.video.video_path_resolver import VideoPathResolver
 from modules.video.download_utils import latest_downloaded_video
@@ -480,24 +481,6 @@ def pipeline_result_session_key(project):
     return f"one_click_pipeline_result_{safe_project_id(project)}"
 
 
-def show_download_button(label, path, mime="text/plain"):
-    if not path:
-        return
-
-    file_text = read_file_text(path)
-
-    if file_text:
-        st.download_button(
-            label=label,
-            data=file_text,
-            file_name=Path(path).name,
-            mime=mime,
-            use_container_width=True,
-        )
-    else:
-        st.caption(f"{label} 파일을 찾을 수 없습니다: {path}")
-
-
 def make_search_url(platform, query):
     encoded = quote_plus(query or "")
 
@@ -637,55 +620,6 @@ def latest_downloaded_video(max_age_minutes=240):
     return latest
 
  
-def show_candidate_card(project, platform, item):
-    query = item.get("query", "")
-    rank = item.get("rank", "")
-    purpose = item.get("purpose", "")
-    score = item.get("score", "")
-    url = make_search_url(platform, query)
-    key_prefix = f"select_{safe_project_id(project)}_{platform}_{rank}_{query}"
-
-    with st.container(border=True):
-        st.markdown(f"### {rank}위 · {platform.upper()}")
-        st.markdown(f"**검색어:** {query}")
-        st.markdown(f"**목적:** {purpose}")
-        st.markdown(f"**추천 점수:** ⭐ {score}점")
-
-        b1, b2 = st.columns(2)
-
-        with b1:
-            if url:
-                if st.button(
-                    "검색 열기",
-                    key=f"search_{platform}_{rank}_{query}",
-                    use_container_width=True,
-                ):
-                    open_with_login_browser(url)
-                    st.success("Playwright 로그인 브라우저로 열었습니다.")
-
-        with b2:
-            if st.button(
-                 "이 후보 채택",
-                 key=key_prefix,
-                 use_container_width=True,
-):
-                 added = select_source(project, platform, item, url)
-
-                 if added:
-                     st.success("후보를 채택하고 저장했습니다.")
-                 else:
-                     st.info("이미 채택한 후보입니다.")
-
-def show_top10(project, title, platform, items):
-    if not items:
-        return
-
-    st.markdown(f"## {title}")
-
-    for item in items:
-        if isinstance(item, dict):
-            show_candidate_card(project, platform, item)
-
 def show_top10(project, title, platform, items):
     if not items:
         return
