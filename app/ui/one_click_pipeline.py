@@ -19,17 +19,14 @@ from modules.workflow.workflow_engine import WorkflowEngine
 from modules.workflow.job_queue import JobQueue
 from modules.workflow.pipeline_state import PipelineState
 
-from app.ui.render import copybox
-from app.ui.ai_product_analysis import show_ai_product_analysis
-from app.ui.download_center import show_download_center
 from app.ui.pipeline_result import show_pipeline_result
 from app.ui.content_pack.content_pack_view import show_content_pack_view as show_content_pack_view_new
 from app.ui.candidate_card import show_candidate_card
+from app.ui.download_connect import open_with_login_browser
 
 from modules.video.video_path_resolver import VideoPathResolver
 from modules.video.download_utils import latest_downloaded_video
 from modules.project.repository import ProjectRepository
-from modules.content.content_factory import ContentFactory
 
 from app.ui.product_analyzer import analyze_product
 from app.ui.hook_generator import generate_hooks
@@ -280,121 +277,6 @@ def build_capcut_timeline(product_name, hooks, profile):
             "capcut": "CTA 하단 고정 / 자막 테두리 70 / BGM 22%",
         },
     ]
-
-
-def build_ai_content_pack(project, selected_sources, latest_result=None):
-    """
-    Sprint 22 stable content pack.
-    대표 콘텐츠는 shorts_variants의 recommended=True 항목을 우선 사용합니다.
-    """
-    latest_result = latest_result or {}
-    selected_sources = [s for s in (selected_sources or []) if isinstance(s, dict)]
-    primary = selected_sources[0] if selected_sources else {}
-
-    project_name = normalize_text(
-        getattr(project, "product_name", "") or getattr(project, "title", ""),
-        "선택 상품",
-    )
-
-    source_query = normalize_text(
-        primary.get("query") or primary.get("title") or project_name,
-        project_name,
-    )
-
-    content_product_name = project_name
-    source_url = normalize_text(primary.get("url"), "")
-    platform = normalize_text(primary.get("platform"), "source")
-
-    profile = analyze_product(content_product_name, source_query)
-    hook_groups = generate_hooks(content_product_name, profile)
-
-    hooks = build_hooks(content_product_name, profile)
-    script = build_script(content_product_name, profile)
-    capcut_timeline = build_capcut_timeline(content_product_name, hooks, profile)
-
-    shorts_variants = generate_content_variants(
-        content_product_name,
-        profile,
-        hook_groups,
-    )
-
-    shorts_variants = rank_content_variants(
-        profile,
-        shorts_variants,
-    )
-
-    selected_variant = None
-    if shorts_variants:
-        selected_variant = next(
-            (v for v in shorts_variants if v.get("recommended")),
-            shorts_variants[0],
-        )
-
-    active_content = selected_variant or {
-        "title": f"{content_product_name}, 왜 이제 알았지?",
-        "hook": hooks[0] if hooks else "왜 이제 알았지?",
-        "script": script,
-        "cta": f"댓글에 '{profile.get('keyword', '제품')}' 남겨주세요 👇",
-        "capcut": capcut_timeline,
-    }
-
-    pack = {
-        "version": "sprint-22-selected-variant-sync",
-        "project_id": getattr(project, "id", ""),
-        "project_name": content_product_name,
-        "primary_source": primary,
-        "selected_sources": selected_sources,
-        "selected_variant": active_content,
-        "content_strategy": {
-            "main_angle": "실전 쇼핑쇼츠 문제 해결형",
-            "structure": "Hook → Problem → Solution → Benefit → CTA",
-            "target": "생활 속 불편을 빠르게 해결하고 싶은 사용자",
-            "selling_points": profile.get("features", []),
-            "recommended_format": "40~50초 쇼츠 / 릴스",
-        },
-        "shorts": {
-            "titles": [
-                f"{content_product_name}, 왜 이제 알았지?",
-                f"불편함 줄여주는 {content_product_name}",
-                f"생활이 편해지는 추천템 {content_product_name}",
-            ],
-            "thumbnail_phrases": [
-                "왜 이제 알았지?",
-                "이거 하나로 끝",
-                "생활이 편해집니다",
-            ],
-            "hooks": hooks,
-            "hook_groups": hook_groups,
-            "script": script,
-            "cta": f"댓글에 '{profile.get('keyword', '제품')}' 남겨주세요 👇",
-            "capcut_timeline": capcut_timeline,
-        },
-        "shorts_variants": shorts_variants,
-        "thumbnail": {
-            "size": "9:16",
-            "main_text": active_content.get("hook", "왜 이제 알았지?"),
-            "sub_text": content_product_name,
-            "layout": "제품 크게 + 왼쪽 상단 후킹 문구 + 하단 짧은 설명",
-            "image_prompt": f"9:16 vertical shopping shorts thumbnail, clean Korean ecommerce style, product concept: {content_product_name}, bright home background, large bold Korean text area, realistic product-focused composition",
-        },
-        "inpock": {
-            "size": "1000x1000",
-            "title": content_product_name,
-            "main_text": active_content.get("hook", "생활이 편해지는 추천템"),
-            "sub_text": "제품 정보는 링크에서 확인",
-            "image_prompt": f"1000x1000 square product promo image for Inpock link page, clean Korean shopping design, product concept: {content_product_name}, white background, neat layout, space for Korean title text",
-        },
-        "upload_bundle": {
-            "youtube_title": active_content.get("title", f"{content_product_name} 추천템 #shorts"),
-            "youtube_desc": "🔗 제품 정보는 영상 아래 설명란 링크 또는 프로필 링크를 확인해주세요.\n\n쿠팡파트너스 활동을 통해 일정액의 수수료를 제공받을 수 있습니다.",
-            "instagram_body": f"왜 이제 알았지 싶은 생활템 ✨\n\n{content_product_name}처럼 매일 쓰는 제품은 작은 차이가 크게 느껴지더라고요.\n\n제품 정보가 궁금하시면 댓글에 '{profile.get('keyword', '제품')}' 남겨주세요 👇",
-            "hashtags": ["#쇼핑쇼츠", "#생활용품추천", "#살림템", "#쿠팡추천", "#shorts", "#릴스"],
-            "source_url": source_url,
-            "platform": platform,
-        },
-    }
-    return pack
-
 
 def content_pack_to_txt(pack):
     shorts = pack.get("shorts", {})
