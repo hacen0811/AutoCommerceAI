@@ -7,15 +7,32 @@ def show_thumbnail_tab(pack):
     thumbnail = pack.get("thumbnail", {})
     inpock = pack.get("inpock", {})
     edit = pack.get("edit_assistant", {})
+    shorts_variants = pack.get("shorts_variants", [])
+
+    active_content = (
+        pack.get("selected_variant")
+        or next((v for v in shorts_variants if v.get("recommended")), None)
+        or (shorts_variants[0] if shorts_variants else {})
+        or {}
+    )
+
+    project_name = (
+        pack.get("project_name")
+        or pack.get("product_name")
+        or "선택 상품"
+    )
 
     thumbnail_guide = edit.get("thumbnail_guide", {})
     inpock_guide = edit.get("inpock_guide", {})
+
+    active_hook = active_content.get("hook", "")
 
     st.markdown("### 쇼츠 썸네일 9:16")
 
     copybox(
         "메인 문구",
-        thumbnail.get("main_text")
+        active_hook
+        or thumbnail.get("main_text")
         or thumbnail_guide.get("main_text")
         or "왜 이제 알았지?",
     )
@@ -24,7 +41,7 @@ def show_thumbnail_tab(pack):
         "서브 문구",
         thumbnail.get("sub_text")
         or thumbnail_guide.get("sub_text")
-        or pack.get("project_name", "선택 상품"),
+        or project_name,
     )
 
     copybox(
@@ -39,18 +56,21 @@ def show_thumbnail_tab(pack):
         thumbnail.get("image_prompt", ""),
     )
 
+    st.divider()
+
     st.markdown("### 인포크 이미지 1000×1000")
 
     copybox(
         "타이틀",
         inpock.get("title")
         or inpock_guide.get("title")
-        or pack.get("project_name", "선택 상품"),
+        or project_name,
     )
 
     copybox(
         "메인 문구",
-        inpock.get("main_text")
+        active_hook
+        or inpock.get("main_text")
         or inpock_guide.get("main_text")
         or "생활이 편해지는 추천템",
     )
@@ -66,3 +86,6 @@ def show_thumbnail_tab(pack):
         "이미지 프롬프트",
         inpock.get("image_prompt", ""),
     )
+
+
+

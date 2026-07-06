@@ -23,6 +23,7 @@ from app.ui.render import copybox
 from app.ui.ai_product_analysis import show_ai_product_analysis
 from app.ui.download_center import show_download_center
 from app.ui.pipeline_result import show_pipeline_result
+from app.ui.content_pack.content_pack_view import show_content_pack_view as show_content_pack_view_new
 
 from modules.video.video_path_resolver import VideoPathResolver
 from modules.video.download_utils import latest_downloaded_video
@@ -111,6 +112,12 @@ def save_latest_result(project, result):
 def content_pack_path(project):
     return CONTENT_PACK_DIR / f"{safe_project_id(project)}_content_pack.json"
 
+def capcut_export_path(project):
+    return CONTENT_PACK_DIR / f"{safe_project_id(project)}_capcut_export.json"
+
+
+def capcut_draft_path(project):
+    return CONTENT_PACK_DIR / f"{safe_project_id(project)}_capcut_draft.json"
 
 def content_pack_txt_path(project):
     return CONTENT_PACK_DIR / f"{safe_project_id(project)}_content_pack.txt"
@@ -467,266 +474,6 @@ def save_content_pack(project, pack):
 def load_content_pack(project):
     data = read_json(content_pack_path(project), {})
     return data if isinstance(data, dict) else {}
-
-
-def show_content_pack_view(project, result=None):
-    key = init_selected_sources(project)
-    selected = st.session_state.get(key, [])
-
-    st.divider()
-    st.subheader("🚀 AI 콘텐츠 팩")
-
-    if not selected:
-        st.info("후보를 먼저 채택하면 AI 콘텐츠 팩을 생성할 수 있습니다.")
-        return
-
-    st.caption(f"채택 후보 {len(selected)}개 기준으로 쇼츠/CapCut/썸네일/인포크/업로드 패키지를 생성합니다.")
-
-    if st.button(
-        "🚀 AI 콘텐츠 팩 생성",
-        key=f"content_pack_generate_{safe_project_id(project)}",
-        type="primary",
-        use_container_width=True,
-    ):
-        pack = build_ai_content_pack(project, selected, result)
-
-        pack = ContentFactory().apply_edit_assistant(pack)
-        
-        paths = ContentFactory().save_content_pack(project, pack)
-        st.session_state[f"content_pack_{safe_project_id(project)}"] = pack
-        st.session_state[f"ai_content_pack_export_{project.id}"] = paths
-
-        st.success("AI 콘텐츠 팩을 생성했습니다.")
-        st.caption(
-            f"JSON: {paths.get('json_path')} / TXT: {paths.get('txt_path')}"
-        )
-
-    pack = st.session_state.get(f"content_pack_{safe_project_id(project)}") or load_content_pack(project)
-    if not pack:
-        return
-
-    shorts = pack.get("shorts", {})
-    upload = pack.get("upload_bundle", {})
-    shorts_variants = pack.get("shorts_variants", [])
-
-    active_content = (
-        pack.get("selected_variant")
-        or next((v for v in shorts_variants if v.get("recommended")), None)
-        or (shorts_variants[0] if shorts_variants else {})
-        or {}
-    )
-
-    tabs = st.tabs([
-        "쇼츠",
-        "CapCut",
-        "썸네일",
-        "인포크",
-        "업로드",
-        "편집 AI",
-        "JSON",
-])
-
-    with tabs[0]:
-        if active_content:
-            st.success(
-                f"⭐ 현재 대표 콘텐츠: {active_content.get('type', '추천안')} / "
-                f"{active_content.get('score', '-')}점"
-            )
-
-        st.markdown("### 제목")
-        st.write(f"- {active_content.get('title') or (shorts.get('titles', ['']) or [''])[0]}")
-
-        st.markdown("### 후킹")
-        st.write(f"- {active_content.get('hook') or (shorts.get('hooks', ['']) or [''])[0]}")
-
-        st.markdown("### 대본")
-        st.text_area(
-            "대본",
-            active_content.get("script") or shorts.get("script", ""),
-            height=220,
-        )
-
-        st.markdown("### CTA")
-        st.write(active_content.get("cta") or shorts.get("cta", ""))
-
-        if shorts_variants:
-            st.divider()
-            st.markdown("### 📦 콘텐츠 유형별 쇼츠")
-            with st.expander("다른 콘텐츠 후보 보기 / 대표 콘텐츠 변경"):
-                for variant in shorts_variants:
-                    rank = variant.get("rank", "-")
-                    score = variant.get("score", 0)
-                    recommended = variant.get("recommended", False)
-
-                    if recommended:
-                        expander_title = f"🥇 {variant.get('type')} ({score}점) ⭐ AI 추천"
-                    elif rank == 2:
-                        expander_title = f"🥈 {variant.get('type')} ({score}점)"
-                    elif rank == 3:
-                        expander_title = f"🥉 {variant.get('type')} ({score}점)"
-                    else:
-                        expander_title = f"{rank}위 · {variant.get('type')} ({score}점)"
-
-                    with st.expander(expander_title):
-                        if st.button(
-                            "⭐ 대표 콘텐츠 선택",
-                            key=f"select_variant_{safe_project_id(project)}_{variant.get('type')}",
-                        ):
-                            pack["selected_variant"] = variant
-                            save_content_pack(project, pack)
-                            st.session_state[f"content_pack_{safe_project_id(project)}"] = pack
-                            st.success(f"{variant.get('type')}을 대표 콘텐츠로 선택했습니다.")
-                            st.rerun()
-
-                        st.markdown(f"**제목:** {variant.get('title', '')}")
-                        st.markdown("**후킹**")
-                        st.write(variant.get("hook", ""))
-                        st.markdown("**대본**")
-                        st.text_area(
-                            "유형별 대본",
-                            variant.get("script", ""),
-                            height=180,
-                            key=f"variant_script_{safe_project_id(project)}_{variant.get('type', '')}",
-                        )
-                        st.markdown("**CTA**")
-                        st.write(variant.get("cta", ""))
-                        st.markdown("**CapCut 타임라인**")
-                        for line in variant.get("capcut", []):
-                            st.write(f"- {line}")
-
-    with tabs[1]:
-        if active_content:
-            st.markdown(f"### 🎬 {active_content.get('type', '대표 콘텐츠')} CapCut")
-        else:
-            st.markdown("### 🎬 CapCut 타임라인")
-
-        timeline = active_content.get("capcut") or shorts.get("capcut_timeline", [])
-        for item in timeline:
-            if isinstance(item, dict):
-                st.write(f"**{item.get('time')}** / {item.get('scene')}")
-                st.caption(f"자막: {item.get('caption')} / CapCut: {item.get('capcut')}")
-            else:
-                st.write(f"• {item}")
-
-    with tabs[2]:
-        thumb = pack.get("thumbnail", {})
-        main_text = active_content.get("hook") or thumb.get("main_text", "")
-        st.write("메인 문구:", main_text)
-        st.write("보조 문구:", thumb.get("sub_text", ""))
-        st.text_area("썸네일 이미지 프롬프트", thumb.get("image_prompt", ""), height=120)
-
-    with tabs[3]:
-        inpock = pack.get("inpock", {})
-        main_text = active_content.get("hook") or inpock.get("main_text", "")
-        st.write("규격:", inpock.get("size", "1000x1000"))
-        st.write("메인 문구:", main_text)
-        st.write("보조 문구:", inpock.get("sub_text", ""))
-        st.text_area("인포크 이미지 프롬프트", inpock.get("image_prompt", ""), height=120)
-
-    with tabs[4]:
-        active_upload = upload.copy()
-        if active_content.get("title"):
-            active_upload["youtube_title"] = active_content.get("title")
-
-        st.write("유튜브 제목:", active_upload.get("youtube_title", ""))
-        st.text_area("유튜브 설명", active_upload.get("youtube_desc", ""), height=130)
-        st.text_area("인스타 본문", active_upload.get("instagram_body", ""), height=150)
-        st.write("해시태그:", " ".join(active_upload.get("hashtags", [])))
-
-    with tabs[5]:
-        st.subheader("✂️ AI 컷 추천 / AI Edit Assistant")
-
-        if not st.checkbox("편집 AI 상세 보기", key=f"show_edit_ai_{safe_project_id(project)}"):
-            st.info("필요할 때만 편집 AI 상세 내용을 열어보세요.")
-        else:
-            cut_plan = pack.get("cut_plan", [])
-
-            if not cut_plan:
-                st.info("아직 AI 컷 추천이 없습니다. AI 콘텐츠 팩을 다시 생성해 주세요.")
-            else:
-                for cut in cut_plan:
-                    with st.container(border=True):
-                        st.markdown(f"#### Scene {cut.get('scene', '-')}")
-                        st.write(f"후보영상: {cut.get('candidate', '-')}")
-                        st.write(f"검색어: {cut.get('query', '-')}")
-                        st.write(f"추천 구간: {cut.get('start', '-')} ~ {cut.get('end', '-')}")
-                        st.write(f"Confidence: {cut.get('confidence', '-')}")
-                        st.write(f"추천 이유: {cut.get('reason', '-')}")
-                        st.write(f"효과음: {cut.get('effect', '-')}")
-                        st.write(f"줌: {cut.get('zoom', '-')}")
-                        st.write(f"자막: {cut.get('subtitle', '-')}")
-                        if cut.get("url"):
-                            st.link_button("후보영상 열기", cut.get("url"), use_container_width=True)
-
-        st.divider()
-
-        edit = pack.get("edit_assistant", {})
-
-        st.subheader("🎬 AI Edit Assistant")
-
-        if not edit:
-            st.info("아직 편집 AI 데이터가 없습니다.")
-        else:
-            st.markdown(f"**스타일:** {edit.get('style', '')}")
-            st.markdown(f"**목표:** {edit.get('goal', '')}")   
-            bgm = edit.get("bgm", {})
-            st.markdown("### BGM")
-            st.write(f"- 타입: {bgm.get('type', '')}")
-            st.write(f"- 볼륨: {bgm.get('volume', '')}")
-
-            subtitle = edit.get("subtitle", {})
-            st.markdown("### 자막 프리셋")
-            st.write(f"- 폰트: {subtitle.get('font', '')}")
-            st.write(f"- 크기: {subtitle.get('size', '')}")
-            st.write(f"- 색상: {subtitle.get('color', '')}")
-            st.write(f"- 강조색: {subtitle.get('highlight', '')}")
-            st.write(f"- 획: {subtitle.get('stroke', '')}")
-            st.write(f"- 위치: {subtitle.get('position', '')}")
-            st.write(f"- 애니메이션: {subtitle.get('animation', '')}")
-
-            st.markdown("### 장면별 편집 지시서")
-            for i, item in enumerate(edit.get("timeline", []), start=1):
-                with st.container(border=True):
-                    st.markdown(f"#### Scene {i}")
-                    st.write(f"컷: {item.get('cut', '')}")
-                    st.write(f"줌: {item.get('zoom', '')}")
-                    st.write(f"자막 위치: {item.get('subtitle_position', '')}")
-                    st.write(f"자막 애니메이션: {item.get('subtitle_animation', '')}")
-                    st.write(f"효과음: {item.get('sfx', '')}")
-                    st.write(f"BGM 볼륨: {item.get('bgm_volume', '')}")
-
-            st.markdown("### CTA")
-            st.write(edit.get("cta", ""))
-            st.markdown("---")
-            st.subheader("✅ 편집 체크리스트")
-
-            tasks = [
-                "컷 편집 완료",
-                "자동 자막 생성",
-                "자막 수정",
-                "강조색 적용",
-                "효과음 적용",
-                "BGM 적용",
-                "CTA 확인",
-                "썸네일 저장",
-                "인포크 저장",
-                "영상 내보내기",
-                "업로드",
-            ]
-
-            for task in tasks:
-                st.checkbox(task, key=f"edit_task_{task}")
-
-    with tabs[6]:
-            if st.checkbox("전체 JSON 보기", key=f"show_pack_json_{safe_project_id(project)}"):
-                copybox("AI Content Pack JSON", json.dumps(pack, ensure_ascii=False, indent=2), 420)
-            else:
-                st.caption("JSON은 필요할 때만 열어보세요.")
-    d1, d2 = st.columns(2)
-    with d1:
-        show_download_button("AI 콘텐츠 팩 JSON 다운로드", str(content_pack_path(project)), "application/json")
-    with d2:
-        show_download_button("AI 콘텐츠 팩 TXT 다운로드", str(content_pack_txt_path(project)), "text/plain")
 
 
 def pipeline_result_session_key(project):
@@ -1386,7 +1133,18 @@ def show_one_click_pipeline():
 
     if result:
         show_pipeline_result(project, result, path_debug)
-        show_content_pack_view(project, result)
+
+        show_content_pack_view_new(project=project,
+            result=result,
+            content_pack=st.session_state.get(
+                f"content_pack_{safe_project_id(project)}",
+                {}
+            ),
+            paths=st.session_state.get(
+                f"ai_content_pack_export_{project.id}",
+                {}
+            ),
+        )
 
     else:
         st.info("원클릭 결과가 아직 없습니다. 먼저 원클릭 실행을 완료해 주세요.")
