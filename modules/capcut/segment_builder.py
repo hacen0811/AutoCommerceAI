@@ -3,20 +3,19 @@ from modules.capcut.uuid_helper import new_uuid
 
 class CapCutSegmentBuilder:
     """
-    Sprint 39
-    실제 CapCut draft_content.json 구조에 맞춘 Segment Builder.
+    Sprint 41
+    CapCut Segment Builder.
 
     역할:
     - video segment 생성
     - text segment 생성
     - material_id 연결
-    - target_timerange 구성
+    - target/source timerange 구성
+    - TrackBuilder가 사용할 segment 단위 결과만 생성
     """
 
     def build_video_segment(self, scene, material_id):
-        start_us = self._to_microseconds(scene.get("start", "00.0"))
-        end_us = self._to_microseconds(scene.get("end", "03.0"))
-        duration_us = max(0, end_us - start_us)
+        start_us, duration_us = self._timerange(scene)
 
         return self._base_segment(
             segment_type="video",
@@ -24,13 +23,12 @@ class CapCutSegmentBuilder:
             start_us=start_us,
             duration_us=duration_us,
             render_index=0,
+            track_render_index=0,
             extra_material_refs=[],
         )
 
     def build_text_segment(self, scene, material_id, animation_id=None):
-        start_us = self._to_microseconds(scene.get("start", "00.0"))
-        end_us = self._to_microseconds(scene.get("end", "03.0"))
-        duration_us = max(0, end_us - start_us)
+        start_us, duration_us = self._timerange(scene)
 
         extra_refs = []
         if animation_id:
@@ -42,6 +40,7 @@ class CapCutSegmentBuilder:
             start_us=start_us,
             duration_us=duration_us,
             render_index=14000,
+            track_render_index=1,
             extra_material_refs=extra_refs,
         )
 
@@ -57,8 +56,11 @@ class CapCutSegmentBuilder:
         start_us,
         duration_us,
         render_index,
+        track_render_index,
         extra_material_refs=None,
     ):
+        is_video = segment_type == "video"
+
         return {
             "id": new_uuid(),
             "source_timerange": {
@@ -107,19 +109,15 @@ class CapCutSegmentBuilder:
             "extra_material_refs": extra_material_refs or [],
             "render_index": render_index,
             "keyframe_refs": [],
-            "enable_lut": segment_type == "video",
-            "enable_adjust": segment_type == "video",
+            "enable_lut": is_video,
+            "enable_adjust": is_video,
             "enable_hsl": False,
             "visible": True,
             "group_id": "",
             "enable_color_curves": True,
             "enable_hsl_curves": True,
-            "track_render_index": 0 if segment_type == "video" else 1,
-            "hdr_settings": {
-                "mode": 1,
-                "intensity": 1.0,
-                "nits": 1000,
-            } if segment_type == "video" else None,
+            "track_render_index": track_render_index,
+            "hdr_settings": self._hdr_settings() if is_video else None,
             "enable_color_wheels": True,
             "track_attribute": 0,
             "is_placeholder": False,
@@ -147,6 +145,22 @@ class CapCutSegmentBuilder:
             "enable_mask_stroke": False,
             "enable_mask_shadow": False,
             "enable_color_adjust_pro": False,
+        }
+
+    def _timerange(self, scene):
+        start_us = self._to_microseconds(scene.get("start", "00.0"))
+        end_us = self._to_microseconds(scene.get("end", "03.0"))
+
+        if end_us <= start_us:
+            end_us = start_us + 3_000_000
+
+        return start_us, end_us - start_us
+
+    def _hdr_settings(self):
+        return {
+            "mode": 1,
+            "intensity": 1.0,
+            "nits": 1000,
         }
 
     def _to_microseconds(self, value):
