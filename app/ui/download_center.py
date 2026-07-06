@@ -17,18 +17,20 @@ def show_download_button(label, path, mime="text/plain"):
     if not path:
         return
 
-    file_text = read_file_text(path)
+    p = Path(path)
 
-    if file_text:
+    if not p.exists():
+        st.caption(f"{label} 파일을 찾을 수 없습니다: {path}")
+        return
+
+    with open(p, "rb") as f:
         st.download_button(
             label=label,
-            data=file_text,
-            file_name=Path(path).name,
+            data=f.read(),
+            file_name=p.name,
             mime=mime,
             use_container_width=True,
         )
-    else:
-        st.caption(f"{label} 파일을 찾을 수 없습니다: {path}")
 
 
 def show_download_center(content_pack_result):
@@ -62,8 +64,43 @@ def show_download_center(content_pack_result):
         or content_pack_result.get("edit_guide")
     )
 
-    show_download_button("⬇ AI 콘텐츠 팩 JSON 다운로드", json_path, "application/json")
-    show_download_button("⬇ AI 콘텐츠 팩 TXT 다운로드", txt_path, "text/plain")
-    show_download_button("⬇ CapCut Export JSON 다운로드", capcut_path, "application/json")
-    show_download_button("⬇ CapCut Draft JSON 다운로드", draft_path, "application/json")
-    show_download_button("⬇ AI 편집 가이드 TXT 다운로드", edit_guide_path, "text/plain")
+    project_zip_path = (
+        content_pack_result.get("project_zip")
+        or content_pack_result.get("capcut_project_zip")
+    )
+
+    show_download_button(
+        "⬇ AI 콘텐츠 팩 JSON 다운로드",
+        json_path,
+        "application/json",
+    )
+
+    show_download_button(
+        "⬇ AI 콘텐츠 팩 TXT 다운로드",
+        txt_path,
+        "text/plain",
+    )
+
+    show_download_button(
+        "⬇ CapCut Export JSON 다운로드",
+        capcut_path,
+        "application/json",
+    )
+
+    show_download_button(
+        "⬇ CapCut Draft JSON 다운로드",
+        draft_path,
+        "application/json",
+    )
+
+    show_download_button(
+        "⬇ AI 편집 가이드 TXT 다운로드",
+        edit_guide_path,
+        "text/plain",
+    )
+
+    show_download_button(
+        "⬇ CapCut Project ZIP 다운로드",
+        project_zip_path,
+        "application/zip",
+    )

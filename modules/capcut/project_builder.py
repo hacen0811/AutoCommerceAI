@@ -3,6 +3,7 @@ import shutil
 from datetime import datetime
 from pathlib import Path
 
+from modules.capcut.uuid_helper import new_uuid
 
 CAPCUT_PROJECT_DIR = Path("exports/capcut_projects")
 
