@@ -5,14 +5,18 @@ from modules.capcut.uuid_helper import new_uuid
 
 class CapCutMaterialBuilder:
     """
-    Sprint 39
-    실제 CapCut draft_content.json 구조를 기반으로
-    Video/Text Material 생성.
+    Sprint 42-1
+    CapCut Material Builder.
+
+    역할:
+    - video material 생성
+    - text material 생성
+    - 기본 material registry 구조 생성
+    - 기존 build_materials(scenes) 인터페이스 유지
     """
 
     def build_video_material(self, scene):
         source = scene.get("candidate") or scene.get("url") or ""
-
         path = Path(source)
 
         return {
@@ -60,21 +64,44 @@ class CapCutMaterialBuilder:
         texts = []
 
         for scene in scenes or []:
-            video = self.build_video_material(scene)
-            text = self.build_text_material(scene)
+            videos.append(self.build_video_material(scene))
+            texts.append(self.build_text_material(scene))
 
-            videos.append(video)
-            texts.append(text)
+        return self.build_registry(
+            videos=videos,
+            texts=texts,
+        )
 
+    def build_registry(
+        self,
+        videos=None,
+        texts=None,
+        audios=None,
+        effects=None,
+        animations=None,
+        canvases=None,
+        speeds=None,
+        transitions=None,
+    ):
         return {
-            "videos": videos,
-            "texts": texts,
+            "videos": videos or [],
+            "texts": texts or [],
+            "audios": audios or [],
+            "effects": effects or [],
+            "animations": animations or [],
+            "canvases": canvases or [],
+            "speeds": speeds or [],
+            "transitions": transitions or [],
         }
 
     def _duration(self, scene):
         try:
             start = float(str(scene.get("start", "0")).replace("초", ""))
             end = float(str(scene.get("end", "3")).replace("초", ""))
+
+            if end <= start:
+                return 3_000_000
+
             return int((end - start) * 1_000_000)
         except Exception:
             return 3_000_000
