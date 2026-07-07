@@ -1,3 +1,4 @@
+import importlib
 import json
 import shutil
 from datetime import datetime
@@ -10,13 +11,14 @@ CAPCUT_PROJECT_DIR = Path("exports/capcut_projects")
 
 class CapCutProjectBuilder:
     """
-    Sprint 38 MVP
-    AutoCommerceAI CapCut Draft JSON을 실제 프로젝트 폴더 형태로 저장한다.
+    Sprint 42-3
+    CapCut 프로젝트 폴더 생성 오케스트레이터.
 
-    주의:
-    - 아직 CapCut 내부 포맷 완전 호환 버전은 아님
-    - draft_content.json / draft_meta_info.json / source_draft.json 생성
-    - 다음 단계에서 실제 CapCut 샘플 프로젝트 구조와 맞춰 고도화
+    역할:
+    - draft_content.json 최상위 구조를 실제 CapCut 샘플에 가깝게 생성
+    - Builder 호출만 담당
+    - 기존 산출물 파일명과 반환 구조 유지
+    - 순환 import 방지를 위해 동적 import 유지
     """
 
     def __init__(self):
@@ -27,7 +29,7 @@ class CapCutProjectBuilder:
             return {}
 
         project_id = self._safe_project_id(project)
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        timestamp = self._timestamp()
 
         folder_name = f"{project_id}_capcut_project_{timestamp}"
         project_dir = CAPCUT_PROJECT_DIR / folder_name
@@ -61,42 +63,173 @@ class CapCutProjectBuilder:
         }
 
     def _build_draft_content(self, project, capcut_draft):
-        timeline = capcut_draft.get("timeline", {})
-        tracks = timeline.get("tracks", [])
+        scenes = self._extract_scenes(capcut_draft)
+        tracks = self._build_tracks(capcut_draft, scenes)
+        materials = self._build_materials(scenes, tracks)
+        duration = self._duration_from_tracks(tracks, scenes)
 
         return {
-            "version": "sprint38-capcut-project-mvp",
-            "created_at": datetime.now().isoformat(timespec="seconds"),
-            "project_name": self._project_name(project),
+            "id": new_uuid(),
+            "version": 360000,
+            "new_version": "175.0.0",
+            "name": self._project_name(project),
+            "duration": duration,
+            "create_time": 0,
+            "update_time": 0,
+            "fps": 30.0,
+            "is_drop_frame_timecode": False,
+            "color_space": 0,
+            "config": self._build_config(),
+            "canvas_config": self._build_canvas_config(),
+            "tracks": tracks,
+            "group_container": None,
+            "materials": materials,
+
+            "auto_commerce_metadata": {
+                "source": "AutoCommerceAI",
+                "draft_version": capcut_draft.get("version"),
+                "builder": "CapCutProjectBuilder",
+                "builder_role": "orchestrator",
+                "sprint": "sprint42-3-top-level-structure",
+                "created_at": self._now(),
+                "project_name": self._project_name(project),
+            },
+
             "canvas": {
                 "ratio": "9:16",
                 "width": 1080,
                 "height": 1920,
             },
-            "tracks": tracks,
-            "materials": self._build_materials(tracks),
-            "metadata": {
-                "source": "AutoCommerceAI",
-                "draft_version": capcut_draft.get("version"),
-            },
         }
 
     def _build_draft_meta(self, project, capcut_draft):
-        tracks = capcut_draft.get("timeline", {}).get("tracks", [])
+        scenes = self._extract_scenes(capcut_draft)
+        tracks = self._build_tracks(capcut_draft, scenes)
 
         return {
             "draft_name": self._project_name(project),
-            "created_at": datetime.now().isoformat(timespec="seconds"),
-            "updated_at": datetime.now().isoformat(timespec="seconds"),
+            "created_at": self._now(),
+            "updated_at": self._now(),
             "app": "AutoCommerceAI",
             "type": "capcut_project_mvp",
             "version": capcut_draft.get("version"),
             "track_count": len(tracks),
-            "scene_count": capcut_draft.get("meta", {}).get("scene_count", 0),
+            "scene_count": len(scenes)
+            or capcut_draft.get("meta", {}).get("scene_count", 0),
             "status": "generated",
         }
 
-    def _build_materials(self, tracks):
+    def _build_config(self):
+        return {
+            "video_mute": False,
+            "record_audio_last_index": 1,
+            "extract_audio_last_index": 1,
+            "original_sound_last_index": 1,
+            "subtitle_recognition_id": "",
+            "subtitle_taskinfo": [],
+            "lyrics_recognition_id": "",
+            "lyrics_taskinfo": [],
+            "subtitle_sync": True,
+            "lyrics_sync": True,
+            "voice_change_sync": False,
+            "sticker_max_index": 1,
+            "adjust_max_index": 1,
+            "material_save_mode": 0,
+            "export_range": None,
+            "maintrack_adsorb": True,
+            "combination_max_index": 1,
+            "attachment_info": [],
+            "zoom_info_params": None,
+            "system_font_list": [],
+            "multi_language_mode": "none",
+            "multi_language_main": "none",
+            "multi_language_current": "none",
+            "multi_language_list": [],
+            "subtitle_keywords_config": None,
+            "use_float_render": False,
+        }
+
+    def _build_canvas_config(self):
+        return {
+            "ratio": "original",
+            "width": 1080,
+            "height": 1920,
+            "background": None,
+        }
+
+    def _extract_scenes(self, capcut_draft):
+        scenes = capcut_draft.get("scenes")
+        if isinstance(scenes, list):
+            return scenes
+
+        edit_plan = capcut_draft.get("edit_plan", {})
+        scenes = edit_plan.get("scenes")
+        if isinstance(scenes, list):
+            return scenes
+
+        cut_plan = capcut_draft.get("cut_plan")
+        if isinstance(cut_plan, list):
+            return cut_plan
+
+        timeline = capcut_draft.get("timeline", {})
+        tracks = timeline.get("tracks", [])
+        if isinstance(tracks, list) and tracks:
+            return tracks
+
+        return []
+
+    def _build_tracks(self, capcut_draft, scenes):
+        builder = self._load_builder(
+            module_name="modules.capcut.timeline_builder",
+            class_name="CapCutTimelineBuilder",
+        )
+
+        if builder and hasattr(builder, "build_timeline"):
+            try:
+                built = builder.build_timeline(scenes)
+                if isinstance(built, dict):
+                    return built.get("tracks", [])
+                if isinstance(built, list):
+                    return built
+            except Exception:
+                pass
+
+        timeline = capcut_draft.get("timeline", {})
+        tracks = timeline.get("tracks", [])
+
+        if isinstance(tracks, list):
+            return tracks
+
+        return []
+
+    def _build_materials(self, scenes, tracks):
+        builder = self._load_builder(
+            module_name="modules.capcut.material_builder",
+            class_name="CapCutMaterialBuilder",
+        )
+
+        if builder and hasattr(builder, "build_materials"):
+            try:
+                built = builder.build_materials(scenes)
+                if isinstance(built, dict):
+                    return built
+            except Exception:
+                pass
+
+        return self._fallback_materials(tracks)
+
+    def _load_builder(self, module_name, class_name):
+        try:
+            module = importlib.import_module(module_name)
+            builder_class = getattr(module, class_name, None)
+            if builder_class:
+                return builder_class()
+        except Exception:
+            return None
+
+        return None
+
+    def _fallback_materials(self, tracks):
         materials = {
             "videos": [],
             "texts": [],
@@ -104,7 +237,7 @@ class CapCutProjectBuilder:
             "audios": [],
         }
 
-        for track in tracks:
+        for track in tracks or []:
             track_type = track.get("type")
             clips = track.get("clips", [])
 
@@ -119,12 +252,41 @@ class CapCutProjectBuilder:
 
         return materials
 
+    def _duration_from_tracks(self, tracks, scenes):
+        max_end = 0
+
+        for track in tracks or []:
+            for segment in track.get("segments", []) or []:
+                timerange = segment.get("target_timerange", {}) or {}
+                start = int(timerange.get("start", 0) or 0)
+                duration = int(timerange.get("duration", 0) or 0)
+                max_end = max(max_end, start + duration)
+
+        if max_end > 0:
+            return max_end
+
+        total = 0
+        for scene in scenes or []:
+            total += self._scene_duration(scene)
+
+        return total if total > 0 else 5_000_000
+
+    def _scene_duration(self, scene):
+        try:
+            start = float(str(scene.get("start", "0")).replace("초", ""))
+            end = float(str(scene.get("end", "3")).replace("초", ""))
+            if end <= start:
+                return 3_000_000
+            return int((end - start) * 1_000_000)
+        except Exception:
+            return 3_000_000
+
     def _build_readme(self, project, capcut_draft):
         lines = []
-        lines.append("AutoCommerceAI CapCut Project MVP")
+        lines.append("AutoCommerceAI CapCut Project")
         lines.append("")
         lines.append(f"프로젝트명: {self._project_name(project)}")
-        lines.append(f"생성일: {datetime.now().isoformat(timespec='seconds')}")
+        lines.append(f"생성일: {self._now()}")
         lines.append(f"Draft Version: {capcut_draft.get('version')}")
         lines.append("")
         lines.append("포함 파일:")
@@ -132,15 +294,23 @@ class CapCutProjectBuilder:
         lines.append("- draft_meta_info.json")
         lines.append("- source_draft.json")
         lines.append("")
+        lines.append("구조:")
+        lines.append("- project_builder.py: 오케스트레이터")
+        lines.append("- material_builder.py: materials 생성")
+        lines.append("- timeline_builder.py: timeline/tracks 생성")
+        lines.append("")
+        lines.append("Sprint 42-3:")
+        lines.append("- draft_content.json 최상위 구조를 실제 CapCut 샘플에 맞춰 보강")
+        lines.append("- id / version / new_version / fps / duration / config / canvas_config 추가")
+        lines.append("")
         lines.append("주의:")
-        lines.append("- 현재는 CapCut 내부 포맷 완전 호환 전 단계입니다.")
-        lines.append("- 다음 Sprint에서 실제 CapCut 샘플 프로젝트 구조에 맞춰 고도화합니다.")
+        lines.append("- 기존 ZIP 산출물 구조를 유지합니다.")
+        lines.append("- CapCut 내부 포맷 호환성은 다음 Sprint에서 계속 고도화합니다.")
         return "\n".join(lines)
 
     def _zip_project(self, project_dir):
-        zip_base = project_dir
         zip_path = shutil.make_archive(
-            base_name=str(zip_base),
+            base_name=str(project_dir),
             format="zip",
             root_dir=project_dir,
         )
@@ -151,6 +321,12 @@ class CapCutProjectBuilder:
             json.dumps(data, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
+
+    def _timestamp(self):
+        return datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    def _now(self):
+        return datetime.now().isoformat(timespec="seconds")
 
     def _safe_project_id(self, project):
         value = str(getattr(project, "id", "default"))
