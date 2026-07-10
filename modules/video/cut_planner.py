@@ -88,7 +88,15 @@ class CutPlanner:
             return {}
 
         return candidates[(scene - 1) % len(candidates)]
-
+    def _candidate_query(self, candidate):
+        return (
+            candidate.get("query")
+            or candidate.get("keyword")
+            or candidate.get("search_query")
+            or candidate.get("title")
+            or ""
+        )
+   
     def _confidence(self, candidate, video_quality, suitability):
         score = 55
 
@@ -245,8 +253,10 @@ class CutPlanner:
         else:
             reasons.append("쇼츠 흐름 보강 컷")
 
-        if candidate.get("query"):
-            reasons.append(f"검색어 '{candidate.get('query')}' 기반 후보")
+        query = self._candidate_query(candidate)
+
+        if query:
+            reasons.append(f"검색어 '{query}' 기반 후보")
 
         if isinstance(suitability, (int, float)):
             reasons.append(f"쇼핑쇼츠 적합도 {suitability}점")

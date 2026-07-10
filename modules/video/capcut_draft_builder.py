@@ -3,9 +3,10 @@ from datetime import datetime
 
 class CapCutDraftBuilder:
     """
-    Sprint 37
-    CapCut Export JSON을 기반으로 편집 지시가 포함된 Draft JSON을 생성한다.
-    실제 CapCut 내부 포맷 완전 호환 전 단계의 AutoCommerceAI Draft 포맷.
+    Sprint 43-2
+    CapCut Draft JSON 보강:
+    - 실제 CapCut 샘플 기준 material_refs가 아니라 extra_material_refs 사용
+    - 각 clip에 material_id / extra_material_refs 기본 구조 추가
     """
 
     def build(self, capcut_export):
@@ -16,7 +17,7 @@ class CapCutDraftBuilder:
         scenes = [scene for scene in scenes if isinstance(scene, dict)]
 
         return {
-            "version": "sprint37-capcut-draft-2.0",
+            "version": "sprint43-2-capcut-draft-extra-material-refs-1.0",
             "created_at": datetime.now().isoformat(timespec="seconds"),
             "draft_type": "autocommerceai_capcut_draft",
             "meta": {
@@ -48,6 +49,12 @@ class CapCutDraftBuilder:
             "edit_guide": self._build_edit_guide(scenes),
         }
 
+    def _material_id(self, clip_type, idx):
+        return f"{clip_type}_material_{idx}"
+
+    def _extra_material_refs(self, clip_type, idx):
+        return [f"{clip_type}_extra_material_{idx}"]
+
     def _build_video_clips(self, scenes):
         clips = []
 
@@ -58,6 +65,8 @@ class CapCutDraftBuilder:
             clips.append(
                 {
                     "id": f"video_clip_{idx}",
+                    "material_id": self._material_id("video", idx),
+                    "extra_material_refs": self._extra_material_refs("video", idx),
                     "scene": scene.get("scene") or idx,
                     "source": scene.get("candidate") or scene.get("url") or "",
                     "query": scene.get("query", ""),
@@ -93,6 +102,8 @@ class CapCutDraftBuilder:
             clips.append(
                 {
                     "id": f"text_clip_{idx}",
+                    "material_id": self._material_id("text", idx),
+                    "extra_material_refs": self._extra_material_refs("text", idx),
                     "scene": scene.get("scene") or idx,
                     "text": text,
                     "start": scene.get("start", "00.0"),
@@ -129,6 +140,8 @@ class CapCutDraftBuilder:
             clips.append(
                 {
                     "id": f"effect_clip_{idx}",
+                    "material_id": self._material_id("effect", idx),
+                    "extra_material_refs": self._extra_material_refs("effect", idx),
                     "scene": scene.get("scene") or idx,
                     "start": scene.get("start", "00.0"),
                     "end": scene.get("end", "03.0"),
@@ -161,6 +174,8 @@ class CapCutDraftBuilder:
             clips.append(
                 {
                     "id": f"audio_clip_{idx}",
+                    "material_id": self._material_id("audio", idx),
+                    "extra_material_refs": self._extra_material_refs("audio", idx),
                     "scene": scene.get("scene") or idx,
                     "start": scene.get("start", "00.0"),
                     "end": scene.get("end", "03.0"),
@@ -219,6 +234,9 @@ class CapCutDraftBuilder:
 
     def _duration(self, start, end):
         try:
-            return round(float(str(end).replace("초", "")) - float(str(start).replace("초", "")), 1)
+            return round(
+                float(str(end).replace("초", "")) - float(str(start).replace("초", "")),
+                1,
+            )
         except Exception:
             return None

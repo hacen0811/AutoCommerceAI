@@ -35,7 +35,7 @@ def show_projects():
                     "partner_url": partner_url,
                     "taobao_url": taobao_url,
                     "douyin_url": douyin_url,
-                    "image_url": image_url,
+                    "image_url": resolved_image_url,
                     "price": price,
                     "category": category,
                     "keyword": keyword,

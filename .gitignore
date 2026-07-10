@@ -30,3 +30,5 @@ runs/
 Thumbs.db
 .vscode/
 .idea/
+
+browser_profile/

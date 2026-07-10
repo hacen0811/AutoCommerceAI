@@ -1,7 +1,6 @@
 import re
 from urllib.parse import urlparse, parse_qs, urlunparse, unquote
 
-
 class CoupangProductEngine:
     def parse(self, url):
         url = (url or "").strip()
@@ -25,11 +24,15 @@ class CoupangProductEngine:
 
         return {
             "original_url": url,
+            "coupang_url": clean_url,
+            "partner_url": clean_url,
             "clean_url": clean_url,
             "product_id": product_id,
             "vendor_item_id": vendor_item_id,
             "platform": "쿠팡" if "coupang.com" in parsed.netloc else "기타",
+            "product_name": guessed_name,
             "guessed_product_name": guessed_name,
+            "image_url": "",
             "keyword": self.keyword(guessed_name),
             "note": "쿠팡은 자동 접근을 차단할 수 있어 상품명/가격/이미지는 직접 보완 입력을 우선합니다.",
         }
@@ -52,5 +55,6 @@ class CoupangProductEngine:
             return "수전"
         if "장갑" in name:
             return "장갑"
+
         parts = [p for p in re.split(r"\s+", name or "") if p]
         return parts[-1] if parts else "정보"

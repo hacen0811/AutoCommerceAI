@@ -1,7 +1,9 @@
 import streamlit as st
 
-from modules.content.content_factory import ContentFactory
 from modules.content.content_pack_service import build_ai_content_pack
+from modules.content.content_factory import ContentFactory
+
+from app.utils.selected_sources import load_selected_sources
 
 from app.ui.content_pack.tab_summary import show_summary_tab
 from app.ui.content_pack.tab_scripts import show_shorts_tab
@@ -34,7 +36,29 @@ def show_content_pack_view(project, result=None, content_pack=None, paths=None):
     current_paths = st.session_state.get(export_key, {})
 
     outputs = result.get("outputs", {}) if result else {}
-    selected_sources = outputs.get("candidate_selection", {}).get("top3", [])
+
+    saved_selected_sources = load_selected_sources(project)
+
+    selected_sources = (
+        saved_selected_sources
+        or outputs.get("candidate_selection", {}).get("top3", [])
+        or outputs.get("selected_sources", [])
+        or outputs.get("candidates", [])
+    ) 
+
+    smart = (
+        outputs.get("smart")
+        or outputs.get("video_intel")
+        or outputs.get("video_quality")
+        or {}
+    )
+
+    vision = (
+        outputs.get("vision")
+        or outputs.get("ocr_result")
+        or outputs.get("real_vision")
+        or {}
+    )
 
     if st.button(
         "🚀 AI 콘텐츠 팩 생성",
@@ -53,13 +77,17 @@ def show_content_pack_view(project, result=None, content_pack=None, paths=None):
         try:
             with st.spinner("AI 콘텐츠 팩을 생성하는 중입니다..."):
                 pack = build_ai_content_pack(
-                    project=project,
-                    selected_sources=selected_sources,
-                    latest_result=result,
+                   project=project,
+                   selected_sources=selected_sources,
+                   latest_result=result,
                 )
 
                 pack = ContentFactory().apply_edit_assistant(pack)
-                saved_paths = ContentFactory().save_content_pack(project, pack)
+
+                saved_paths = ContentFactory().save_content_pack(
+                    project,
+                    pack,
+                )
 
                 st.session_state[pack_key] = pack
                 st.session_state[export_key] = saved_paths

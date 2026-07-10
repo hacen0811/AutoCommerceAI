@@ -56,24 +56,52 @@ def init_selected_sources(project, force_reload=False):
 
 
 def source_identity(platform, item):
+    query = (
+        item.get("query")
+        or item.get("keyword")
+        or item.get("search_query")
+        or item.get("title")
+        or ""
+    )
+
     return (
         str(platform or "").strip().lower(),
         str(item.get("rank", "")).strip(),
-        str(item.get("query", "")).strip(),
+        str(query).strip(),
     )
 
 
 def normalize_selected_source(project, platform, item, url):
+    query = (
+        item.get("query")
+        or item.get("keyword")
+        or item.get("search_query")
+        or item.get("title")
+        or ""
+    )
+
+    final_url = (
+        url
+        or item.get("url")
+        or item.get("search_url")
+        or item.get("video_url")
+        or item.get("play_url")
+        or ""
+    )
+
     return {
         "project_id": getattr(project, "id", ""),
-        "platform": str(platform or "").strip().lower(),
+        "platform": str(platform or item.get("platform") or "").strip().lower(),
         "rank": item.get("rank"),
-        "query": item.get("query", ""),
+        "title": item.get("title", ""),
+        "query": query,
+        "keyword": item.get("keyword") or query,
+        "search_query": item.get("search_query") or query,
         "purpose": item.get("purpose", ""),
         "score": item.get("score", ""),
-        "url": url or "",
+        "url": final_url,
+        "search_url": item.get("search_url") or final_url,
     }
-
 
 def select_source(project, platform, item, url):
     key = init_selected_sources(project)

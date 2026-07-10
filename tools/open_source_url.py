@@ -1,43 +1,50 @@
 import sys
-import time
+import subprocess
 from pathlib import Path
-from playwright.sync_api import sync_playwright
+
 
 BASE_DIR = Path(__file__).resolve().parents[1]
 PROFILE_DIR = BASE_DIR / "browser_profile" / "source_sites"
 
 
+def chrome_path():
+    candidates = [
+        r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+        r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+    ]
+
+    for path in candidates:
+        if Path(path).exists():
+            return path
+
+    return "chrome"
+
+
 def open_source_url(url):
+    if not url:
+        print("[AutoCommerceAI] URL이 비어 있습니다.")
+        return False
+
     PROFILE_DIR.mkdir(parents=True, exist_ok=True)
 
-    print("[AutoCommerceAI] URL 브라우저 실행")
-    print("전용 프로필:", PROFILE_DIR)
+    subprocess.Popen(
+        [
+            chrome_path(),
+            f"--user-data-dir={PROFILE_DIR}",
+            "--no-first-run",
+            "--no-default-browser-check",
+            url,
+        ],
+        shell=False,
+    )
 
-    with sync_playwright() as p:
-        context = p.chromium.launch_persistent_context(
-            user_data_dir=str(PROFILE_DIR),
-            headless=False,
-            viewport={"width": 1280, "height": 900},
-            locale="ko-KR",
-            args=[
-                "--disable-blink-features=AutomationControlled",
-                "--no-first-run",
-                "--no-default-browser-check",
-            ],
-        )
-
-        page = context.pages[0] if context.pages else context.new_page()
-        page.goto(url, wait_until="domcontentloaded", timeout=45000)
-
-        while context.pages:
-            time.sleep(1)
-
-        context.close()
+    print("[AutoCommerceAI] URL 열기:", url)
+    return True
 
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("URL이 필요합니다.")
+        print("[AutoCommerceAI] URL이 필요합니다.")
         sys.exit(1)
 
     open_source_url(sys.argv[1])

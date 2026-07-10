@@ -4,6 +4,8 @@ import re
 from typing import Dict, List
 from urllib.parse import quote_plus
 
+from modules.studio.network.response_sniffer import ResponseSniffer
+
 from .base_collector import BaseSiteCollector, CollectedVideo
 
 
@@ -34,6 +36,9 @@ class TaobaoCollector(BaseSiteCollector):
         }
 
         try:
+            print("[SNIFFER] Taobao ResponseSniffer attached")
+            sniffer = ResponseSniffer().attach(page)
+
             page.goto(target_url, wait_until="domcontentloaded", timeout=self.timeout_ms)
             page.wait_for_timeout(3000)
 
@@ -100,6 +105,9 @@ class TaobaoCollector(BaseSiteCollector):
                 **search_debug,
                 "sample_product_cards": product_cards[:5],
                 "detail_logs": detail_logs,
+
+                "network_media": sniffer.results(20),
+                "network_summary": sniffer.summary(),
             })
 
         except Exception as exc:

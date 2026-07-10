@@ -1,15 +1,20 @@
 import json
+import inspect
 import streamlit as st
 
 from modules.project.repository import ProjectRepository
 from modules.project.project_selector import ProjectSelector
 from modules.content.content_factory import ContentFactory
-
+from modules.capcut.project_builder import CapCutProjectBuilder
 
 def show_content_factory():
     st.title("🏭 Content Factory")
     st.caption("쇼츠/릴스/인포크/블로그/업로드 문구를 한 번에 생성합니다.")
-
+    
+    st.write("ContentFactory file:", inspect.getfile(ContentFactory))
+    st.write("ContentFactory has build:", hasattr(ContentFactory(), "build"))
+    
+    
     projects = ProjectSelector().all_projects()
     if not projects:
         st.info("프로젝트가 없습니다.")

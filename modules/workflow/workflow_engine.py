@@ -1,11 +1,11 @@
 from uuid import uuid4
+import json
 import shutil
 
 from modules.product.product_engine import ProductEngine
 from modules.source.source_video_engine import SourceVideoEngine
 from modules.source.video_ranker import SourceVideoRanker
 from modules.pipeline.real_vision_runner import RealVisionRunner
-from modules.content.content_factory import ContentFactory
 from modules.editor.auto_editor_engine import AutoEditorEngine
 from modules.editor.capcut_project_exporter import CapCutProjectExporter
 from modules.workflow.pipeline_state import PipelineState
@@ -13,7 +13,6 @@ from modules.video.video_path_resolver import VideoPathResolver
 from modules.studio.video_sourcing_engine import VideoSourcingEngine
 from modules.video.video_quality_engine import VideoQualityEngine
 from modules.video.video_candidate_selector import VideoCandidateSelector
-from modules.video.cut_planner import CutPlanner
 from modules.project.repository import ProjectRepository
 from modules.video.download_utils import (
     latest_downloaded_video,
@@ -23,11 +22,6 @@ from modules.video.download_utils import (
 
 
 class WorkflowEngine:
-    """
-    One Click Pipeline 핵심 엔진.
-    가능한 단계는 계속 진행하고, 실패한 단계는 errors에 기록합니다.
-    """
-
     STEP_NAMES = [
         "product_plan",
         "source_plan",
@@ -50,27 +44,25 @@ class WorkflowEngine:
         }
         return [{"name": name, "label": labels[name], "status": "pending"} for name in self.STEP_NAMES]
 
+    def _project_data(self, project):
+        try:
+            return json.loads(getattr(project, "data_json", "") or "{}")
+        except Exception:
+            return {}
+
     def auto_connect_latest_download(self, project):
         resolver = VideoPathResolver()
         current_video = resolver.resolve_path(project)
         print("[AUTO] current_video =", current_video)
 
         if current_video and resolver.exists(current_video):
-            return {
-                "ok": False,
-                "message": "이미 연결된 영상이 있습니다.",
-                "video_path": current_video,
-            }
+            return {"ok": False, "message": "이미 연결된 영상이 있습니다.", "video_path": current_video}
 
         latest = latest_downloaded_video()
         print("[AUTO] latest =", latest)
 
         if not latest:
-            return {
-                "ok": False,
-                "message": "Downloads 최신 영상 없음",
-                "video_path": "",
-            }
+            return {"ok": False, "message": "Downloads 최신 영상 없음", "video_path": ""}
 
         out_dir = project_source_video_dir(project)
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -80,9 +72,7 @@ class WorkflowEngine:
             "project",
         )
 
-        ext = latest.suffix.lower()
-        target = out_dir / f"auto_{project_name}{ext}"
-
+        target = out_dir / f"auto_{project_name}{latest.suffix.lower()}"
         print("[AUTO] copy ->", target)
 
         try:
@@ -94,37 +84,26 @@ class WorkflowEngine:
                 "video_path": str(target),
             }
 
-        ProjectRepository().update_links_and_media(
-            getattr(project, "id"),
-            video_path=str(target),
-        )
-
-        return {
-            "ok": True,
-            "message": "Downloads 최신 영상을 자동 연결했습니다.",
-            "video_path": str(target),
-        }
+        ProjectRepository().update_links_and_media(getattr(project, "id"), video_path=str(target))
+        return {"ok": True, "message": "Downloads 최신 영상을 자동 연결했습니다.", "video_path": str(target)}
 
     def run_project(self, project, sample_count=6):
         resolver = VideoPathResolver()
         project = resolver.resolve_project(project)
 
         auto_connected = self.auto_connect_latest_download(project)
-
         if auto_connected.get("ok"):
             project = resolver.resolve_project(project)
 
+        project_data = self._project_data(project)
+        image_path = project_data.get("image_path", "")
+
         job_id = uuid4().hex[:12]
         state = PipelineState()
-        state.create(
-            job_id,
-            getattr(project, "product_name", "") or getattr(project, "title", ""),
-            self.steps(),
-        )
+        state.create(job_id, getattr(project, "product_name", "") or getattr(project, "title", ""), self.steps())
 
         outputs = {}
 
-        # 1. Product Plan
         try:
             product_plan = ProductEngine().build_from_coupang(
                 getattr(project, "coupang_url", ""),
@@ -140,7 +119,6 @@ class WorkflowEngine:
             product_plan = {}
             state.update_step(job_id, "product_plan", "failed", error=exc)
 
-        # 2. Source Plan
         try:
             source_plan = SourceVideoEngine().make_search_plan(project, product_plan=product_plan)
             outputs["source_plan"] = source_plan
@@ -149,62 +127,85 @@ class WorkflowEngine:
             source_plan = {}
             state.update_step(job_id, "source_plan", "failed", error=exc)
 
-        # 3. Source Ranking
         try:
             videos = SourceVideoEngine().list_project_videos(project)
             ranked = SourceVideoRanker().rank(videos, sample_count=4)
             outputs["source_rank"] = ranked
-            state.update_step(
-                job_id,
-                "source_rank",
-                "done",
-                {
-                    "count": len(ranked),
-                    "top": ranked[:3],
-                    "note": "Sprint 7-4: 랭킹 영상은 후보 표시용이며 Real Vision에 자동 연결하지 않습니다.",
-                },
-            )
+            state.update_step(job_id, "source_rank", "done", {"count": len(ranked), "top": ranked[:3]})
         except Exception as exc:
             ranked = []
             state.update_step(job_id, "source_rank", "failed", error=exc)
 
-        # 3-1. Live Source Collection
+        
         try:
+            keywords = product_plan.get("keywords", {}) if isinstance(product_plan, dict) else {}
+
+            print("[WORKFLOW] keywords keys =", list(keywords.keys()))
+            print("[WORKFLOW] taobao_keyword =", keywords.get("taobao_keyword"))
+            print("[WORKFLOW] source_1688_keyword =", keywords.get("source_1688_keyword"))
+            print("[WORKFLOW] douyin_keyword =", keywords.get("douyin_keyword"))
+            print("[WORKFLOW] taobao_top10 count =", len(keywords.get("taobao_top10", [])))
+            print("[WORKFLOW] source_1688_top10 count =", len(keywords.get("source_1688_top10", [])))
+            print("[WORKFLOW] douyin_top10 count =", len(keywords.get("douyin_top10", [])))
+            print("[WORKFLOW] clean_name =", keywords.get("clean_name"))
+            print("[WORKFLOW] tokens =", keywords.get("tokens"))
+            print("[WORKFLOW] category =", keywords.get("category"))
+
             live_sources = VideoSourcingEngine().collect({
                 "name": getattr(project, "product_name", ""),
+                "product_name": getattr(project, "product_name", ""),
                 "keyword": getattr(project, "keyword", ""),
+                "coupang_url": getattr(project, "coupang_url", ""),
+                "partner_url": getattr(project, "partner_url", ""),
+                "image_url": getattr(project, "image_url", ""),
+                "image_path": image_path,
+
+                "taobao_keyword": keywords.get("taobao_keyword", ""),
+                "source_1688_keyword": keywords.get("source_1688_keyword", ""),
+                "douyin_keyword": keywords.get("douyin_keyword", ""),
+                "taobao_top10": keywords.get("taobao_top10", []),
+                "source_1688_top10": keywords.get("source_1688_top10", []),
+                "douyin_top10": keywords.get("douyin_top10", []),
             })
 
             outputs["video_sources"] = live_sources
-
-            video_candidates = (
+            outputs["video_candidates"] = (
                 live_sources.get("best_candidates", [])
                 or live_sources.get("candidates", [])
                 or live_sources.get("results", [])
             )
 
-            outputs["video_candidates"] = video_candidates
+            print("=" * 80)
+            live_collection = live_sources.get("live_collection", {}) or {}
+
+            print("[LIVE_COLLECTION] ok =", live_collection.get("ok"))
+            print("[LIVE_COLLECTION] results count =", len(live_collection.get("results", [])))
+            print("[LIVE_COLLECTION] diagnostics count =", len(live_collection.get("diagnostics", [])))
+            print("[LIVE_COLLECTION] errors =", live_collection.get("errors"))
+            print("[LIVE_COLLECTION] message =", live_collection.get("message"))
+            print("[LIVE_COLLECTION] status =", live_collection.get("status"))
+           
+            diagnostics = live_collection.get("diagnostics", [])
+            if diagnostics:
+                print("[LIVE_COLLECTION] first diagnostics keys =", list(diagnostics[0].keys()))
+                print("[LIVE_COLLECTION] first network_summary =", diagnostics[0].get("network_summary"))
+                print("[LIVE_COLLECTION] first network_media count =", len(diagnostics[0].get("network_media", [])))
+                if diagnostics[0].get("network_media"):
+                    print("[LIVE_COLLECTION] first media =", diagnostics[0]["network_media"][0])
+
+            print("=" * 80)
 
         except Exception as exc:
-            outputs["video_sources"] = {
-                "ok": False,
-                "reason": str(exc),
-            }
+            outputs["video_sources"] = {"ok": False, "reason": str(exc)}
             outputs["video_candidates"] = []
 
-        # 4. Real Vision
         try:
             current_video = resolver.resolve_path(project)
             print("[AUTO] current_video =", current_video)
 
             if current_video and resolver.exists(current_video):
                 project.video_path = current_video
-                real_vision = RealVisionRunner().run(
-                    project,
-                    sample_count=sample_count,
-                    use_yolo=True,
-                    use_paddle=True,
-                )
+                real_vision = RealVisionRunner().run(project, sample_count=sample_count, use_yolo=True, use_paddle=True)
             else:
                 real_vision = {
                     "ok": False,
@@ -229,54 +230,33 @@ class WorkflowEngine:
                 job_id,
                 "real_vision",
                 "done" if real_vision.get("ok") else "failed",
-                {
-                    "summary": real_vision.get("summary"),
-                    "status": real_vision.get("status"),
-                    "video_path": real_vision.get("project", {}).get("video_path", current_video),
-                },
+                {"summary": real_vision.get("summary"), "status": real_vision.get("status")},
                 None if real_vision.get("ok") else real_vision.get("summary"),
             )
-
         except Exception as exc:
             real_vision = {}
             outputs["real_vision"] = real_vision
             state.update_step(job_id, "real_vision", "failed", error=exc)
 
-        # 4-1. Video Quality
         try:
             current_video = resolver.resolve_path(project)
-            quality = VideoQualityEngine().score(current_video, real_vision)
-            outputs["video_quality"] = quality
+            outputs["video_quality"] = VideoQualityEngine().score(current_video, real_vision)
         except Exception as exc:
-            outputs["video_quality"] = {
-                "ok": False,
-                "reason": str(exc),
-            }
+            outputs["video_quality"] = {"ok": False, "reason": str(exc)}
 
-        # 4-2. AI Candidate Selection
         try:
-            video_candidates = outputs.get("video_candidates", [])
-
             enriched_candidates = []
-            for item in video_candidates:
+            for item in outputs.get("video_candidates", []):
                 new_item = dict(item)
                 new_item["video_quality"] = outputs.get("video_quality", {})
                 new_item["shopping_shorts_fit"] = outputs.get("shopping_shorts_fit", {})
                 new_item["real_vision"] = outputs.get("real_vision", {})
                 enriched_candidates.append(new_item)
 
-            candidate_selection = VideoCandidateSelector().select(enriched_candidates)
-            outputs["candidate_selection"] = candidate_selection
-
+            outputs["candidate_selection"] = VideoCandidateSelector().select(enriched_candidates)
         except Exception as exc:
-            outputs["candidate_selection"] = {
-                "ok": False,
-                "reason": str(exc),
-                "top3": [],
-                "all": [],
-            }
+            outputs["candidate_selection"] = {"ok": False, "reason": str(exc), "top3": [], "all": []}
 
-        # 5. Auto Editor
         try:
             editor_plan = AutoEditorEngine().create_plan(
                 getattr(project, "product_name", ""),
@@ -284,41 +264,24 @@ class WorkflowEngine:
                 vision=real_vision,
                 candidate_selection=outputs.get("candidate_selection", {}),
             )
-
             outputs["auto_editor"] = editor_plan
-            state.update_step(
-                job_id,
-                "auto_editor",
-                "done",
-                {"timeline_count": len(editor_plan.get("timeline", []))},
-            )
-
+            state.update_step(job_id, "auto_editor", "done", {"timeline_count": len(editor_plan.get("timeline", []))})
         except Exception as exc:
             editor_plan = {}
             state.update_step(job_id, "auto_editor", "failed", error=exc)
 
-        # 6. Content Factory
         try:
-            content = {}
-            outputs["content_factory"] = content
-
-            state.update_step(
-                job_id,
-                "content_factory",
-                "done",
-                {"message": "AI 콘텐츠 팩은 UI 버튼에서 생성합니다."},
-            )
+            outputs["content_factory"] = {}
+            state.update_step(job_id, "content_factory", "done", {"message": "AI 콘텐츠 팩은 UI 버튼에서 생성합니다."})
         except Exception as exc:
-            content = {}
             state.update_step(job_id, "content_factory", "failed", error=exc)
 
-        # 7. CapCut Export
         try:
             export_paths = CapCutProjectExporter().export_plan(project, editor_plan)
             outputs["capcut_export"] = export_paths
             state.update_step(job_id, "capcut_export", "done", export_paths)
         except Exception as exc:
-            export_paths = {}
+            outputs["capcut_export"] = {}
             state.update_step(job_id, "capcut_export", "failed", error=exc)
 
         final_state = state.load(job_id)

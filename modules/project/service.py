@@ -16,6 +16,7 @@ class ProjectService:
         payload["data"] = {
             "ai": ai_data,
             "capcut": capcut,
+            "image_path": payload.get("image_path", ""),
             "video_analysis": VideoAnalyzer().analyze(payload.get("video_path", "")),
             "inpock": {
                 "title": product_name,

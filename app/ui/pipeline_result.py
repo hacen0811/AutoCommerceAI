@@ -1,5 +1,10 @@
 import streamlit as st
 
+from app.ui.candidate_card import show_candidate_card
+from app.ui.live_sources import show_live_sources
+from app.ui.content_pack.source_candidates_view import show_source_candidates
+from app.utils.project_keys import safe_project_id
+
 
 def show_step_status(state, path_debug=None):
     st.subheader("단계별 상태")
@@ -38,7 +43,94 @@ def show_step_status(state, path_debug=None):
                 st.json(path_debug)
 
 
-def show_result_summary(outputs):
+def candidate_query(item):
+    return (
+        item.get("query")
+        or item.get("keyword")
+        or item.get("search_query")
+        or item.get("title")
+        or "-"
+    )
+
+
+def candidate_url(item):
+    return (
+        item.get("url")
+        or item.get("search_url")
+        or item.get("video_url")
+        or item.get("play_url")
+        or ""
+    )
+
+
+def show_top_candidates(project, outputs):
+    source_plan = outputs.get("source_plan", {}) or {}
+    video_sources = outputs.get("video_sources", {}) or {}
+    product_plan = outputs.get("product_plan", {}) or {}
+
+    #candidate_groups = [
+        #("타오바오 TOP10", "taobao", product_plan.get("taobao_top10") or source_plan.get("taobao_top10")),
+        #("1688 TOP10", "1688", product_plan.get("source_1688_top10") or source_plan.get("source_1688_top10")),
+        #("도우인 TOP10", "tiktok", product_plan.get("douyin_top10") or source_plan.get("douyin_top10")),
+    #]
+
+    #shown = False
+
+    #for title, platform, items in candidate_groups:
+        #if not items:
+            #continue
+
+        #shown = True
+        #st.markdown(f"### {title}")
+
+        #for idx, item in enumerate(items, start=1):
+            #if not isinstance(item, dict):
+                #continue
+
+            #item = dict(item)
+            #item.setdefault("rank", idx)
+
+            #show_candidate_card(
+                #project=project,
+                #platform=platform,
+                #item=item,
+                #safe_project_id=safe_project_id,
+            #)
+
+    candidates = video_sources.get("candidates") or []
+    if candidates:
+        shown = True
+        st.markdown("### 전체 검색 후보")
+
+        for idx, item in enumerate(candidates[:12], start=1):
+            if not isinstance(item, dict):
+                continue
+
+            item = dict(item)
+            item.setdefault("rank", idx)
+
+            show_candidate_card(
+                project=project,
+                platform=item.get("platform", "source"),
+                item=item,
+                safe_project_id=safe_project_id,
+            )
+
+    live_sources = (
+        video_sources.get("live_collection")
+        or source_plan.get("live_collection")
+        or outputs.get("live_collection")
+    )
+
+    if live_sources:
+        shown = True
+        show_live_sources(project, live_sources)
+
+    if not shown:
+        st.caption("표시할 후보 카드가 없습니다.")
+
+
+def show_result_summary(project, outputs):
     st.markdown("### AI 상품 분석 요약")
 
     product_plan = outputs.get("product_plan", {})
@@ -49,6 +141,12 @@ def show_result_summary(outputs):
     else:
         st.caption("상품 분석 키워드가 없습니다.")
 
+    st.markdown("### 후보 카드")
+    show_top_candidates(project, outputs)
+    
+    st.divider()
+    show_source_candidates()
+    
     selected = outputs.get("candidate_selection", {}).get("top3", [])
 
     st.markdown("### 채택 영상 후보")
@@ -59,13 +157,21 @@ def show_result_summary(outputs):
 
     for idx, item in enumerate(selected, start=1):
         platform = item.get("platform", "-")
-        query = item.get("query", "-")
-        url = item.get("url", "-")
+        query = candidate_query(item)
+        url = candidate_url(item)
 
         with st.container(border=True):
             st.write(f"**{idx}. {platform}**")
             st.write(f"검색어: {query}")
-            st.write(f"URL: {url}")
+
+            if url:
+                st.link_button(
+                    "후보 열기",
+                    url,
+                    use_container_width=True,
+                )
+            else:
+                st.caption("URL 없음")
 
 
 def show_video_quality(outputs, state):
@@ -132,7 +238,7 @@ def show_pipeline_result(project, result, path_debug=None):
     tab1, tab2, tab3 = st.tabs(["요약", "결과 JSON", "상태 JSON"])
 
     with tab1:
-        show_result_summary(outputs)
+        show_result_summary(project, outputs)
         show_video_quality(outputs, state)
 
     with tab2:

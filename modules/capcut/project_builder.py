@@ -1,346 +1,329 @@
-import importlib
 import json
 import shutil
-from datetime import datetime
+import time
 from pathlib import Path
 
 from modules.capcut.uuid_helper import new_uuid
 
-CAPCUT_PROJECT_DIR = Path("exports/capcut_projects")
-
 
 class CapCutProjectBuilder:
     """
-    Sprint 42-3
-    CapCut 프로젝트 폴더 생성 오케스트레이터.
+    Sprint 45-1
+    CapCut native draft project builder.
 
-    역할:
-    - draft_content.json 최상위 구조를 실제 CapCut 샘플에 가깝게 생성
-    - Builder 호출만 담당
-    - 기존 산출물 파일명과 반환 구조 유지
-    - 순환 import 방지를 위해 동적 import 유지
+    핵심:
+    - 템플릿 프로젝트 폴더를 AppData CapCut Drafts로 복사
+    - Timelines/<timeline_uuid> 폴더명을 새 UUID로 변경
+    - Timelines/project.json / project.json.bak 내부 timeline id 갱신
+    - draft_content.json / draft_content.json.bak 갱신
+    - CapCut 프로젝트 목록 DB 역할의 root_meta_info.json 등록/갱신
     """
 
-    def __init__(self):
-        CAPCUT_PROJECT_DIR.mkdir(parents=True, exist_ok=True)
+    def __init__(self, template_dir=None, drafts_root=None, root_meta_path=None):
+        self.template_dir = Path(template_dir) if template_dir else self._default_template_dir()
+        self.drafts_root = Path(drafts_root) if drafts_root else self._default_drafts_root()
+        self.root_meta_path = Path(root_meta_path) if root_meta_path else self._default_root_meta_path()
 
-    def build(self, project, capcut_draft):
-        if not isinstance(capcut_draft, dict) or not capcut_draft:
-            return {}
+    def build(self, project_name, draft_content):
+        native_dir = self._create_native_project_dir(project_name)
 
-        project_id = self._safe_project_id(project)
-        timestamp = self._timestamp()
+        self._copy_template(native_dir)
+        self._refresh_timeline_project(native_dir)
+        self._write_draft_content(native_dir, draft_content)
+        self._register_root_meta(native_dir, project_name)
 
-        folder_name = f"{project_id}_capcut_project_{timestamp}"
-        project_dir = CAPCUT_PROJECT_DIR / folder_name
-        project_dir.mkdir(parents=True, exist_ok=True)
+        return {
+            "ok": True,
+            "native_dir": str(native_dir),
+            "project_name": project_name,
+            "root_meta_path": str(self.root_meta_path),
+        }
 
-        draft_content_path = project_dir / "draft_content.json"
-        draft_meta_path = project_dir / "draft_meta_info.json"
-        source_draft_path = project_dir / "source_draft.json"
-        readme_path = project_dir / "README.txt"
+    def _default_template_dir(self):
+        return Path("templates/capcut/native_template")
 
-        draft_content = self._build_draft_content(project, capcut_draft)
-        draft_meta = self._build_draft_meta(project, capcut_draft)
+    def _default_drafts_root(self):
+        return Path.home() / "AppData" / "Local" / "CapCut Drafts"
 
-        self._write_json(draft_content_path, draft_content)
-        self._write_json(draft_meta_path, draft_meta)
-        self._write_json(source_draft_path, capcut_draft)
-
-        readme_path.write_text(
-            self._build_readme(project, capcut_draft),
-            encoding="utf-8",
+    def _default_root_meta_path(self):
+        return (
+            Path.home()
+            / "AppData"
+            / "Local"
+            / "CapCut"
+            / "User Data"
+            / "Projects"
+            / "com.lveditor.draft"
+            / "root_meta_info.json"
         )
 
-        zip_path = self._zip_project(project_dir)
+    def _create_native_project_dir(self, project_name):
+        safe_name = self._safe_name(project_name)
+        native_dir = self.drafts_root / safe_name
 
-        return {
-            "project_dir": str(project_dir),
-            "project_zip": str(zip_path),
-            "draft_content": str(draft_content_path),
-            "draft_meta": str(draft_meta_path),
-            "source_draft": str(source_draft_path),
-        }
+        if not native_dir.exists():
+            return native_dir
 
-    def _build_draft_content(self, project, capcut_draft):
-        scenes = self._extract_scenes(capcut_draft)
-        tracks = self._build_tracks(capcut_draft, scenes)
-        materials = self._build_materials(scenes, tracks)
-        duration = self._duration_from_tracks(tracks, scenes)
+        index = 2
+        while True:
+            candidate = self.drafts_root / f"{safe_name} ({index})"
+            if not candidate.exists():
+                return candidate
+            index += 1
 
-        return {
-            "id": new_uuid(),
-            "version": 360000,
-            "new_version": "175.0.0",
-            "name": self._project_name(project),
-            "duration": duration,
-            "create_time": 0,
-            "update_time": 0,
-            "fps": 30.0,
-            "is_drop_frame_timecode": False,
-            "color_space": 0,
-            "config": self._build_config(),
-            "canvas_config": self._build_canvas_config(),
-            "tracks": tracks,
-            "group_container": None,
-            "materials": materials,
+    def _copy_template(self, native_dir):
+        if not self.template_dir.exists():
+            raise FileNotFoundError(f"CapCut template directory not found: {self.template_dir}")
 
-            "auto_commerce_metadata": {
-                "source": "AutoCommerceAI",
-                "draft_version": capcut_draft.get("version"),
-                "builder": "CapCutProjectBuilder",
-                "builder_role": "orchestrator",
-                "sprint": "sprint42-3-top-level-structure",
-                "created_at": self._now(),
-                "project_name": self._project_name(project),
-            },
+        native_dir.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(self.template_dir, native_dir)
 
-            "canvas": {
-                "ratio": "9:16",
-                "width": 1080,
-                "height": 1920,
-            },
-        }
-
-    def _build_draft_meta(self, project, capcut_draft):
-        scenes = self._extract_scenes(capcut_draft)
-        tracks = self._build_tracks(capcut_draft, scenes)
-
-        return {
-            "draft_name": self._project_name(project),
-            "created_at": self._now(),
-            "updated_at": self._now(),
-            "app": "AutoCommerceAI",
-            "type": "capcut_project_mvp",
-            "version": capcut_draft.get("version"),
-            "track_count": len(tracks),
-            "scene_count": len(scenes)
-            or capcut_draft.get("meta", {}).get("scene_count", 0),
-            "status": "generated",
-        }
-
-    def _build_config(self):
-        return {
-            "video_mute": False,
-            "record_audio_last_index": 1,
-            "extract_audio_last_index": 1,
-            "original_sound_last_index": 1,
-            "subtitle_recognition_id": "",
-            "subtitle_taskinfo": [],
-            "lyrics_recognition_id": "",
-            "lyrics_taskinfo": [],
-            "subtitle_sync": True,
-            "lyrics_sync": True,
-            "voice_change_sync": False,
-            "sticker_max_index": 1,
-            "adjust_max_index": 1,
-            "material_save_mode": 0,
-            "export_range": None,
-            "maintrack_adsorb": True,
-            "combination_max_index": 1,
-            "attachment_info": [],
-            "zoom_info_params": None,
-            "system_font_list": [],
-            "multi_language_mode": "none",
-            "multi_language_main": "none",
-            "multi_language_current": "none",
-            "multi_language_list": [],
-            "subtitle_keywords_config": None,
-            "use_float_render": False,
-        }
-
-    def _build_canvas_config(self):
-        return {
-            "ratio": "original",
-            "width": 1080,
-            "height": 1920,
-            "background": None,
-        }
-
-    def _extract_scenes(self, capcut_draft):
-        scenes = capcut_draft.get("scenes")
-        if isinstance(scenes, list):
-            return scenes
-
-        edit_plan = capcut_draft.get("edit_plan", {})
-        scenes = edit_plan.get("scenes")
-        if isinstance(scenes, list):
-            return scenes
-
-        cut_plan = capcut_draft.get("cut_plan")
-        if isinstance(cut_plan, list):
-            return cut_plan
-
-        timeline = capcut_draft.get("timeline", {})
-        tracks = timeline.get("tracks", [])
-        if isinstance(tracks, list) and tracks:
-            return tracks
-
-        return []
-
-    def _build_tracks(self, capcut_draft, scenes):
-        builder = self._load_builder(
-            module_name="modules.capcut.timeline_builder",
-            class_name="CapCutTimelineBuilder",
+    def _write_draft_content(self, native_dir, draft_content):
+        text = json.dumps(
+            draft_content,
+            ensure_ascii=False,
+            indent=4,
         )
 
-        if builder and hasattr(builder, "build_timeline"):
-            try:
-                built = builder.build_timeline(scenes)
-                if isinstance(built, dict):
-                    return built.get("tracks", [])
-                if isinstance(built, list):
-                    return built
-            except Exception:
-                pass
+        targets = [
+            native_dir / "draft_content.json",
+            native_dir / "draft_content.json.bak",
+        ]
 
-        timeline = capcut_draft.get("timeline", {})
-        tracks = timeline.get("tracks", [])
+        timelines_dir = native_dir / "Timelines"
 
-        if isinstance(tracks, list):
-            return tracks
+        if timelines_dir.exists():
+            for timeline in timelines_dir.iterdir():
+                if not timeline.is_dir():
+                    continue
 
-        return []
+                targets.extend([
+                    timeline / "draft_content.json",
+                    timeline / "draft_content.json.bak",
+                ])
 
-    def _build_materials(self, scenes, tracks):
-        builder = self._load_builder(
-            module_name="modules.capcut.material_builder",
-            class_name="CapCutMaterialBuilder",
+        for path in targets:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(
+                text,
+                encoding="utf-8",
+            )
+
+    def _refresh_timeline_project(self, native_dir):
+        native_dir = Path(native_dir)
+
+        timelines_dir = native_dir / "Timelines"
+        project_json = timelines_dir / "project.json"
+        project_bak = timelines_dir / "project.json.bak"
+
+        if not timelines_dir.exists():
+            return
+
+        if not project_json.exists():
+            return
+
+        timeline_dirs = [
+            path for path in timelines_dir.iterdir()
+            if path.is_dir()
+        ]
+
+        if not timeline_dirs:
+            return
+
+        old_timeline_dir = timeline_dirs[0]
+        new_timeline_id = new_uuid()
+        new_timeline_dir = timelines_dir / new_timeline_id
+
+        if old_timeline_dir.name != new_timeline_id:
+            shutil.move(str(old_timeline_dir), str(new_timeline_dir))
+
+        now = int(time.time())
+
+        self._update_timeline_project_file(
+            project_json,
+            new_timeline_id=new_timeline_id,
+            now=now,
         )
 
-        if builder and hasattr(builder, "build_materials"):
-            try:
-                built = builder.build_materials(scenes)
-                if isinstance(built, dict):
-                    return built
-            except Exception:
-                pass
-
-        return self._fallback_materials(tracks)
-
-    def _load_builder(self, module_name, class_name):
-        try:
-            module = importlib.import_module(module_name)
-            builder_class = getattr(module, class_name, None)
-            if builder_class:
-                return builder_class()
-        except Exception:
-            return None
-
-        return None
-
-    def _fallback_materials(self, tracks):
-        materials = {
-            "videos": [],
-            "texts": [],
-            "effects": [],
-            "audios": [],
-        }
-
-        for track in tracks or []:
-            track_type = track.get("type")
-            clips = track.get("clips", [])
-
-            if track_type == "video":
-                materials["videos"].extend(clips)
-            elif track_type == "text":
-                materials["texts"].extend(clips)
-            elif track_type == "effect":
-                materials["effects"].extend(clips)
-            elif track_type == "audio":
-                materials["audios"].extend(clips)
-
-        return materials
-
-    def _duration_from_tracks(self, tracks, scenes):
-        max_end = 0
-
-        for track in tracks or []:
-            for segment in track.get("segments", []) or []:
-                timerange = segment.get("target_timerange", {}) or {}
-                start = int(timerange.get("start", 0) or 0)
-                duration = int(timerange.get("duration", 0) or 0)
-                max_end = max(max_end, start + duration)
-
-        if max_end > 0:
-            return max_end
-
-        total = 0
-        for scene in scenes or []:
-            total += self._scene_duration(scene)
-
-        return total if total > 0 else 5_000_000
-
-    def _scene_duration(self, scene):
-        try:
-            start = float(str(scene.get("start", "0")).replace("초", ""))
-            end = float(str(scene.get("end", "3")).replace("초", ""))
-            if end <= start:
-                return 3_000_000
-            return int((end - start) * 1_000_000)
-        except Exception:
-            return 3_000_000
-
-    def _build_readme(self, project, capcut_draft):
-        lines = []
-        lines.append("AutoCommerceAI CapCut Project")
-        lines.append("")
-        lines.append(f"프로젝트명: {self._project_name(project)}")
-        lines.append(f"생성일: {self._now()}")
-        lines.append(f"Draft Version: {capcut_draft.get('version')}")
-        lines.append("")
-        lines.append("포함 파일:")
-        lines.append("- draft_content.json")
-        lines.append("- draft_meta_info.json")
-        lines.append("- source_draft.json")
-        lines.append("")
-        lines.append("구조:")
-        lines.append("- project_builder.py: 오케스트레이터")
-        lines.append("- material_builder.py: materials 생성")
-        lines.append("- timeline_builder.py: timeline/tracks 생성")
-        lines.append("")
-        lines.append("Sprint 42-3:")
-        lines.append("- draft_content.json 최상위 구조를 실제 CapCut 샘플에 맞춰 보강")
-        lines.append("- id / version / new_version / fps / duration / config / canvas_config 추가")
-        lines.append("")
-        lines.append("주의:")
-        lines.append("- 기존 ZIP 산출물 구조를 유지합니다.")
-        lines.append("- CapCut 내부 포맷 호환성은 다음 Sprint에서 계속 고도화합니다.")
-        return "\n".join(lines)
-
-    def _zip_project(self, project_dir):
-        zip_path = shutil.make_archive(
-            base_name=str(project_dir),
-            format="zip",
-            root_dir=project_dir,
+        self._update_timeline_project_file(
+            project_bak,
+            new_timeline_id=new_timeline_id,
+            now=now,
         )
-        return Path(zip_path)
 
-    def _write_json(self, path, data):
+    def _update_timeline_project_file(self, path, new_timeline_id, now):
+        path = Path(path)
+
+        if not path.exists():
+            return
+
+        data = json.loads(path.read_text(encoding="utf-8"))
+
+        data["id"] = new_uuid()
+        data["main_timeline_id"] = new_timeline_id
+        data["create_time"] = now
+        data["update_time"] = now
+
+        timelines = data.get("timelines", [])
+        if timelines:
+            timelines[0]["id"] = new_timeline_id
+
         path.write_text(
-            json.dumps(data, ensure_ascii=False, indent=2),
+            json.dumps(data, ensure_ascii=False, indent=4),
             encoding="utf-8",
         )
 
-    def _timestamp(self):
-        return datetime.now().strftime("%Y%m%d_%H%M%S")
+    def _register_root_meta(self, native_dir, project_name):
+        native_dir = Path(native_dir)
 
-    def _now(self):
-        return datetime.now().isoformat(timespec="seconds")
+        if not self.root_meta_path.exists():
+            return
 
-    def _safe_project_id(self, project):
-        value = str(getattr(project, "id", "default"))
-        return (
-            value.replace(" ", "_")
-            .replace("/", "_")
-            .replace("\\", "_")
-            .replace(":", "_")
+        root_meta = json.loads(self.root_meta_path.read_text(encoding="utf-8"))
+
+        stores = root_meta.get("all_draft_store", [])
+        if not isinstance(stores, list):
+            stores = []
+
+        now = self._capcut_timestamp()
+
+        safe_project_name = self._safe_name(project_name)
+        fold_path = self._capcut_path(native_dir)
+        json_file = self._capcut_path(native_dir / "draft_content.json")
+        cover_file = self._capcut_path(native_dir / "draft_cover.jpg")
+
+        draft_item = self._build_root_meta_item(
+            project_name=safe_project_name,
+            fold_path=fold_path,
+            json_file=json_file,
+            cover_file=cover_file,
+            now=now,
+            native_dir=native_dir,
         )
 
-    def _project_name(self, project):
-        return (
-            getattr(project, "product_name", "")
-            or getattr(project, "title", "")
-            or getattr(project, "id", "")
-            or "AutoCommerceAI Project"
+        replaced = False
+        for index, item in enumerate(stores):
+            if item.get("draft_fold_path") == fold_path:
+                stores[index] = draft_item
+                replaced = True
+                break
+
+        if not replaced:
+            stores.append(draft_item)
+
+        root_meta["all_draft_store"] = stores
+        root_meta["draft_ids"] = len(stores)
+        root_meta.setdefault(
+            "root_path",
+            self._capcut_path(self.root_meta_path.parent),
         )
+
+        self.root_meta_path.write_text(
+            json.dumps(root_meta, ensure_ascii=False, separators=(",", ":")),
+            encoding="utf-8",
+        )
+
+    def _build_root_meta_item(self, project_name, fold_path, json_file, cover_file, now, native_dir):
+        return {
+            "cloud_draft_cover": False,
+            "cloud_draft_sync": False,
+            "draft_cloud_last_action_download": False,
+            "draft_cloud_purchase_info": "",
+            "draft_cloud_template_id": "",
+            "draft_cloud_tutorial_info": "",
+            "draft_cloud_videocut_purchase_info": "",
+            "draft_cover": cover_file,
+            "draft_fold_path": fold_path,
+            "draft_id": new_uuid(),
+            "draft_is_ai_shorts": False,
+            "draft_is_cloud_temp_draft": False,
+            "draft_is_invisible": False,
+            "draft_is_pippit_draft": False,
+            "draft_is_web_article_video": False,
+            "draft_json_file": json_file,
+            "draft_name": project_name,
+            "draft_new_version": "",
+            "draft_root_path": self._capcut_path(self.drafts_root),
+            "draft_timeline_materials_size": self._draft_timeline_materials_size(native_dir),
+            "draft_type": "",
+            "draft_web_article_video_enter_from": "",
+            "pippit_avatar_url": "",
+            "pippit_extra_info": "",
+            "pippit_id": "",
+            "pippit_user_name": "",
+            "streaming_edit_draft_ready": True,
+            "tm_draft_cloud_completed": "",
+            "tm_draft_cloud_entry_id": -1,
+            "tm_draft_cloud_modified": 0,
+            "tm_draft_cloud_parent_entry_id": -1,
+            "tm_draft_cloud_space_id": -1,
+            "tm_draft_cloud_user_id": -1,
+            "tm_draft_create": now,
+            "tm_draft_modified": now,
+            "tm_draft_removed": 0,
+            "tm_duration": self._draft_duration(native_dir),
+        }
+
+    def _draft_timeline_materials_size(self, native_dir):
+        native_dir = Path(native_dir)
+        total = 0
+
+        for name in [
+            "draft_content.json",
+            "draft_meta_info.json",
+            "key_value.json",
+            "timeline_layout.json",
+        ]:
+            path = native_dir / name
+            if path.exists():
+                total += path.stat().st_size
+
+        timelines_dir = native_dir / "Timelines"
+        if timelines_dir.exists():
+            for path in timelines_dir.rglob("*"):
+                if path.is_file():
+                    total += path.stat().st_size
+
+        return total
+
+    def _draft_duration(self, native_dir):
+        draft_content_path = Path(native_dir) / "draft_content.json"
+
+        if not draft_content_path.exists():
+            return 0
+
+        try:
+            data = json.loads(draft_content_path.read_text(encoding="utf-8"))
+        except Exception:
+            return 0
+
+        duration = data.get("duration")
+        if isinstance(duration, int):
+            return duration
+
+        max_end = 0
+        tracks = data.get("tracks", [])
+        for track in tracks:
+            for segment in track.get("segments", []):
+                target_timerange = segment.get("target_timerange", {})
+                start = target_timerange.get("start", 0)
+                seg_duration = target_timerange.get("duration", 0)
+
+                if isinstance(start, int) and isinstance(seg_duration, int):
+                    max_end = max(max_end, start + seg_duration)
+
+        return max_end
+
+    def _capcut_timestamp(self):
+        return int(time.time() * 1000000)
+
+    def _capcut_path(self, path):
+        return str(Path(path)).replace("\\", "/")
+
+    def _safe_name(self, name):
+        value = str(name or "AutoCommerceAI Draft").strip()
+
+        for char in ['\\', '/', ':', '*', '?', '"', '<', '>', '|']:
+            value = value.replace(char, "_")
+
+        return value or "AutoCommerceAI Draft"

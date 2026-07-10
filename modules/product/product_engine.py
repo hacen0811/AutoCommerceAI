@@ -2,9 +2,9 @@ import json
 from pathlib import Path
 
 from modules.product.coupang_product_engine import CoupangProductEngine
+from modules.studio.coupang_metadata_extractor import CoupangMetadataExtractor
 from modules.product.search_keyword_engine import SearchKeywordEngine
 from modules.product.product_title_engine import ProductTitleEngine
-
 
 class ProductEngine:
     """
@@ -18,6 +18,22 @@ class ProductEngine:
     def build_from_coupang(self, coupang_url, product_name="", price="", category="", image_url="", partner_url="", manual_product_name=""):
         parsed = CoupangProductEngine().parse(coupang_url)
 
+        metadata = CoupangMetadataExtractor().extract(
+            coupang_url=parsed.get("clean_url") or coupang_url,
+            product_name=product_name,
+            price=price,
+            category=category,
+            image_url=image_url,
+            partner_url=partner_url,
+            fetch=True,
+        )
+
+        resolved_image_url = (
+            image_url.strip()
+            or metadata.get("image_url", "")
+            or parsed.get("image_url", "")
+        )
+
         raw_name = (manual_product_name or product_name or parsed.get("guessed_product_name") or "").strip()
         title_data = ProductTitleEngine().improve(product_name or parsed.get("guessed_product_name") or "", manual_name=raw_name)
         name = title_data.get("short_title") or raw_name or "쿠팡 추천상품"
@@ -26,11 +42,11 @@ class ProductEngine:
 
         project_payload = {
             "product_name": name,
-            "coupang_url": parsed.get("clean_url") or coupang_url,
-            "partner_url": partner_url.strip(),
+            "coupang_url": parsed.get("coupang_url") or parsed.get("clean_url") or coupang_url,
+            "partner_url": partner_url.strip() or parsed.get("partner_url") or parsed.get("clean_url") or coupang_url,
             "taobao_url": "",
             "douyin_url": "",
-            "image_url": image_url.strip(),
+            "image_url": image_url.strip() or parsed.get("image_url", ""),
             "price": price.strip(),
             "category": category.strip(),
             "keyword": keyword_data.get("comment_keyword") or "정보",
@@ -40,6 +56,12 @@ class ProductEngine:
                     "title": title_data,
                     "keywords": keyword_data,
                     "task_queue": self.task_queue(keyword_data),
+                    "debug_delivery": {
+                        "product_name": name,
+                        "coupang_url": parsed.get("clean_url") or coupang_url,
+                        "partner_url": partner_url.strip() or parsed.get("clean_url") or coupang_url,
+                        "image_url": image_url.strip() or parsed.get("image_url", ""),
+                    },
                 }
             }
         }

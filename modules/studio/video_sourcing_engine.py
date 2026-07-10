@@ -34,26 +34,40 @@ class VideoCandidate:
 
 class VideoSourcingEngine:
     """
-    Sprint 6-4 image-first source engine.
+    Sprint 49
 
-    기본 검색 대상:
-    1) Taobao 이미지 검색
-    2) 1688 이미지 검색
-    3) Taobao 텍스트 검색
-    4) 1688 텍스트 검색
-    5) TikTok 공개 검색
+    SearchKeywordEngine에서 생성한
+    taobao_top10 / source_1688_top10 / douyin_top10을 그대로 사용한다.
 
-    Douyin은 기본 파이프라인에서 제외합니다.
+    역할 분리:
+    - SearchKeywordEngine: 검색어 품질 담당
+    - VideoSourcingEngine: 검색 링크 후보 생성 담당
     """
 
     def __init__(self):
         self.out_dir = EXPORTS_DIR / "studio_video_sources"
         self.out_dir.mkdir(parents=True, exist_ok=True)
 
-    def collect(self, product: Dict, max_candidates: int = 18) -> Dict:
-        name = product.get("name") or product.get("product_name") or product.get("keyword") or "상품"
+    def collect(self, product: Dict, max_candidates: int = 30) -> Dict:
+        print("[VIDEO SOURCING] collect entered")
+
+        name = (
+            product.get("name")
+            or product.get("product_name")
+            or product.get("title")
+            or product.get("keyword")
+            or "상품"
+        )
+
         keyword = product.get("keyword") or name
-        taobao_kw = product.get("taobao_keyword") or keyword or name
+
+        taobao_kw = (
+            product.get("taobao_keyword")
+            or product.get("search_keyword")
+            or product.get("main_keyword")
+            or name
+            or keyword
+        )
 
         image_url = (
             product.get("image_url")
@@ -62,6 +76,7 @@ class VideoSourcingEngine:
             or product.get("coupang_image_url")
             or ""
         )
+
         image_path = product.get("image_path") or ""
         coupang = product.get("coupang", {}) or {}
 
@@ -72,6 +87,7 @@ class VideoSourcingEngine:
         )
 
         seeds = self._build_seed_queries(
+            product=product,
             name=name,
             keyword=keyword,
             taobao_kw=taobao_kw,
@@ -80,6 +96,7 @@ class VideoSourcingEngine:
 
         candidates: List[VideoCandidate] = []
         rank = 1
+
         for platform, rows in seeds.items():
             for row in rows:
                 candidates.append(
@@ -95,7 +112,10 @@ class VideoSourcingEngine:
                             keyword=row["keyword"],
                             search_type=row.get("search_type", "text"),
                         ),
-                        note=self._platform_note(platform, row.get("search_type", "text")),
+                        note=self._platform_note(
+                            platform,
+                            row.get("search_type", "text"),
+                        ),
                         search_type=row.get("search_type", "text"),
                         image_url=image_url if row.get("search_type") == "image" else "",
                         image_path=image_asset.get("image_path", "") if row.get("search_type") == "image" else "",
@@ -103,11 +123,14 @@ class VideoSourcingEngine:
                 )
                 rank += 1
 
+        candidates = self._dedupe_candidates(candidates)
         candidates = sorted(candidates, key=lambda x: x.score, reverse=True)[:max_candidates]
+
         for i, c in enumerate(candidates, 1):
             c.rank = i
 
         best = candidates[:6]
+
         folder = self.out_dir / self._safe_name(name)
         folder.mkdir(parents=True, exist_ok=True)
 
@@ -115,16 +138,17 @@ class VideoSourcingEngine:
 
         manifest = {
             "ok": True,
-            "mode": "image-first-taobao-1688",
+            "mode": "sprint49-keyword-top10-links",
             "created_at": datetime.now().isoformat(timespec="seconds"),
             "product_name": name,
             "keyword": keyword,
+            "taobao_keyword": taobao_kw,
             "image_url": image_url,
             "image_asset": image_asset,
             "coupang_product_id": coupang.get("product_id"),
             "summary": (
-                "도우인은 기본 검색에서 제외하고, 쿠팡 대표이미지를 기반으로 "
-                "타오바오/1688 동일상품 검색을 1순위로 시도합니다."
+                "SearchKeywordEngine의 타오바오/1688/도우인 Top10 검색어를 그대로 사용해 "
+                "여러 플랫폼 검색 후보 링크를 생성합니다."
             ),
             "automation_status": self.automation_status(),
             "image_search": {
@@ -134,9 +158,9 @@ class VideoSourcingEngine:
                 "priority": [
                     "taobao_image_upload",
                     "1688_image_upload",
-                    "taobao_text_search",
-                    "1688_text_search",
-                    "tiktok_text_search",
+                    "taobao_top10_text_search",
+                    "1688_top10_text_search",
+                    "douyin_top10_text_search",
                 ],
                 "note": image_asset.get("message"),
             },
@@ -145,22 +169,28 @@ class VideoSourcingEngine:
             "best_candidates": [asdict(x) for x in best],
             "candidates": [asdict(x) for x in candidates],
             "how_to_use": [
-                "이미지 검색 후보가 1순위입니다.",
-                "타오바오/1688 이미지 업로드 결과에서 동일상품을 먼저 확인합니다.",
-                "상품 상세의 主图视频/实拍/买家秀/공장실사 영상을 우선 사용합니다.",
-                "이미지 검색이 부족하면 텍스트 검색 후보를 보조로 확인합니다.",
+                "이미지 검색 후보가 있으면 동일상품 확인용으로 먼저 사용합니다.",
+                "그다음 타오바오 Top10 검색 링크를 확인합니다.",
+                "1688 Top10은 공급처/공장/도매 후보 확인용입니다.",
+                "도우인 Top10은 사용 장면·리뷰·바이럴 영상 참고용입니다.",
+                "검색어에 实拍을 강제로 붙이지 않고, SearchKeywordEngine 결과를 그대로 사용합니다.",
             ],
-            "next_version_target": "동일상품 자동 클릭 후 主图视频 추출과 다운로드 자동화",
+            "next_version_target": "검색 결과 상품 상세 자동 클릭 후 主图视频/리뷰 영상 추출",
         }
 
         manifest_path = folder / "video_source_manifest.json"
-        manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+        manifest_path.write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
         manifest["manifest_path"] = str(manifest_path)
         return manifest
 
     def automation_status(self) -> Dict:
         try:
             from modules.studio.playwright_video_collector import PlaywrightVideoCollector
+
             return PlaywrightVideoCollector().status()
         except Exception as e:
             playwright = shutil.which("playwright") is not None
@@ -174,9 +204,19 @@ class VideoSourcingEngine:
             }
 
     def _try_live_collect(self, candidates: List[Dict]) -> Dict:
+        print("[VIDEO SOURCING] _try_live_collect entered")
+        print("[LIVE] candidates =", len(candidates))
+        print(candidates[:3])
+        
         try:
             from modules.studio.playwright_video_collector import PlaywrightVideoCollector
+            print("=" * 60)
+            print("[LIVE] candidates =", len(candidates))
+            print(candidates[:3])
+            print("=" * 60)
+
             return PlaywrightVideoCollector(headless=False).collect(candidates)
+                     
         except Exception as e:
             return {
                 "ok": False,
@@ -185,8 +225,14 @@ class VideoSourcingEngine:
                 "status": self.automation_status(),
             }
 
-    def _build_seed_queries(self, name: str, keyword: str, taobao_kw: str, image_asset: Dict) -> Dict[str, List[Dict]]:
-        cn_base = taobao_kw or name
+    def _build_seed_queries(
+        self,
+        product: Dict,
+        name: str,
+        keyword: str,
+        taobao_kw: str,
+        image_asset: Dict,
+    ) -> Dict[str, List[Dict]]:
         has_image = bool(image_asset.get("ok"))
 
         seeds: Dict[str, List[Dict]] = {
@@ -195,57 +241,181 @@ class VideoSourcingEngine:
             "tiktok": [],
         }
 
-        if has_image:
-            seeds["taobao"].extend([
-                {
-                    "title": f"{name} 타오바오 이미지 동일상품 검색",
-                    "keyword": name,
-                    "purpose": "쿠팡 이미지 기반 동일/유사 상품",
-                    "score": 130,
-                    "search_type": "image",
-                },
-                {
-                    "title": f"{name} 타오바오 이미지 + 主图视频",
-                    "keyword": f"{cn_base} 主图视频",
-                    "purpose": "동일상품 상세 대표 영상",
-                    "score": 122,
-                    "search_type": "image",
-                },
-            ])
-            seeds["1688"].extend([
-                {
-                    "title": f"{name} 1688 이미지 공급처 검색",
-                    "keyword": name,
-                    "purpose": "쿠팡 이미지 기반 공급처/공장 후보",
-                    "score": 128,
-                    "search_type": "image",
-                },
-                {
-                    "title": f"{name} 1688 이미지 + 工厂实拍",
-                    "keyword": f"{cn_base} 工厂 实拍",
-                    "purpose": "공급처 실사/공장 영상",
-                    "score": 118,
-                    "search_type": "image",
-                },
-            ])
+        #if has_image:
+            #seeds["taobao"].append(
+                #{
+                    #"title": f"{name} 타오바오 이미지 동일상품 검색",
+                    #"keyword": name,
+                    #"purpose": "쿠팡/업로드 이미지 기반 동일·유사 상품",
+                    #"score": 130,
+                    #"search_type": "image",
+                #}
+            #)
 
-        seeds["taobao"].extend([
-            {"title": f"{cn_base} 主图视频", "keyword": f"{cn_base} 主图视频", "purpose": "상세/대표 영상", "score": 96, "search_type": "text"},
-            {"title": f"{cn_base} 实拍", "keyword": f"{cn_base} 实拍", "purpose": "실사 영상", "score": 93, "search_type": "text"},
-            {"title": f"{cn_base} 买家秀", "keyword": f"{cn_base} 买家秀 视频", "purpose": "구매자 사용컷", "score": 87, "search_type": "text"},
-            {"title": f"{cn_base} 同款", "keyword": f"{cn_base} 同款", "purpose": "동일/유사 상품", "score": 85, "search_type": "text"},
-        ])
+            #seeds["1688"].append(
+                #{
+                    #"title": f"{name} 1688 이미지 공급처 검색",
+                    #"keyword": name,
+                    #"purpose": "이미지 기반 공급처/공장 후보",
+                    #"score": 128,
+                    #"search_type": "image",
+                #}
+            #)
 
-        seeds["1688"].extend([
-            {"title": f"{cn_base} 批发视频", "keyword": f"{cn_base} 批发 视频", "purpose": "공급처 영상", "score": 90, "search_type": "text"},
-            {"title": f"{cn_base} 工厂实拍", "keyword": f"{cn_base} 工厂 实拍", "purpose": "공장/공급처 실사", "score": 86, "search_type": "text"},
-        ])
+        taobao_rows = self._normalize_keyword_rows(
+            product.get("taobao_top10"),
+            fallback_keyword=product.get("taobao_keyword") or taobao_kw,
+            platform="taobao",
+        )
 
-        seeds["tiktok"].extend([
-            {"title": f"{name} TikTok 사용 영상", "keyword": f"{name} review", "purpose": "TikTok 공개 리뷰/사용 영상", "score": 72, "search_type": "text"},
-        ])
+        source_1688_rows = self._normalize_keyword_rows(
+            product.get("source_1688_top10"),
+            fallback_keyword=product.get("source_1688_keyword") or taobao_kw,
+            platform="1688",
+        )
+
+        douyin_rows = self._normalize_keyword_rows(
+            product.get("douyin_top10"),
+            fallback_keyword=product.get("douyin_keyword") or taobao_kw,
+            platform="tiktok",
+        )
+
+        for row in taobao_rows:
+            seeds["taobao"].append(
+                {
+                    "title": f"타오바오 {row['query']}",
+                    "keyword": row["query"],
+                    "purpose": row["purpose"],
+                    "score": row["score"],
+                    "search_type": "text",
+                }
+            )
+
+        for row in source_1688_rows:
+            seeds["1688"].append(
+                {
+                    "title": f"1688 {row['query']}",
+                    "keyword": row["query"],
+                    "purpose": row["purpose"],
+                    "score": row["score"],
+                    "search_type": "text",
+                }
+            )
+
+        for row in douyin_rows:
+            seeds["tiktok"].append(
+                {
+                    "title": f"도우인/TikTok {row['query']}",
+                    "keyword": row["query"],
+                    "purpose": row["purpose"],
+                    "score": row["score"],
+                    "search_type": "text",
+                }
+            )
 
         return seeds
+
+    def _normalize_keyword_rows(
+        self,
+        rows,
+        fallback_keyword: str,
+        platform: str,
+    ) -> List[Dict]:
+        normalized: List[Dict] = []
+
+        if isinstance(rows, list):
+            for i, item in enumerate(rows):
+                if not isinstance(item, dict):
+                    continue
+
+                query = str(item.get("query") or item.get("keyword") or "").strip()
+                if not query:
+                    continue
+
+                normalized.append(
+                    {
+                        "rank": item.get("rank") or i + 1,
+                        "query": self._clean_query(query),
+                        "purpose": item.get("purpose") or "검색 후보",
+                        "score": int(item.get("score") or max(50, 96 - i * 3)),
+                    }
+                )
+
+        if normalized:
+            return self._dedupe_rows(normalized)
+
+        fallback_keyword = self._clean_query(fallback_keyword)
+
+        if not fallback_keyword:
+            return []
+
+        if platform == "taobao":
+            suffixes = ["", "家用", "多功能", "推荐", "开箱", "使用", "视频", "同款", "收纳", "新款"]
+        elif platform == "1688":
+            suffixes = ["批发", "厂家", "源头工厂", "一件代发", "跨境", "现货", "供应商", "新款", "家用", "多功能"]
+        else:
+            suffixes = ["使用", "测评", "推荐", "好物", "神器", "对比", "开箱", "效果", "视频", "教程"]
+
+        for i, suffix in enumerate(suffixes):
+            query = f"{fallback_keyword} {suffix}".strip()
+            normalized.append(
+                {
+                    "rank": i + 1,
+                    "query": self._clean_query(query),
+                    "purpose": self._purpose(suffix),
+                    "score": 90 - i * 3,
+                }
+            )
+
+        return self._dedupe_rows(normalized)
+
+    def _clean_query(self, query: str) -> str:
+        query = str(query or "").strip()
+
+        remove_words = [
+            "实拍",
+            "實拍",
+            "실拍",
+            "상세페이지",
+            "대표이미지",
+            "이미지",
+        ]
+
+        for word in remove_words:
+            query = query.replace(word, " ")
+
+        query = query.replace("+", " ")
+        query = re_sub_spaces(query)
+        return query
+
+    def _dedupe_rows(self, rows: List[Dict]) -> List[Dict]:
+        seen = set()
+        result = []
+
+        for row in rows:
+            query = row.get("query", "").strip()
+            if not query:
+                continue
+            if query in seen:
+                continue
+
+            seen.add(query)
+            result.append(row)
+
+        return result
+
+    def _dedupe_candidates(self, candidates: List[VideoCandidate]) -> List[VideoCandidate]:
+        seen = set()
+        result = []
+
+        for item in candidates:
+            key = (item.platform, item.search_type, item.keyword, item.search_url)
+            if key in seen:
+                continue
+            seen.add(key)
+            result.append(item)
+
+        return result
 
     def _platform_url(self, platform: str, keyword: str, search_type: str = "text") -> str:
         q = quote_plus(keyword or "")
@@ -268,21 +438,61 @@ class VideoSourcingEngine:
     def _platform_note(self, platform: str, search_type: str = "text") -> str:
         if platform == "taobao":
             if search_type == "image":
-                return "타오바오 이미지 검색입니다. 쿠팡 대표이미지로 동일/유사 상품을 먼저 찾습니다."
-            return "타오바오는 상품 상세의 主图视频/实拍 영상을 우선 확인하세요."
+                return "타오바오 이미지 검색입니다. 업로드한 대표 이미지로 동일/유사 상품을 먼저 찾습니다."
+            return "타오바오 텍스트 검색입니다. 상품 상세의 대표 영상/리뷰 영상 후보를 확인하세요."
 
         if platform == "1688":
             if search_type == "image":
-                return "1688 이미지 검색입니다. 쿠팡 대표이미지로 공급처/공장 후보를 먼저 찾습니다."
-            return "1688은 공급처 상세 영상과 공장 실사 후보 확인에 유용합니다."
+                return "1688 이미지 검색입니다. 업로드한 대표 이미지로 공급처/공장 후보를 먼저 찾습니다."
+            return "1688 텍스트 검색입니다. 공급처/공장/도매 후보 확인에 유용합니다."
 
         if platform == "tiktok":
-            return "TikTok은 보조 검색입니다. 타오바오/1688 이미지 검색이 우선입니다."
+            return "도우인/TikTok 보조 검색입니다. 사용 장면·리뷰·바이럴 참고용입니다."
 
         return ""
 
+    def _purpose(self, suffix):
+        return {
+            "": "기본 검색",
+            "家用": "생활 사용 장면",
+            "多功能": "기능 설명",
+            "推荐": "추천 영상",
+            "开箱": "언박싱",
+            "使用": "사용 장면",
+            "视频": "영상 후보",
+            "同款": "동일/유사 상품",
+            "收纳": "정리 장면",
+            "新款": "신상품 후보",
+            "批发": "도매 후보",
+            "厂家": "제조사 후보",
+            "源头工厂": "소스 공장 후보",
+            "一件代发": "위탁/대행 후보",
+            "跨境": "해외판매 후보",
+            "现货": "재고 보유 후보",
+            "供应商": "공급업체 후보",
+            "测评": "리뷰 영상",
+            "好物": "쇼핑쇼츠 후보",
+            "神器": "후킹 강한 영상",
+            "对比": "Before/After",
+            "效果": "효과 장면",
+            "教程": "사용법/튜토리얼",
+        }.get(suffix, "검색 후보")
+
     def _safe_name(self, text: str) -> str:
-        import re
-        text = re.sub(r"[^\w가-힣\s-]", "", str(text))
-        text = re.sub(r"\s+", "_", text).strip("_")
+        text = re_sub_safe_filename(text)
         return text[:48] or "video_sources"
+
+
+def re_sub_spaces(text: str) -> str:
+    import re
+
+    text = re.sub(r"\s+", " ", str(text or ""))
+    return text.strip()
+
+
+def re_sub_safe_filename(text: str) -> str:
+    import re
+
+    text = re.sub(r"[^\w가-힣\s-]", "", str(text or ""))
+    text = re.sub(r"\s+", "_", text).strip("_")
+    return text

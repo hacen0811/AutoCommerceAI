@@ -1,6 +1,6 @@
 import streamlit as st
 
-from app.utils.candidate_source import select_source
+from app.utils.selected_sources import select_source
 from app.utils.project_keys import safe_project_id
 
 
@@ -74,10 +74,16 @@ def show_live_sources(project, live_sources):
 
                 source_item = {
                     "rank": i,
-                    "query": title,
+                    "platform": item.get("platform", "live"),
+                    "title": title,
+                    "query": item.get("query") or item.get("keyword") or title,
+                    "keyword": item.get("keyword") or item.get("query") or title,
+                    "search_query": item.get("search_query") or item.get("query") or item.get("keyword") or title,
                     "purpose": "실제 Playwright 수집 후보",
                     "score": item.get("score", 80),
                     "thumbnail": thumbnail,
+                    "url": url,
+                    "search_url": item.get("search_url") or url,
                 }
 
                 if st.button(

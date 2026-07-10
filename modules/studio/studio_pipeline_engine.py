@@ -93,10 +93,23 @@ class StudioPipelineEngine:
         vision = VideoBasicAnalyzer().analyze(video_path, sample_count=sample_count)
         package["vision"] = vision
 
-        product["search_urls"] = self.search_urls(product)
-        product["taobao_top10"] = self.expand_top10(product.get("taobao_top10"), product.get("taobao_keyword") or pname, "taobao")
-        product["douyin_top10"] = self.expand_top10(product.get("douyin_top10"), product.get("douyin_keyword") or pname, "douyin")
+        if not product.get("search_urls"):
+            product["search_urls"] = self.search_urls(product)
+                
+        if not product.get("taobao_top10"):
+            product["taobao_top10"] = self.expand_top10(
+                None,
+                product.get("taobao_keyword") or pname,
+                "taobao",
+            )
 
+        if not product.get("douyin_top10"):
+            product["douyin_top10"] = self.expand_top10(
+                None,
+                product.get("douyin_keyword") or pname,
+                "douyin",
+            )
+            
         package["video_sources"] = VideoSourcingEngine().collect(product)
 
         package["scripts"] = self.build_scripts(pname, keyword, product, vision)
