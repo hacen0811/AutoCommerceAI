@@ -3,6 +3,7 @@ from pathlib import Path
 from datetime import datetime
 
 from modules.video.cut_planner import CutPlanner
+from modules.video.video_pipeline import VideoPipeline
 from modules.capcut.export_builder import CapCutExportBuilder
 from modules.video.capcut_draft_builder import CapCutDraftBuilder
 from modules.capcut.project_builder import CapCutProjectBuilder
@@ -14,7 +15,11 @@ class ContentFactory:
     def __init__(self):
         CONTENT_PACK_DIR.mkdir(parents=True, exist_ok=True)
 
-    def apply_edit_assistant(self, pack):
+    def apply_edit_assistant(
+        self,
+        pack,
+        project=None,
+    ):
         """
         AI 콘텐츠 팩에 실제 편집용 보조 정보를 추가합니다.
         기존 pack 구조는 유지하고, 없는 값만 안전하게 보강합니다.
@@ -134,7 +139,28 @@ class ContentFactory:
         pack["capcut_draft"] = (
             CapCutDraftBuilder().build(pack["capcut_export"])
         )
-        
+
+        video_pipeline = VideoPipeline().run(
+            content_pack=pack,
+            project=project,
+        )
+        print(
+            "[DEBUG] VideoPipeline:",
+            type(video_pipeline),
+            video_pipeline.keys()
+            if isinstance(video_pipeline, dict)
+            else video_pipeline,
+        )
+        print(
+            "[DEBUG] Render:",
+            video_pipeline.get("render"),
+        )
+
+        pack["video_pipeline"] = video_pipeline
+        pack["video_composer"] = video_pipeline.get("composer", {})
+        pack["video_render"] = video_pipeline.get("render", {})
+        pack["subtitle_pipeline"] = video_pipeline.get("subtitle", {})
+
         return pack
 
     def save_content_pack(self, project, pack):
@@ -157,6 +183,21 @@ class ContentFactory:
         capcut_draft_path = (
             CONTENT_PACK_DIR
             / f"{project_id}_capcut_draft_{timestamp}.json"
+        )
+
+        video_pipeline_path = (
+            CONTENT_PACK_DIR
+            / f"{project_id}_video_pipeline_{timestamp}.json"
+        )
+
+        video_composer_path = (
+            CONTENT_PACK_DIR
+            / f"{project_id}_video_composer_{timestamp}.json"
+        )
+
+        subtitle_pipeline_path = (
+            CONTENT_PACK_DIR
+            / f"{project_id}_subtitle_pipeline_{timestamp}.json"
         )
 
         json_path.write_text(
@@ -187,6 +228,33 @@ class ContentFactory:
             encoding="utf-8",
         )
 
+        video_pipeline_path.write_text(
+            json.dumps(
+                pack.get("video_pipeline", {}),
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+
+        video_composer_path.write_text(
+            json.dumps(
+                pack.get("video_composer", {}),
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+
+        subtitle_pipeline_path.write_text(
+            json.dumps(
+                pack.get("subtitle_pipeline", {}),
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        
         project_paths = {}
 
         if pack.get("capcut_draft"):
@@ -206,10 +274,14 @@ class ContentFactory:
             "capcut_draft_path": str(capcut_draft_path),
 
             "capcut_export_json_path": str(capcut_export_path),
-        "capcut_draft_json_path": str(capcut_draft_path),
-    
+            "capcut_draft_json_path": str(capcut_draft_path),
+
+            "video_pipeline_path": str(video_pipeline_path),
+            "video_composer_path": str(video_composer_path),
+            "subtitle_pipeline_path": str(subtitle_pipeline_path),
+
             **project_paths,
-        }
+        } 
 
     def _build_scene_plan(self, project_name, main_hook):
         return [

@@ -16,6 +16,7 @@ from modules.workflow.job_queue import JobQueue
 from modules.workflow.pipeline_state import PipelineState
 
 from app.ui.pipeline_result import show_pipeline_result
+from app.ui.selected_sources_view import show_selected_sources
 from app.ui.content_pack.content_pack_view import (
     show_content_pack_view as show_content_pack_view_new,
 )
@@ -322,10 +323,10 @@ def render_project_pipeline(project, sample_count):
 
     if result:
         show_pipeline_result(project, result, path_debug)
-        
-        st.success("DEBUG 1")
-           
-    
+
+        # ✅ 채택 영상 후보 화면
+        show_selected_sources(project)
+
         show_content_pack_view_new(
             project=project,
             result=result,
@@ -338,7 +339,6 @@ def render_project_pipeline(project, sample_count):
                 {}
             ),
         )
-        st.success("DEBUG 2")
 
     else:
         st.info("원클릭 결과가 아직 없습니다. 먼저 원클릭 실행을 완료해 주세요.")

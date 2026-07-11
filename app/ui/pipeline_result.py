@@ -146,32 +146,6 @@ def show_result_summary(project, outputs):
     
     st.divider()
     show_source_candidates()
-    
-    selected = outputs.get("candidate_selection", {}).get("top3", [])
-
-    st.markdown("### 채택 영상 후보")
-
-    if not selected:
-        st.caption("채택된 영상 후보가 없습니다.")
-        return
-
-    for idx, item in enumerate(selected, start=1):
-        platform = item.get("platform", "-")
-        query = candidate_query(item)
-        url = candidate_url(item)
-
-        with st.container(border=True):
-            st.write(f"**{idx}. {platform}**")
-            st.write(f"검색어: {query}")
-
-            if url:
-                st.link_button(
-                    "후보 열기",
-                    url,
-                    use_container_width=True,
-                )
-            else:
-                st.caption("URL 없음")
 
 
 def show_video_quality(outputs, state):
