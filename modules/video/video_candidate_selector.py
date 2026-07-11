@@ -6,16 +6,17 @@ from typing import Any, Dict, List
 
 class VideoCandidateSelector:
     """
-    Sprint 58 Video Candidate Selector
+    Sprint 59 Video Candidate Selector
 
     역할:
     - 기존 검색 점수, 화질, 쇼핑쇼츠 적합도 유지
     - TikTok/Douyin 상세 메타데이터 통계 반영
     - 조회수, 좋아요, 댓글, 공유를 후보 점수에 반영
+    - ResponseSniffer가 item_id 기준으로 연결한 stats 구조 지원
     - 기존 반환 구조(best/top3/all) 유지
     """
 
-    SELECTOR_VERSION = "video-candidate-selector-58-1"
+    SELECTOR_VERSION = "video-candidate-selector-59-1"
 
     def select(
         self,
@@ -30,6 +31,8 @@ class VideoCandidateSelector:
                 continue
 
             new_item = dict(item)
+            self._normalize_social_stats(new_item)
+
             score = self._score_candidate(new_item)
 
             new_item["ai_score"] = score
@@ -63,6 +66,9 @@ class VideoCandidateSelector:
                 self._safe_int(
                     x.get("comment_count", 0)
                 ),
+                self._safe_int(
+                    x.get("share_count", 0)
+                ),
             ),
             reverse=True,
         )
@@ -75,6 +81,67 @@ class VideoCandidateSelector:
             "all": scored,
             "selector_version": self.SELECTOR_VERSION,
         }
+
+    def _normalize_social_stats(
+        self,
+        item: Dict[str, Any],
+    ) -> None:
+        """
+        ResponseSniffer 또는 collector가 제공한 여러 통계 키를
+        selector 공통 필드로 정규화한다.
+
+        공통 필드:
+        - view_count
+        - like_count
+        - comment_count
+        - share_count
+        """
+
+        item["view_count"] = self._stat_value(
+            item,
+            "view_count",
+            "views",
+            "viewCount",
+            "play_count",
+            "playCount",
+            "play_count_total",
+        )
+
+        item["like_count"] = self._stat_value(
+            item,
+            "like_count",
+            "likes",
+            "likeCount",
+            "digg_count",
+            "diggCount",
+        )
+
+        item["comment_count"] = self._stat_value(
+            item,
+            "comment_count",
+            "comments",
+            "commentCount",
+        )
+
+        item["share_count"] = self._stat_value(
+            item,
+            "share_count",
+            "shares",
+            "shareCount",
+        )
+
+        stats = item.get("stats")
+
+        if not isinstance(stats, dict):
+            stats = {}
+
+        normalized_stats = dict(stats)
+        normalized_stats["view_count"] = item["view_count"]
+        normalized_stats["like_count"] = item["like_count"]
+        normalized_stats["comment_count"] = item["comment_count"]
+        normalized_stats["share_count"] = item["share_count"]
+
+        item["stats"] = normalized_stats
 
     def _score_candidate(
         self,
@@ -232,6 +299,7 @@ class VideoCandidateSelector:
             item,
             "view_count",
             "views",
+            "viewCount",
             "play_count",
             "playCount",
         )
@@ -240,6 +308,7 @@ class VideoCandidateSelector:
             item,
             "like_count",
             "likes",
+            "likeCount",
             "digg_count",
             "diggCount",
         )
@@ -526,6 +595,7 @@ class VideoCandidateSelector:
             item,
             "view_count",
             "views",
+            "viewCount",
             "play_count",
             "playCount",
         )
@@ -534,6 +604,7 @@ class VideoCandidateSelector:
             item,
             "like_count",
             "likes",
+            "likeCount",
             "digg_count",
             "diggCount",
         )
