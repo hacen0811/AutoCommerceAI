@@ -12,7 +12,11 @@ from modules.workflow.pipeline_state import PipelineState
 from modules.video.video_path_resolver import VideoPathResolver
 from modules.studio.video_sourcing_engine import VideoSourcingEngine
 from modules.video.video_quality_engine import VideoQualityEngine
+from modules.video.shopping_fit_engine import ShoppingFitEngine
 from modules.video.video_candidate_selector import VideoCandidateSelector
+from modules.video.video_candidate_ranker import VideoCandidateRanker
+from modules.video.viral_pattern_engine import ViralPatternEngine
+from modules.content.content_factory import ContentFactory
 from modules.project.repository import ProjectRepository
 from modules.video.download_utils import (
     latest_downloaded_video,
@@ -21,7 +25,33 @@ from modules.video.download_utils import (
 )
 
 
+print("######## WORKFLOW_ENGINE SPRINT62 LOADED ########", flush=True)
+
+
 class WorkflowEngine:
+    """
+    Sprint 62 Workflow Engine
+
+    기존 Sprint 61 원클릭 파이프라인을 유지하면서
+    ShoppingFit 다음 단계에 ViralPatternEngine을 연결합니다.
+
+    흐름:
+    ProductPlan
+    → SourcePlan
+    → SourceRank
+    → VideoSourcing
+    → RealVision
+    → VideoQuality
+    → ShoppingFit
+    → ViralPattern
+    → CandidateSelector
+    → CandidateRanker
+    → AutoEditor
+    → CapCutExport
+    """
+
+    WORKFLOW_VERSION = "workflow-engine-62-1"
+
     STEP_NAMES = [
         "product_plan",
         "source_plan",
@@ -34,182 +64,449 @@ class WorkflowEngine:
 
     def steps(self):
         labels = {
-            "product_plan": "상품/검색 계획",
-            "source_plan": "소스 영상 계획",
+            "product_plan": "상품 분석",
+            "source_plan": "소스 검색 계획",
             "source_rank": "영상 후보 랭킹",
-            "real_vision": "Real Vision 분석",
-            "auto_editor": "CapCut 편집안",
-            "content_factory": "콘텐츠 생성",
-            "capcut_export": "편집 지시서 내보내기",
+            "real_vision": "실제 영상 AI 분석",
+            "auto_editor": "자동 편집 계획",
+            "content_factory": "AI 콘텐츠 팩",
+            "capcut_export": "CapCut 내보내기",
         }
-        return [{"name": name, "label": labels[name], "status": "pending"} for name in self.STEP_NAMES]
+
+        return [
+            {
+                "name": name,
+                "label": labels[name],
+                "status": "pending",
+            }
+            for name in self.STEP_NAMES
+        ]
 
     def _project_data(self, project):
         try:
-            return json.loads(getattr(project, "data_json", "") or "{}")
+            return json.loads(
+                getattr(project, "data_json", "") or "{}"
+            )
         except Exception:
             return {}
 
     def auto_connect_latest_download(self, project):
         resolver = VideoPathResolver()
         current_video = resolver.resolve_path(project)
-        print("[AUTO] current_video =", current_video)
 
-        if current_video and resolver.exists(current_video):
-            return {"ok": False, "message": "이미 연결된 영상이 있습니다.", "video_path": current_video}
-
-        latest = latest_downloaded_video()
-        print("[AUTO] latest =", latest)
-
-        if not latest:
-            return {"ok": False, "message": "Downloads 최신 영상 없음", "video_path": ""}
-
-        out_dir = project_source_video_dir(project)
-        out_dir.mkdir(parents=True, exist_ok=True)
-
-        project_name = safe_file_name(
-            getattr(project, "product_name", "") or getattr(project, "title", ""),
-            "project",
+        print(
+            "[AUTO] current_video =",
+            current_video,
+            flush=True,
         )
 
-        target = out_dir / f"auto_{project_name}{latest.suffix.lower()}"
-        print("[AUTO] copy ->", target)
-
-        try:
-            shutil.copy2(str(latest), str(target))
-        except PermissionError:
+        if current_video and resolver.exists(current_video):
             return {
                 "ok": False,
-                "message": "기존 영상 파일이 사용 중입니다. 동영상 플레이어나 CapCut을 닫고 다시 시도해주세요.",
+                "message": "이미 연결된 영상이 있습니다.",
+                "video_path": current_video,
+            }
+
+        latest = latest_downloaded_video()
+
+        print(
+            "[AUTO] latest =",
+            latest,
+            flush=True,
+        )
+
+        if not latest:
+            return {
+                "ok": False,
+                "message": "Downloads 최신 영상 없음",
+                "video_path": "",
+            }
+
+        out_dir = project_source_video_dir(project)
+        out_dir.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+        project_name = safe_file_name(
+            getattr(project, "product_name", "")
+            or getattr(project, "title", "")
+            or "product"
+        )
+
+        suffix = latest.suffix.lower() or ".mp4"
+        target = out_dir / f"{project_name}_latest{suffix}"
+
+        try:
+            if latest.resolve() != target.resolve():
+                shutil.copy2(latest, target)
+        except Exception:
+            shutil.copy2(latest, target)
+
+        try:
+            ProjectRepository().update_links_and_media(
+                getattr(project, "id"),
+                video_path=str(target),
+            )
+        except Exception as exc:
+            print(
+                "[AUTO] ProjectRepository update ERROR:",
+                repr(exc),
+                flush=True,
+            )
+            return {
+                "ok": False,
+                "message": str(exc),
                 "video_path": str(target),
             }
 
-        ProjectRepository().update_links_and_media(getattr(project, "id"), video_path=str(target))
-        return {"ok": True, "message": "Downloads 최신 영상을 자동 연결했습니다.", "video_path": str(target)}
+        return {
+            "ok": True,
+            "message": "Downloads 최신 영상을 자동 연결했습니다.",
+            "video_path": str(target),
+        }
 
     def run_project(self, project, sample_count=6):
+        print(
+            "######## RUN_PROJECT SPRINT62 START ########",
+            flush=True,
+        )
+        print(
+            "[TRACE] workflow_version:",
+            self.WORKFLOW_VERSION,
+            flush=True,
+        )
+        print(
+            "[TRACE] project:",
+            project,
+            flush=True,
+        )
+        print(
+            "[TRACE] sample_count:",
+            sample_count,
+            flush=True,
+        )
+
         resolver = VideoPathResolver()
         project = resolver.resolve_project(project)
 
-        auto_connected = self.auto_connect_latest_download(project)
+        auto_connected = self.auto_connect_latest_download(
+            project
+        )
+
         if auto_connected.get("ok"):
             project = resolver.resolve_project(project)
 
         project_data = self._project_data(project)
-        image_path = project_data.get("image_path", "")
+        image_path = project_data.get(
+            "image_path",
+            "",
+        )
 
         job_id = uuid4().hex[:12]
         state = PipelineState()
-        state.create(job_id, getattr(project, "product_name", "") or getattr(project, "title", ""), self.steps())
 
-        outputs = {}
+        state.create(
+            job_id,
+            getattr(project, "product_name", "")
+            or getattr(project, "title", ""),
+            self.steps(),
+        )
 
+        outputs = {
+            "workflow_version": self.WORKFLOW_VERSION,
+            "auto_connected": auto_connected,
+        }
+
+        # 1. Product Plan
         try:
             product_plan = ProductEngine().build_from_coupang(
                 getattr(project, "coupang_url", ""),
-                product_name=getattr(project, "product_name", ""),
+                product_name=getattr(
+                    project,
+                    "product_name",
+                    "",
+                ),
                 price=getattr(project, "price", ""),
-                category=getattr(project, "category", ""),
-                image_url=getattr(project, "image_url", ""),
-                partner_url=getattr(project, "partner_url", ""),
+                category=getattr(
+                    project,
+                    "category",
+                    "",
+                ),
+                image_url=getattr(
+                    project,
+                    "image_url",
+                    "",
+                ),
+                partner_url=getattr(
+                    project,
+                    "partner_url",
+                    "",
+                ),
             )
+
             outputs["product_plan"] = product_plan
-            state.update_step(job_id, "product_plan", "done", self._compact(product_plan))
+
+            state.update_step(
+                job_id,
+                "product_plan",
+                "done",
+                self._compact(product_plan),
+            )
+
         except Exception as exc:
             product_plan = {}
-            state.update_step(job_id, "product_plan", "failed", error=exc)
+            outputs["product_plan"] = {}
 
-        try:
-            source_plan = SourceVideoEngine().make_search_plan(project, product_plan=product_plan)
-            outputs["source_plan"] = source_plan
-            state.update_step(job_id, "source_plan", "done", source_plan)
-        except Exception as exc:
-            source_plan = {}
-            state.update_step(job_id, "source_plan", "failed", error=exc)
-
-        try:
-            videos = SourceVideoEngine().list_project_videos(project)
-            ranked = SourceVideoRanker().rank(videos, sample_count=4)
-            outputs["source_rank"] = ranked
-            state.update_step(job_id, "source_rank", "done", {"count": len(ranked), "top": ranked[:3]})
-        except Exception as exc:
-            ranked = []
-            state.update_step(job_id, "source_rank", "failed", error=exc)
-
-        
-        try:
-            keywords = product_plan.get("keywords", {}) if isinstance(product_plan, dict) else {}
-
-            print("[WORKFLOW] keywords keys =", list(keywords.keys()))
-            print("[WORKFLOW] taobao_keyword =", keywords.get("taobao_keyword"))
-            print("[WORKFLOW] source_1688_keyword =", keywords.get("source_1688_keyword"))
-            print("[WORKFLOW] douyin_keyword =", keywords.get("douyin_keyword"))
-            print("[WORKFLOW] taobao_top10 count =", len(keywords.get("taobao_top10", [])))
-            print("[WORKFLOW] source_1688_top10 count =", len(keywords.get("source_1688_top10", [])))
-            print("[WORKFLOW] douyin_top10 count =", len(keywords.get("douyin_top10", [])))
-            print("[WORKFLOW] clean_name =", keywords.get("clean_name"))
-            print("[WORKFLOW] tokens =", keywords.get("tokens"))
-            print("[WORKFLOW] category =", keywords.get("category"))
-
-            live_sources = VideoSourcingEngine().collect({
-                "name": getattr(project, "product_name", ""),
-                "product_name": getattr(project, "product_name", ""),
-                "keyword": getattr(project, "keyword", ""),
-                "coupang_url": getattr(project, "coupang_url", ""),
-                "partner_url": getattr(project, "partner_url", ""),
-                "image_url": getattr(project, "image_url", ""),
-                "image_path": image_path,
-
-                "taobao_keyword": keywords.get("taobao_keyword", ""),
-                "source_1688_keyword": keywords.get("source_1688_keyword", ""),
-                "douyin_keyword": keywords.get("douyin_keyword", ""),
-                "taobao_top10": keywords.get("taobao_top10", []),
-                "source_1688_top10": keywords.get("source_1688_top10", []),
-                "douyin_top10": keywords.get("douyin_top10", []),
-            })
-
-            outputs["video_sources"] = live_sources
-            outputs["video_candidates"] = (
-                live_sources.get("best_candidates", [])
-                or live_sources.get("candidates", [])
-                or live_sources.get("results", [])
+            state.update_step(
+                job_id,
+                "product_plan",
+                "failed",
+                error=exc,
             )
 
-            print("=" * 80)
-            live_collection = live_sources.get("live_collection", {}) or {}
+        # 2. Source Plan
+        try:
+            source_plan = (
+                SourceVideoEngine().make_search_plan(
+                    project,
+                    product_plan=product_plan,
+                )
+            )
 
-            print("[LIVE_COLLECTION] ok =", live_collection.get("ok"))
-            print("[LIVE_COLLECTION] results count =", len(live_collection.get("results", [])))
-            print("[LIVE_COLLECTION] diagnostics count =", len(live_collection.get("diagnostics", [])))
-            print("[LIVE_COLLECTION] errors =", live_collection.get("errors"))
-            print("[LIVE_COLLECTION] message =", live_collection.get("message"))
-            print("[LIVE_COLLECTION] status =", live_collection.get("status"))
-           
-            diagnostics = live_collection.get("diagnostics", [])
-            if diagnostics:
-                print("[LIVE_COLLECTION] first diagnostics keys =", list(diagnostics[0].keys()))
-                print("[LIVE_COLLECTION] first network_summary =", diagnostics[0].get("network_summary"))
-                print("[LIVE_COLLECTION] first network_media count =", len(diagnostics[0].get("network_media", [])))
-                if diagnostics[0].get("network_media"):
-                    print("[LIVE_COLLECTION] first media =", diagnostics[0]["network_media"][0])
+            outputs["source_plan"] = source_plan
 
-            print("=" * 80)
+            state.update_step(
+                job_id,
+                "source_plan",
+                "done",
+                source_plan,
+            )
 
         except Exception as exc:
-            outputs["video_sources"] = {"ok": False, "reason": str(exc)}
+            source_plan = {}
+            outputs["source_plan"] = {}
+
+            state.update_step(
+                job_id,
+                "source_plan",
+                "failed",
+                error=exc,
+            )
+
+        # 3. Source Ranking
+        try:
+            videos = (
+                SourceVideoEngine().list_project_videos(
+                    project
+                )
+            )
+
+            ranked = SourceVideoRanker().rank(
+                videos,
+                sample_count=4,
+            )
+
+            outputs["source_rank"] = ranked
+
+            state.update_step(
+                job_id,
+                "source_rank",
+                "done",
+                {
+                    "count": len(ranked),
+                    "top": ranked[:3],
+                },
+            )
+
+        except Exception as exc:
+            ranked = []
+            outputs["source_rank"] = []
+
+            state.update_step(
+                job_id,
+                "source_rank",
+                "failed",
+                error=exc,
+            )
+
+        # 3-1. Live Video Source Collection
+        try:
+            keywords = (
+                product_plan.get("keywords", {})
+                if isinstance(product_plan, dict)
+                else {}
+            )
+
+            print(
+                "[WORKFLOW] keywords keys =",
+                list(keywords.keys()),
+                flush=True,
+            )
+            print(
+                "[WORKFLOW] taobao_keyword =",
+                keywords.get("taobao_keyword"),
+                flush=True,
+            )
+            print(
+                "[WORKFLOW] source_1688_keyword =",
+                keywords.get("source_1688_keyword"),
+                flush=True,
+            )
+            print(
+                "[WORKFLOW] douyin_keyword =",
+                keywords.get("douyin_keyword"),
+                flush=True,
+            )
+
+            live_sources = VideoSourcingEngine().collect(
+                {
+                    "name": getattr(
+                        project,
+                        "product_name",
+                        "",
+                    ),
+                    "product_name": getattr(
+                        project,
+                        "product_name",
+                        "",
+                    ),
+                    "keyword": getattr(
+                        project,
+                        "keyword",
+                        "",
+                    ),
+                    "coupang_url": getattr(
+                        project,
+                        "coupang_url",
+                        "",
+                    ),
+                    "partner_url": getattr(
+                        project,
+                        "partner_url",
+                        "",
+                    ),
+                    "image_url": getattr(
+                        project,
+                        "image_url",
+                        "",
+                    ),
+                    "image_path": image_path,
+                    "taobao_keyword": keywords.get(
+                        "taobao_keyword",
+                        "",
+                    ),
+                    "source_1688_keyword": keywords.get(
+                        "source_1688_keyword",
+                        "",
+                    ),
+                    "douyin_keyword": keywords.get(
+                        "douyin_keyword",
+                        "",
+                    ),
+                    "taobao_top10": keywords.get(
+                        "taobao_top10",
+                        [],
+                    ),
+                    "source_1688_top10": keywords.get(
+                        "source_1688_top10",
+                        [],
+                    ),
+                    "douyin_top10": keywords.get(
+                        "douyin_top10",
+                        [],
+                    ),
+                    "clean_name": keywords.get(
+                        "clean_name",
+                        "",
+                    ),
+                    "tokens": keywords.get(
+                        "tokens",
+                        [],
+                    ),
+                    "category": keywords.get(
+                        "category",
+                        "",
+                    ),
+                }
+            )
+
+            outputs["video_sources"] = live_sources
+
+            video_candidates = (
+                live_sources.get(
+                    "best_candidates",
+                    [],
+                )
+                or live_sources.get(
+                    "candidates",
+                    [],
+                )
+                or live_sources.get(
+                    "results",
+                    [],
+                )
+            )
+
+            outputs["video_candidates"] = (
+                video_candidates
+                if isinstance(video_candidates, list)
+                else []
+            )
+
+            print(
+                "[Sprint62] Video candidates:",
+                len(outputs["video_candidates"]),
+                flush=True,
+            )
+
+        except Exception as exc:
+            print(
+                "[Sprint62] VideoSourcing ERROR:",
+                repr(exc),
+                flush=True,
+            )
+
+            outputs["video_sources"] = {
+                "ok": False,
+                "reason": str(exc),
+            }
             outputs["video_candidates"] = []
 
+        # 4. Real Vision
         try:
-            current_video = resolver.resolve_path(project)
-            print("[AUTO] current_video =", current_video)
+            current_video = resolver.resolve_path(
+                project
+            )
 
-            if current_video and resolver.exists(current_video):
+            print(
+                "[AUTO] current_video =",
+                current_video,
+                flush=True,
+            )
+
+            if (
+                current_video
+                and resolver.exists(current_video)
+            ):
                 project.video_path = current_video
-                real_vision = RealVisionRunner().run(project, sample_count=sample_count, use_yolo=True, use_paddle=True)
+
+                real_vision = RealVisionRunner().run(
+                    project,
+                    sample_count=sample_count,
+                    use_yolo=True,
+                    use_paddle=True,
+                )
+
             else:
                 real_vision = {
                     "ok": False,
-                    "summary": "현재 프로젝트에 연결된 video_path가 없습니다. 영상 후보를 열어 해당 프로젝트에 영상을 먼저 연결하세요.",
+                    "summary": (
+                        "현재 프로젝트에 연결된 "
+                        "video_path가 없습니다. "
+                        "영상 후보를 열어 해당 프로젝트에 "
+                        "영상을 먼저 연결하세요."
+                    ),
                     "status": {
                         "video_ai": False,
                         "vision_ai": False,
@@ -218,73 +515,757 @@ class WorkflowEngine:
                         "object_fallback": False,
                     },
                     "project": {
-                        "id": getattr(project, "id", None),
-                        "product_name": getattr(project, "product_name", ""),
-                        "keyword": getattr(project, "keyword", ""),
+                        "id": getattr(
+                            project,
+                            "id",
+                            None,
+                        ),
+                        "product_name": getattr(
+                            project,
+                            "product_name",
+                            "",
+                        ),
+                        "keyword": getattr(
+                            project,
+                            "keyword",
+                            "",
+                        ),
                         "video_path": current_video,
                     },
                 }
 
             outputs["real_vision"] = real_vision
+
             state.update_step(
                 job_id,
                 "real_vision",
-                "done" if real_vision.get("ok") else "failed",
-                {"summary": real_vision.get("summary"), "status": real_vision.get("status")},
-                None if real_vision.get("ok") else real_vision.get("summary"),
+                (
+                    "done"
+                    if real_vision.get("ok")
+                    else "failed"
+                ),
+                {
+                    "summary": real_vision.get(
+                        "summary"
+                    ),
+                    "status": real_vision.get(
+                        "status"
+                    ),
+                },
+                (
+                    None
+                    if real_vision.get("ok")
+                    else real_vision.get("summary")
+                ),
             )
+
         except Exception as exc:
             real_vision = {}
-            outputs["real_vision"] = real_vision
-            state.update_step(job_id, "real_vision", "failed", error=exc)
+            outputs["real_vision"] = {}
 
-        try:
-            current_video = resolver.resolve_path(project)
-            outputs["video_quality"] = VideoQualityEngine().score(current_video, real_vision)
-        except Exception as exc:
-            outputs["video_quality"] = {"ok": False, "reason": str(exc)}
-
-        try:
-            enriched_candidates = []
-            for item in outputs.get("video_candidates", []):
-                new_item = dict(item)
-                new_item["video_quality"] = outputs.get("video_quality", {})
-                new_item["shopping_shorts_fit"] = outputs.get("shopping_shorts_fit", {})
-                new_item["real_vision"] = outputs.get("real_vision", {})
-                enriched_candidates.append(new_item)
-
-            outputs["candidate_selection"] = VideoCandidateSelector().select(enriched_candidates)
-        except Exception as exc:
-            outputs["candidate_selection"] = {"ok": False, "reason": str(exc), "top3": [], "all": []}
-
-        try:
-            editor_plan = AutoEditorEngine().create_plan(
-                getattr(project, "product_name", ""),
-                getattr(project, "keyword", "정보"),
-                vision=real_vision,
-                candidate_selection=outputs.get("candidate_selection", {}),
+            state.update_step(
+                job_id,
+                "real_vision",
+                "failed",
+                error=exc,
             )
+
+        # 5. Video Quality
+        print(
+            "[Sprint62] BEFORE VideoQuality",
+            flush=True,
+        )
+
+        try:
+            current_video = resolver.resolve_path(
+                project
+            )
+
+            outputs["video_quality"] = (
+                VideoQualityEngine().score(
+                    current_video,
+                    real_vision,
+                )
+            )
+
+        except Exception as exc:
+            print(
+                "[Sprint62] VideoQuality ERROR:",
+                repr(exc),
+                flush=True,
+            )
+
+            outputs["video_quality"] = {
+                "ok": False,
+                "reason": str(exc),
+            }
+
+        print(
+            "[Sprint62] AFTER VideoQuality:",
+            outputs.get("video_quality", {}),
+            flush=True,
+        )
+
+        # 6. Shopping Shorts Fit
+        try:
+            outputs["shopping_shorts_fit"] = (
+                ShoppingFitEngine().analyze(
+                    project=project,
+                    video_quality=outputs.get(
+                        "video_quality",
+                        {},
+                    ),
+                    real_vision=outputs.get(
+                        "real_vision",
+                        {},
+                    ),
+                    candidates=outputs.get(
+                        "video_candidates",
+                        [],
+                    ),
+                )
+            )
+
+            print(
+                "[Sprint62] ShoppingFit:",
+                outputs.get(
+                    "shopping_shorts_fit",
+                    {},
+                ),
+                flush=True,
+            )
+
+        except Exception as exc:
+            print(
+                "[Sprint62] ShoppingFit ERROR:",
+                repr(exc),
+                flush=True,
+            )
+
+            outputs["shopping_shorts_fit"] = {
+                "ok": False,
+                "reason": str(exc),
+            }
+
+        # 7. Candidate Enrichment
+        enriched_candidates = []
+
+        for item in outputs.get(
+            "video_candidates",
+            [],
+        ):
+            if not isinstance(item, dict):
+                continue
+
+            candidate = dict(item)
+
+            candidate["video_quality"] = (
+                candidate.get("video_quality")
+                or outputs.get(
+                    "video_quality",
+                    {},
+                )
+            )
+
+            candidate["shopping_shorts_fit"] = (
+                candidate.get(
+                    "shopping_shorts_fit"
+                )
+                or outputs.get(
+                    "shopping_shorts_fit",
+                    {},
+                )
+            )
+
+            candidate["shopping_fit"] = (
+                candidate.get("shopping_fit")
+                or outputs.get(
+                    "shopping_shorts_fit",
+                    {},
+                )
+            )
+
+            candidate["real_vision"] = (
+                candidate.get("real_vision")
+                or outputs.get(
+                    "real_vision",
+                    {},
+                )
+            )
+
+            enriched_candidates.append(candidate)
+
+        outputs["enriched_video_candidates"] = (
+            enriched_candidates
+        )
+
+        # 8. Sprint 62 Viral Pattern Engine
+        try:
+            viral_pattern = (
+                ViralPatternEngine().analyze(
+                    candidates=enriched_candidates,
+                    project=project,
+                    product_plan=product_plan,
+                    save_db=True,
+                )
+            )
+
+            outputs["viral_pattern"] = viral_pattern
+
+            viral_candidates = (
+                viral_pattern.get(
+                    "all_candidates",
+                    [],
+                )
+                if isinstance(
+                    viral_pattern,
+                    dict,
+                )
+                else []
+            )
+
+            if viral_candidates:
+                restored_candidates = []
+
+                for item in viral_candidates:
+                    if not isinstance(item, dict):
+                        continue
+
+         
+
+            outputs["viral_pattern_best"] = (
+                viral_pattern.get(
+                    "best_pattern",
+                    {},
+                )
+                if isinstance(
+                    viral_pattern,
+                    dict,
+                )
+                else {}
+            )
+
+            print(
+                "[Sprint62] ViralPattern version:",
+                viral_pattern.get(
+                    "engine_version"
+                ),
+                flush=True,
+            )
+            print(
+                "[Sprint62] ViralPattern candidates:",
+                viral_pattern.get(
+                    "candidate_count",
+                    0,
+                ),
+                flush=True,
+            )
+            print(
+                "[Sprint62] ViralPattern best:",
+                viral_pattern.get(
+                    "best_pattern",
+                    {},
+                ),
+                flush=True,
+            )
+
+        except Exception as exc:
+            print(
+                "[Sprint62] ViralPattern ERROR:",
+                repr(exc),
+                flush=True,
+            )
+
+            outputs["viral_pattern"] = {
+                "ok": False,
+                "reason": str(exc),
+                "candidate_count": len(
+                    enriched_candidates
+                ),
+                "top_candidates": [],
+                "all_candidates": (
+                    enriched_candidates
+                ),
+                "pattern_summary": [],
+                "best_pattern": {},
+            }
+            outputs["viral_pattern_best"] = {}
+
+        # 9. Selector + Ranker
+        try:
+            selector_result = (
+                VideoCandidateSelector().select(
+                    enriched_candidates
+                )
+            )
+
+            selector_candidates = (
+                selector_result.get("all", [])
+                if isinstance(
+                    selector_result,
+                    dict,
+                )
+                else []
+            )
+
+            ranker_result = (
+                VideoCandidateRanker().rank(
+                    selector_candidates,
+                    top_n=3,
+                )
+            )
+
+            outputs["candidate_selection"] = (
+                selector_result
+                if isinstance(
+                    selector_result,
+                    dict,
+                )
+                else {
+                    "ok": False,
+                    "top3": [],
+                    "all": [],
+                }
+            )
+
+            outputs["candidate_ranking"] = (
+                ranker_result
+                if isinstance(
+                    ranker_result,
+                    dict,
+                )
+                else {
+                    "ok": False,
+                    "top3": [],
+                    "all": [],
+                }
+            )
+
+            outputs[
+                "candidate_selection"
+            ]["ranked_top3"] = (
+                ranker_result.get(
+                    "top3",
+                    [],
+                )
+            )
+
+            outputs[
+                "candidate_selection"
+            ]["composer_candidate"] = (
+                ranker_result.get(
+                    "composer_candidate"
+                )
+            )
+
+            outputs[
+                "candidate_selection"
+            ]["ranker_version"] = (
+                ranker_result.get(
+                    "ranker_version"
+                )
+            )
+
+            outputs["composer_candidate"] = (
+                ranker_result.get(
+                    "composer_candidate"
+                )
+            )
+
+            outputs["ranked_top3"] = (
+                ranker_result.get(
+                    "top3",
+                    [],
+                )
+            )
+
+            print(
+                "[Sprint62] Ranker:",
+                ranker_result.get(
+                    "ranker_version"
+                ),
+                flush=True,
+            )
+            print(
+                "[Sprint62] Top3:",
+                len(
+                    ranker_result.get(
+                        "top3",
+                        [],
+                    )
+                ),
+                flush=True,
+            )
+            print(
+                "[Sprint62] Composer:",
+                bool(
+                    ranker_result.get(
+                        "composer_candidate"
+                    )
+                ),
+                flush=True,
+            )
+            print(
+                "[Sprint62] Best Score:",
+                (
+                    ranker_result.get("best")
+                    or {}
+                ).get(
+                    "final_rank_score"
+                ),
+                flush=True,
+            )
+            print(
+                "[Sprint62] Best viral score:",
+                (
+                    ranker_result.get("best")
+                    or {}
+                ).get(
+                    "viral_pattern_score"
+                ),
+                flush=True,
+            )
+            print(
+                "[Sprint63] Rank Breakdown:",
+                json.dumps(
+                (
+                        ranker_result.get("best")
+                        or {}
+                    ).get(
+                        "rank_score_breakdown",
+                        {},
+                    ),
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                flush=True,
+            )
+
+            print(
+                "[Sprint63] Viral Breakdown:",
+                json.dumps(
+                    (
+                        (
+                            ranker_result.get("best")
+                            or {}
+                        ).get(
+                            "rank_score_breakdown",
+                            {},
+                        )
+                        or {}
+                    ).get(
+                         "viral_score_breakdown",
+                        {},
+                    ),
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                flush=True,
+            )
+
+            print(
+                "[Sprint63] Warnings:",
+                 json.dumps(
+                    (
+                        ranker_result.get("best")
+                        or {}
+                    ).get(
+                        "rank_warnings",
+                        [],
+                    ),
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                flush=True,
+            )
+        except Exception as exc:
+            print(
+                "[Sprint62] Candidate ERROR:",
+                repr(exc),
+                flush=True,
+            )
+
+            outputs["candidate_selection"] = {
+                "ok": False,
+                "reason": str(exc),
+                "top3": [],
+                "all": [],
+            }
+
+            outputs["candidate_ranking"] = {
+                "ok": False,
+                "reason": str(exc),
+                "top3": [],
+                "all": [],
+            }
+
+            outputs["composer_candidate"] = None
+            outputs["ranked_top3"] = []
+
+        # 10. Auto Editor
+        try:
+            editor_plan = (
+                AutoEditorEngine().create_plan(
+                    getattr(
+                        project,
+                        "product_name",
+                        "",
+                    ),
+                    getattr(
+                        project,
+                        "keyword",
+                        "정보",
+                    ),
+                    vision=real_vision,
+                    candidate_selection=outputs.get(
+                        "candidate_selection",
+                        {},
+                    ),
+                )
+            )
+
             outputs["auto_editor"] = editor_plan
-            state.update_step(job_id, "auto_editor", "done", {"timeline_count": len(editor_plan.get("timeline", []))})
+
+            state.update_step(
+                job_id,
+                "auto_editor",
+                "done",
+                {
+                    "timeline_count": len(
+                        editor_plan.get(
+                            "timeline",
+                            [],
+                        )
+                    )
+                },
+            )
+
         except Exception as exc:
             editor_plan = {}
-            state.update_step(job_id, "auto_editor", "failed", error=exc)
+            outputs["auto_editor"] = {}
 
+            state.update_step(
+                job_id,
+                "auto_editor",
+                "failed",
+                error=exc,
+            )
+
+        # 11. Content Factory
         try:
-            outputs["content_factory"] = {}
-            state.update_step(job_id, "content_factory", "done", {"message": "AI 콘텐츠 팩은 UI 버튼에서 생성합니다."})
+            content_pack = {
+                "project": project,
+                "project_id": getattr(
+                    project,
+                    "id",
+                    "",
+                ),
+                "project_name": (
+                    getattr(
+                        project,
+                        "product_name",
+                        "",
+                    )
+                    or getattr(
+                        project,
+                        "title",
+                        "",
+                    )
+                    or "선택 상품"
+                ),
+                "product_name": getattr(
+                    project,
+                    "product_name",
+                    "",
+                ),
+                "reviews": outputs.get(
+                    "product_plan",
+                    {},
+                ).get(
+                    "reviews",
+                    [],
+                ),
+
+                "review_data": outputs.get(
+                    "product_plan",
+                    {},
+                ).get(
+                "review_data",
+                    {},
+                ),
+
+                "coupang_reviews": outputs.get(
+                    "product_plan",
+                    {},
+                ).get(
+                    "reviews",
+                    [],
+                ),
+                "video_candidates": enriched_candidates,
+                "candidate_selection": outputs.get(
+                    "candidate_selection",
+                    {},
+                ),
+                "candidate_ranking": outputs.get(
+                    "candidate_ranking",
+                    {},
+                ),
+                "composer_candidate": outputs.get(
+                    "composer_candidate"
+                ),
+                "real_vision": outputs.get(
+                    "real_vision",
+                    {},
+                ),
+                "video_quality": outputs.get(
+                    "video_quality",
+                    {},
+                ),
+                "shopping_shorts_fit": outputs.get(
+                    "shopping_shorts_fit",
+                    {},
+                ),
+                "shopping_fit": outputs.get(
+                    "shopping_shorts_fit",
+                    {},
+                ),
+                "viral_pattern": outputs.get(
+                    "viral_pattern",
+                    {},
+                ),
+                "auto_editor": outputs.get(
+                    "auto_editor",
+                    {},
+                ),
+            }
+
+            content_factory_result = (
+                ContentFactory().apply_edit_assistant(
+                    content_pack,
+                    project=project,
+                )
+            )
+
+            outputs["content_factory"] = (
+                content_factory_result
+            )
+
+            outputs["video_pipeline"] = (
+                content_factory_result.get(
+                    "video_pipeline",
+                    {},
+                )
+            )
+
+            print(
+                "[Sprint64] Content Factory:",
+                bool(content_factory_result),
+                flush=True,
+            )
+
+            print(
+                "[Sprint64] Video Pipeline:",
+                bool(
+                    content_factory_result.get(
+                        "video_pipeline"
+                    )
+                ),
+                flush=True,
+            )
+
+            print(
+                "[Sprint64] Final Video:",
+                content_factory_result.get(
+                    "video_pipeline",
+                    {},
+                ).get(
+                    "output_path",
+                    "",
+                ),
+                flush=True,
+            )
+
+            state.update_step(
+                job_id,
+                "content_factory",
+                "done",
+                {
+                    "video_pipeline": bool(
+                        content_factory_result.get(
+                            "video_pipeline"
+                        )
+                    ),
+                    "output_path": (
+                        content_factory_result.get(
+                            "video_pipeline",
+                            {},
+                        ).get(
+                            "output_path",
+                            "",
+                        )
+                    ),
+                },
+            )
+
         except Exception as exc:
-            state.update_step(job_id, "content_factory", "failed", error=exc)
+            outputs["content_factory"] = {}
+            outputs["video_pipeline"] = {}
 
+            print(
+                "[Sprint64] Content Factory ERROR:",
+                repr(exc),
+                flush=True,
+            )
+
+            state.update_step(
+                job_id,
+                "content_factory",
+                "failed",
+                error=exc,
+            )
+
+        except Exception as exc:
+            state.update_step(
+                job_id,
+                "content_factory",
+                "failed",
+                error=exc,
+            )
+
+        # 12. CapCut Export
         try:
-            export_paths = CapCutProjectExporter().export_plan(project, editor_plan)
+            export_paths = (
+                CapCutProjectExporter().export_plan(
+                    project,
+                    editor_plan,
+                )
+            )
+
             outputs["capcut_export"] = export_paths
-            state.update_step(job_id, "capcut_export", "done", export_paths)
+
+            state.update_step(
+                job_id,
+                "capcut_export",
+                "done",
+                export_paths,
+            )
+
         except Exception as exc:
             outputs["capcut_export"] = {}
-            state.update_step(job_id, "capcut_export", "failed", error=exc)
+
+            state.update_step(
+                job_id,
+                "capcut_export",
+                "failed",
+                error=exc,
+            )
 
         final_state = state.load(job_id)
+
+        print(
+            "######## RUN_PROJECT SPRINT62 END ########",
+            flush=True,
+        )
 
         return {
             "job_id": job_id,
@@ -298,14 +1279,45 @@ class WorkflowEngine:
         progress = state.get("progress", 0)
 
         if errors:
-            return f"One Click Pipeline {progress}% 완료, 오류 {len(errors)}건이 있습니다. 가능한 단계는 계속 진행했습니다."
+            return (
+                f"One Click Pipeline {progress}% 완료, "
+                f"오류 {len(errors)}건이 있습니다. "
+                "가능한 단계는 계속 진행했습니다."
+            )
 
-        return f"One Click Pipeline {progress}% 완료되었습니다."
+        return (
+            f"One Click Pipeline {progress}% "
+            "완료되었습니다."
+        )
 
     def _compact(self, product_plan):
+        if not isinstance(product_plan, dict):
+            return {}
+
         return {
-            "product": product_plan.get("project_payload", {}).get("product_name"),
-            "keyword": product_plan.get("project_payload", {}).get("keyword"),
-            "taobao": product_plan.get("keywords", {}).get("taobao_keyword"),
-            "douyin": product_plan.get("keywords", {}).get("douyin_keyword"),
+            "product": (
+                product_plan.get(
+                    "project_payload",
+                    {},
+                ).get("product_name")
+            ),
+            "keyword": (
+                product_plan.get(
+                    "project_payload",
+                    {},
+                ).get("keyword")
+            ),
+            "taobao": (
+                product_plan.get(
+                    "keywords",
+                    {},
+                ).get("taobao_keyword")
+            ),
+            "douyin": (
+                product_plan.get(
+                    "keywords",
+                    {},
+                ).get("douyin_keyword")
+            ),
         }
+

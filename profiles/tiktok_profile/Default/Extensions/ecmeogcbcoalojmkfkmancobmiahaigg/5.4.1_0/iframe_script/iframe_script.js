@@ -1,0 +1,1 @@
+(()=>{"use strict";let e=document.getElementById("itemscoutWebExtension");e&&e.remove(),e=document.createElement("iframe"),e.id="itemscoutWebExtension",e.src=chrome.runtime.getURL("popup/popup.html"),e.setAttribute("style","width: 380px; height: 500px; position: fixed; top: 20px; right: 20px; z-index: 100000; border: none;"),document.body.appendChild(e)})();

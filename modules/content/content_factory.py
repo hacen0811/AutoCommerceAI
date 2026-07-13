@@ -2,11 +2,17 @@ import json
 from pathlib import Path
 from datetime import datetime
 
+
 from modules.video.cut_planner import CutPlanner
 from modules.video.video_pipeline import VideoPipeline
+from modules.video.video_candidate_selector import VideoCandidateSelector
+from modules.video.video_candidate_ranker import VideoCandidateRanker
+from modules.video.video_quality_engine import VideoQualityEngine
 from modules.capcut.export_builder import CapCutExportBuilder
 from modules.video.capcut_draft_builder import CapCutDraftBuilder
 from modules.capcut.project_builder import CapCutProjectBuilder
+from modules.content.coupang_review_ai import CoupangReviewAI
+from modules.content.review_insight_engine import ReviewInsightEngine
 
 CONTENT_PACK_DIR = Path("exports/content_packs")
 
@@ -129,7 +135,74 @@ class ContentFactory:
                 "AI 컷 추천",
             ],
         }
-        
+
+        # ==============================
+        # Sprint65 Review AI
+        # ==============================
+
+        review_source = (
+            pack.get("reviews")
+            or pack.get("review_data")
+            or pack.get("coupang_reviews")
+            or []
+        )
+
+        review_ai = CoupangReviewAI().analyze(
+            reviews=review_source,
+            product_name=project_name,
+        )
+
+        review_insight = ReviewInsightEngine().analyze(
+            reviews=review_source,
+            product_name=project_name,
+        )
+
+        pack["review_ai"] = review_ai
+        pack["review_insight"] = review_insight
+        pack["hook_ai"] = review_ai.get("best_hook")
+        pack["script_ai"] = review_ai.get("script")
+
+        print(
+            "[Sprint65] ReviewAI:",
+            review_ai.get("version"),
+            flush=True,
+        )
+        print(
+            "[Sprint65] Insight:",
+            review_insight.get("version"),
+            flush=True,
+        )
+        print(
+            "[Sprint65] Review Count:",
+            review_ai.get("review_count"),
+            flush=True,
+        )
+        print(
+            "[Sprint65] Pain:",
+            review_insight.get("best_pain_point"),
+            flush=True,
+        )
+        print(
+            "[Sprint65] Benefit:",
+            review_insight.get("best_benefit"),
+            flush=True,
+        )
+        print(
+            "[Sprint65] Buy Reason:",
+            review_insight.get("best_buy_reason"),
+            flush=True,
+        )
+        print(
+            "[Sprint65] Persona:",
+            review_insight.get("best_persona"),
+            flush=True,
+        )
+        print(
+            "[Sprint65] Hook:",
+            review_ai.get("best_hook"),
+            flush=True,
+        )
+
         pack["cut_plan"] = CutPlanner().build(pack)
 
         pack["capcut_export"] = (
@@ -140,26 +213,150 @@ class ContentFactory:
             CapCutDraftBuilder().build(pack["capcut_export"])
         )
 
+        raw_candidates = (
+            pack.get("video_candidates")
+            or pack.get("selected_sources")
+            or (pack.get("candidate_selection") or {}).get("all")
+            or (pack.get("candidate_selection") or {}).get("top3")
+            or []
+        )
+
+        enriched_candidates = []
+
+        for item in raw_candidates:
+            if not isinstance(item, dict):
+                continue
+
+            candidate = dict(item)
+
+            video_path = (
+                candidate.get("video_path")
+                or candidate.get("local_path")
+                or candidate.get("download_path")
+                or candidate.get("file_path")
+                or candidate.get("media_path")
+                or candidate.get("path")
+                or ""
+            )
+
+            real_vision = (
+                candidate.get("real_vision")
+                or pack.get("real_vision")
+                or {}
+            )
+
+            candidate["video_quality"] = (
+                VideoQualityEngine().score(
+                    video_path=video_path,
+                    real_vision=real_vision,
+                )
+            )
+
+            candidate["real_vision"] = real_vision
+
+            enriched_candidates.append(candidate)
+
+        selector_result = VideoCandidateSelector().select(
+            enriched_candidates
+        )
+        print(
+            "[Sprint61] fit_score =",
+            (
+                pack.get("shopping_shorts_fit")
+                or pack.get("shopping_fit")
+                or {}
+            ).get("fit_score"),
+            flush=True,
+        )
+
+        ranker_result = VideoCandidateRanker().rank(
+            selector_result.get("all", [])
+        )
+
+        print(
+            "[Sprint60] Ranker:",
+            ranker_result.get("ranker_version"),
+            flush=True,
+        )
+        print(
+            "[Sprint60] Top3:",
+            len(ranker_result.get("top3", [])),
+            flush=True,
+        )
+        print(
+            "[Sprint60] Composer:",
+            bool(ranker_result.get("composer_candidate")),
+            flush=True,
+        )
+        print(
+            "[Sprint60] Best Score:",
+            (ranker_result.get("best") or {}).get(
+                "final_rank_score"
+            ),
+            flush=True,
+        )
+        print(
+            "[Sprint60] BEST DETAIL:",
+            json.dumps(
+                ranker_result.get("best", {}),
+                ensure_ascii=False,
+                indent=2,
+            ),
+            flush=True,
+        )
+        print(
+            "[Sprint60] TOP3 DETAIL:",
+            json.dumps(
+                ranker_result.get("top3", []),
+                ensure_ascii=False,
+                indent=2,
+            ),
+            flush=True,
+        )
+
+        pack["video_candidate_selector"] = selector_result
+        pack["video_candidate_ranker"] = ranker_result
+        pack["ranked_video_candidates"] = (
+            ranker_result.get("top3", [])
+        )
+        pack["composer_candidate"] = (
+            ranker_result.get("composer_candidate")
+        )
+
         video_pipeline = VideoPipeline().run(
             content_pack=pack,
             project=project,
         )
+
         print(
             "[DEBUG] VideoPipeline:",
             type(video_pipeline),
             video_pipeline.keys()
             if isinstance(video_pipeline, dict)
             else video_pipeline,
+            flush=True,
         )
         print(
             "[DEBUG] Render:",
-            video_pipeline.get("render"),
+            video_pipeline.get("render")
+            if isinstance(video_pipeline, dict)
+            else None,
+            flush=True,
         )
 
         pack["video_pipeline"] = video_pipeline
-        pack["video_composer"] = video_pipeline.get("composer", {})
-        pack["video_render"] = video_pipeline.get("render", {})
-        pack["subtitle_pipeline"] = video_pipeline.get("subtitle", {})
+        pack["video_composer"] = video_pipeline.get(
+            "composer",
+            {},
+        )
+        pack["video_render"] = video_pipeline.get(
+            "render",
+            {},
+        )
+        pack["subtitle_pipeline"] = video_pipeline.get(
+            "subtitle",
+            {},
+        )
 
         return pack
 
@@ -209,7 +406,7 @@ class ContentFactory:
             self._to_text(pack),
             encoding="utf-8",
         )
-    
+
         capcut_export_path.write_text(
             json.dumps(
                 pack.get("capcut_export", {}),
@@ -254,7 +451,7 @@ class ContentFactory:
             ),
             encoding="utf-8",
         )
-        
+
         project_paths = {}
 
         if pack.get("capcut_draft"):
@@ -281,7 +478,7 @@ class ContentFactory:
             "subtitle_pipeline_path": str(subtitle_pipeline_path),
 
             **project_paths,
-        } 
+        }
 
     def _build_scene_plan(self, project_name, main_hook):
         return [
@@ -391,3 +588,4 @@ class ContentFactory:
             return name[:2]
 
         return "정보"
+    

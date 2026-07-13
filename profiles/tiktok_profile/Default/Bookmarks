@@ -1,0 +1,91 @@
+{
+   "checksum": "d63b22e3db5aa613fb4c2b3a4710cc96",
+   "roots": {
+      "bookmark_bar": {
+         "children": [ {
+            "date_added": "13341042203216388",
+            "date_last_used": "0",
+            "guid": "a60e08e5-6914-b9b3-6903-caa6708017c0",
+            "id": "5",
+            "name": "이마트몰",
+            "type": "url",
+            "url": "https://admin.smartbridge.co.kr/bookmark.php?c=NDM="
+         }, {
+            "date_added": "13341042203216388",
+            "date_last_used": "0",
+            "guid": "cfb9537d-a7f5-4d65-bc68-155840ae0849",
+            "id": "6",
+            "name": "쿠팡!",
+            "type": "url",
+            "url": "https://admin.smartbridge.co.kr/bookmark.php?c=MzA="
+         }, {
+            "date_added": "13417603819008331",
+            "date_last_used": "0",
+            "guid": "840ab34a-83d4-53ae-6800-82b2c7cba7b6",
+            "id": "7",
+            "name": "G마켓",
+            "type": "url",
+            "url": "https://admin.smartbridge.co.kr/bookmark.php?c=MzU="
+         }, {
+            "date_added": "13417603819010335",
+            "date_last_used": "0",
+            "guid": "79551bb2-3723-4252-9c74-32e866a7b82d",
+            "id": "8",
+            "name": " 쿠팡",
+            "type": "url",
+            "url": "https://admin.smartbridge.co.kr/bookmark.php?c=NTg="
+         } ],
+         "date_added": "13428436327482163",
+         "date_last_used": "0",
+         "date_modified": "13417603819010335",
+         "guid": "0bc5d13f-2cba-5d74-951f-3f233fe6c908",
+         "id": "1",
+         "name": "북마크바",
+         "type": "folder"
+      },
+      "other": {
+         "children": [ {
+            "date_added": "13359709684501753",
+            "date_last_used": "13359831875619890",
+            "guid": "752d659b-abbe-4de4-b439-28265f417486",
+            "id": "9",
+            "meta_info": {
+               "power_bookmark_meta": ""
+            },
+            "name": "Victory",
+            "type": "url",
+            "url": "https://vvt8282.com/main/#"
+         }, {
+            "date_added": "13426010773516708",
+            "date_last_used": "0",
+            "guid": "ae6c37f9-82f3-4521-aa8f-1b2f7a108c55",
+            "id": "10",
+            "meta_info": {
+               "power_bookmark_meta": ""
+            },
+            "name": "小红书",
+            "type": "url",
+            "url": "https://www.xiaohongshu.com/mobile/login?qrId=505361781537055923&ruleId=4&xhs_code=023599&timestamp=1781537055937&channel_type=web&component_id=35df19ae3158b93b594b14b30376d5b0"
+         } ],
+         "date_added": "13428436327482163",
+         "date_last_used": "0",
+         "date_modified": "13426010773516708",
+         "guid": "82b081ec-3dd3-529c-8475-ab6c344590dd",
+         "id": "2",
+         "name": "기타 북마크",
+         "type": "folder"
+      },
+      "synced": {
+         "children": [  ],
+         "date_added": "13428436327482163",
+         "date_last_used": "0",
+         "date_modified": "0",
+         "guid": "4cf2e351-0e85-532b-bb37-df045d8f8d0f",
+         "id": "3",
+         "name": "모바일 북마크",
+         "type": "folder"
+      }
+   },
+   "sync_metadata": "Ct8BCr4BCIiBAhK3ASAAkgGjAQqgAQoOY2hyb21lX3N5bmNfYm0SBTUxIWJtGhIJHQbzNYFWBgARHQbzNYFWBgAiNAlR1to1gVYGABADGYv2WbgbKWk1IAEqHDUxIWJtL2ZkOjkxNjM3MjM1NTk0Njg4OTMxNjEiNAlR1to1gVYGABADGYv2WbgbKWk1IAEqHDUxIWJtL2ZkOjkxNjM3MjM1NTk0Njg4OTMxNjEpty7zNYFWBgDqAQsIwLnU0gYQ6NnmRBIAKhhtcEwvVG1yeWdDU280U1RFYkR3SkhBPT1IAxLsAQgKEucBChxFTTZZVjdXVy9qZjNrbk5JdlJ2bEo2U0FEOGc9EmZaOkFEcXRBWndCOWNVQjlkVkRrU3lLcHFyZFVtWDdyWFI3aGorb1V6T0xaKzRneFZPRlBrbVR5c21BbndJYm5weVI2bEpBRkhNdlFCZnFmS2F4MlhjaVpIZmVaZTVXbHJEaUhBPT0YACAAKAAwmOqylMeJlQM4keCP3+wzQJHgj9/sM0ocMmFybnMzNzYrQWZzOThSYjZvR21kVFRtMHpJPVofIh28bVFGUVlNNXJvNk1BQmpnV1hZY1h4OTZpYjBnPWVwtDKaEsMBCAISvgEKHFljU1RvbnZFU1B3cUNzNEwyY3JWaHY2OEw5OD0SZlo6QURxdEFaemlKekEyMGJnK1dNNll1cE1qYzJhSFl2Z3h2QUhjTlo2TWkxRUNwWnUyU3krUjZ4QUlLa2tCK3JRU0QweU1ucG16YXBOVm1VZDJEYUFSK0lCY1haa0hJM3lRdlE9PRgAIAAoADDr08ia7LGVAzgAQABKHG9QVmtod0JSYlY2NUtDV1IyK0lPTkhXb091OD1aAGUAAAAAEsMBCAMSvgEKHG5qZ0R1ODhlQ3J2WHA4NnBEN2ZIR2NxRnA4OD0SZlo6QURxdEFaeG5uZWpQeEIzL1drMkw3QUZTdnBjdk5NcHA2cTFxbmtoZkdiSkVRMTV2NVkwTHhuRHRYNEcrNnV5UllpYmhTWXNXRHYvZGRQT3NxbVFpYjRYckxNUWpLd1FKMVE9PRgAIAAoADDr08ia7LGVAzgAQABKHHl6TkIwMWNuNTRBN2NSVTB1VCsvUGdtVHRVbz1aAGUAAAAAEuwBCAcS5wEKHFZtN0FjMnJsdXc5dlpIZzdDaVd1WEE4Rjd6bz0SZlo6QURxdEFad0I5Y1VCOWRWRGtTeUtwcXJkVW1YN00rUDJmQ2lkaWMyeFpId2xFdWRuU1hPNVVBSC9ZU0VYeGUrNkJOWE1DeGxsRlcxdkJudkxSTTFnbDI5ZjArZEpLbkx0UWc9PRgAIAAoADCR9JLG8eiUAzi9tvLH6DNAvbbyx+gzShxCRThaUjRDbGoxVFlOTlc4aG5jUVpxZXRtZGc9Wh8iHalLU2Z1YlgwRUxIR2Y2TWRmcnFpL3FjcjhMUGM9ZQAAAAAS7AEICBLnAQocYUtMQldYMTNnSXhPc09kdWplRExqOStDOHlJPRJmWjpBRHF0QVp3QjljVUI5ZFZEa1N5S3BxcmRVbVg3RXRkNmtLWFlvWnk4ZnExN2xLQ0JZdHF1VXNxeEc5MWp1TTZTbUd4alE4ZVl4MDNRcUg1dkNWaHhpLzVSM21jYk9SVGY4QT09GAAgACgAMJH0ksbx6JQDOL228sfoM0C9tvLH6DNKHElweFhaM1MwOEtMVWhrNEJNMzNCQ2dXRDRvOD1aHyId1GRnenAyNU5rYW92NGdxZWFpSlJXdFB5a1Y3dz1lAAAAABLrAQgGEuYBChxGZVREd0xoOTFKZHVNRlBXZzlsK1VINlZnWU09EmZaOkFEcXRBWndCOWNVQjlkVkRrU3lLcHFyZFVtWDdUVFJqbUoyWEtSSDYxdnF4TnJtbGhCckNhWWdVZzYzdmJHcG5PVUJWWWp5bUJpa2xvWVFuZ2xNZlpRdWNhRk5IbGlXUjFBPT0YACAAKAAwv+TsvPm1hgM42OSX1fwxQNjkl9X8MUocU0Q4dVRUMmlIZm9CS0ludFlBbVFEeUFsa3RBPVoeIhxSN0twUURkRkI4djRtQmk3TjN2VVI1NlgvTVE9ZQAAAAAS6wEICRLmAQocMHlTaUFwNVVyMElrMmIzQXlXT3BQd3dDeWZZPRJmWjpBRHF0QVp3QjljVUI5ZFZEa1N5S3BxcmRVbVg3azcrTW14enJ2bmxhcS9SS1hTcHJQSDVlRDBaTVJOd0ZEVjZrRzBSS09DTi9sMms2ZTM0ZmYvcVlVUERNUlExVElPSWNvdz09GAAgACgAML/k7Lz5tYYDONjkl9X8MUDY5JfV/DFKHDdSWWM3UmpKKzN5a2kxWFlLMWdndWJ5ZUhUZz1aHiIceEdBdUF3aTFTb21oUFpIQUN0RnJJSDBVemhNPWUAAAAAEusBCAUS5gEKHHFZNEVqSUN0MklmWXYrYUZBRmxVdHJVbnNIST0SZlo6QURxdEFad0I5Y1VCOWRWRGtTeUtwcXJkVW1YN0xxMnE2UGFaZHJLVGtraVNYcXcrcGFHVExoZGxyQW9QanpTdmhYa3ZWSTk0ME1MTklJTmpEN2pXK0JQdnd4TC9ZUnQ5emc9PRgAIAAoADC/5Oy8+bWGAzjY5JfV/DFA2OSX1fwxShw5UldRK3h3N2dEWHBZelVrWnFWSmMvZkNuSUk9Wh4iHDBSa0lFV3QwYVJoUGVIOXRaMDVpOTRZdFZQZz1lAAAAABKrAQgBEqYBChx5eEovNmZ2a2VjcjdrcDVFUXpCNHRXTHBkYkU9Ek5aOkFEcXRBWnljaHg1eG95Yit3TmxOZjZQWEJIODNDTUpMbHR4NHRlQVNIRkdZRElOUmZDTnhXa1FEMEtCL2k4cFo4TGZDTW5GOVMya1gYACAAKAAw69PImuyxlQM4AEAAShxhUkNXTGdoRjliNUlucUtJRHZ1Si9qdlFrRmM9WgBlAAAAADABOAA=",
+   "version": 1
+}

@@ -1,0 +1,1 @@
+(()=>{"use strict";let t=document.getElementById("its-margin-calculator");t||(t=document.createElement("iframe"),t.id="its-margin-calculator",t.src=chrome.runtime.getURL("alibaba/alibaba.html"),t.setAttribute("scrolling","no"),t.setAttribute("style","\n      width: 0; height: 0;\n      border: none;\n    "),document.body.appendChild(t))})();

@@ -1,167 +1,569 @@
-class VideoCandidateSelector:
-    def select(self, candidates):
+from __future__ import annotations
+
+from typing import Any, Dict, List
+
+
+class VideoCandidateRanker:
+    """
+    Sprint 60 Video Candidate Ranker
+
+    역할:
+    - Sprint 59 VideoCandidateSelector 결과를 입력으로 사용
+    - 반응 점수, 화질, 쇼핑쇼츠 적합도, Real Vision 결과를 종합
+    - 쇼핑쇼츠에 부적합한 후보는 감점
+    - 최종 TOP3와 VideoComposer 추천 후보를 반환
+
+    기존 후보 필드는 보존하고 다음 필드만 추가한다.
+    - final_rank_score
+    - rank_score_breakdown
+    - rank_reasons
+    - rank_warnings
+    - composer_recommended
+    - final_rank
+    """
+
+    RANKER_VERSION = "video-candidate-ranker-60-1"
+
+    WEIGHTS = {
+        "candidate_score": 0.35,
+        "video_quality": 0.20,
+        "shopping_fit": 0.25,
+        "real_vision": 0.15,
+        "scene_value": 0.05,
+    }
+
+    def rank(
+        self,
+        candidates: List[Dict[str, Any]],
+        top_n: int = 3,
+    ) -> Dict[str, Any]:
         candidates = candidates or []
+        ranked: List[Dict[str, Any]] = []
 
-        scored = []
-        for item in candidates:
-            score = self._score_candidate(item)
-            new_item = dict(item)
+        for candidate in candidates:
+            if not isinstance(candidate, dict):
+                continue
 
-            new_item["ai_score"] = score
-            new_item["final_ai_score"] = score
-            new_item["ai_recommendation"] = self._recommendation(score)
-            new_item["ai_reasons"] = self._reasons(new_item)
+            item = dict(candidate)
 
-            scored.append(new_item)
+            candidate_score = self._candidate_score(item)
+            quality_score = self._nested_score(
+                item,
+                "video_quality",
+            )
+            shopping_score = self._first_nested_score(
+                item,
+                [
+                    "shopping_shorts_fit",
+                    "shopping_fit",
+                    "shorts_fit",
+                ],
+            )
+            vision_score = self._real_vision_score(item)
+            scene_score = self._scene_value_score(item)
+            viral_pattern_score, viral_breakdown = (
+            self._viral_pattern_score(item)
+            )
 
-        scored.sort(key=lambda x: x.get("final_ai_score", x.get("ai_score", 0)), reverse=True)
+            social_score = self._social_score(item)
+
+            weighted_score = (
+                candidate_score * self.WEIGHTS["candidate_score"]
+                + quality_score * self.WEIGHTS["video_quality"]
+                + shopping_score * self.WEIGHTS["shopping_fit"]
+                + vision_score * self.WEIGHTS["real_vision"]
+                + scene_score * self.WEIGHTS["scene_value"]
+                + viral_pattern_score * self.WEIGHTS["viral_pattern"]
+                + social_score * self.WEIGHTS["social_score"]
+            )
+
+            penalty, warnings = self._penalty(item)
+            final_score = max(
+                min(weighted_score - penalty, 100.0),
+                0.0,
+            )
+
+            reasons = self._reasons(
+                item=item,
+                candidate_score=candidate_score,
+                quality_score=quality_score,
+                shopping_score=shopping_score,
+                vision_score=vision_score,
+                scene_score=scene_score,
+            )
+
+            item["final_rank_score"] = round(
+                final_score,
+                1,
+            )
+            item["rank_score_breakdown"] = {
+                "candidate_score": round(candidate_score, 1),
+                "video_quality": round(quality_score, 1),
+                "shopping_fit": round(shopping_score, 1),
+                "real_vision": round(vision_score, 1),
+                "scene_value": round(scene_score, 1),
+                "viral_pattern": round(viral_pattern_score, 1),
+                "viral_score_breakdown": viral_breakdown,
+                "social_score": round(social_score, 1),
+                "penalty": round(penalty, 1),
+            }
+
+            item["rank_reasons"] = reasons[:8]
+            item["rank_warnings"] = warnings[:6]
+            item["ranker_version"] = self.RANKER_VERSION
+            item["composer_recommended"] = False
+
+            item["viral_pattern_score"] = round(
+                viral_pattern_score,
+                1,
+            )
+
+            item["social_score"] = round(
+                social_score,
+                1,
+            )
+
+            ranked.append(item)
+
+        ranked.sort(
+            key=lambda item: (
+                self._safe_float(
+                    item.get("final_rank_score")
+                ),
+                self._safe_float(
+                    item.get(
+                        "final_ai_score",
+                        item.get(
+                            "ai_score",
+                            item.get("score", 0),
+                        ),
+                    )
+                ),
+                self._safe_int(
+                    item.get("view_count")
+                ),
+                self._safe_int(
+                    item.get("like_count")
+                ),
+            ),
+            reverse=True,
+        )
+
+        for index, item in enumerate(ranked, start=1):
+            item["final_rank"] = index
+            item["composer_recommended"] = (
+                index == 1
+                and item.get("final_rank_score", 0) >= 45
+            )
+
+        safe_top_n = max(
+            self._safe_int(top_n),
+            1,
+        )
+        top_items = ranked[:safe_top_n]
 
         return {
             "ok": True,
-            "count": len(scored),
-            "best": scored[0] if scored else None,
-            "top3": scored[:3],
-            "all": scored,
+            "count": len(ranked),
+            "best": ranked[0] if ranked else None,
+            "top3": ranked[:3],
+            "top": top_items,
+            "all": ranked,
+            "composer_candidate": (
+                ranked[0]
+                if ranked
+                and ranked[0].get("composer_recommended")
+                else None
+            ),
+            "ranker_version": self.RANKER_VERSION,
+            "weights": dict(self.WEIGHTS),
         }
 
-    def _score_candidate(self, item):
-        score = 0
-
-        base_score = item.get("score", 0)
-        if isinstance(base_score, (int, float)):
-            score += min(base_score, 100) * 0.35
-
-        platform = str(item.get("platform", "")).lower()
-        if platform == "taobao":
-            score += 12
-        elif platform == "1688":
-            score += 10
-        elif platform == "tiktok":
-            score += 5
-
-        purpose = str(item.get("purpose", ""))
-        title = str(item.get("title", ""))
-        keyword = str(item.get("keyword", ""))
-
-        text = f"{purpose} {title} {keyword}"
-
-        if "主图视频" in text:
-            score += 10
-        if "实拍" in text:
-            score += 10
-        if "买家秀" in text:
-            score += 8
-        if "安装" in text or "사용" in text:
-            score += 7
-        if "同款" in text:
-            score += 5
-        if "review" in text.lower():
-            score += 4
-
-        video_quality = item.get("video_quality") or {}
-        quality_score = video_quality.get("score")
-        if isinstance(quality_score, (int, float)):
-            score += min(quality_score, 100) * 0.25
-
-        shopping_fit = (
-            item.get("shopping_shorts_fit")
-            or item.get("shopping_fit")
-            or item.get("shorts_fit")
-            or {}
+    def _candidate_score(
+        self,
+        item: Dict[str, Any],
+    ) -> float:
+        value = (
+            item.get("final_ai_score")
+            if item.get("final_ai_score") is not None
+            else item.get("ai_score")
         )
 
-        fit_score = shopping_fit.get("score")
-        if isinstance(fit_score, (int, float)):
-            score += min(fit_score, 100) * 0.25
+        if value is None:
+            value = item.get("score", 0)
 
-        real_vision = item.get("real_vision") or {}
+        return self._clamp_score(value)
 
-        if real_vision.get("ok"):
-            score += 5
+    def _nested_score(
+        self,
+        item: Dict[str, Any],
+        key: str,
+    ) -> float:
+        value = item.get(key)
 
-        summary = str(real_vision.get("summary", ""))
+        if isinstance(value, dict):
+            for score_key in (
+                "score",
+                "quality_score",
+                "suitability_score",
+                "final_score",
+            ):
+                if value.get(score_key) is not None:
+                    return self._clamp_score(
+                        value.get(score_key)
+                    )
 
-        if "product" in summary.lower() or "상품" in summary:
-            score += 5
-        if "hand" in summary.lower() or "손" in summary:
-            score += 3
-        if "demo" in summary.lower() or "사용" in summary:
-            score += 4
+        return 0.0
 
-        return round(min(score, 100), 1)
+    def _first_nested_score(
+        self,
+        item: Dict[str, Any],
+        keys: List[str],
+    ) -> float:
+        for key in keys:
+            score = self._nested_score(
+                item,
+                key,
+            )
 
-    def _reasons(self, item):
-        reasons = []
+            if score > 0:
+                return score
 
-        base_score = item.get("score", 0)
-        if isinstance(base_score, (int, float)) and base_score >= 80:
-            reasons.append("검색 점수 우수")
+        return 0.0
 
-        platform = str(item.get("platform", "")).lower()
-        if platform == "taobao":
-            reasons.append("타오바오 후보")
-        elif platform == "1688":
-            reasons.append("1688 후보")
+    def _real_vision_score(
+        self,
+        item: Dict[str, Any],
+    ) -> float:
+        vision = item.get("real_vision") or {}
 
-        text = f"{item.get('purpose', '')} {item.get('title', '')} {item.get('keyword', '')}"
+        if not isinstance(vision, dict):
+            return 0.0
 
-        if "主图视频" in text:
-            reasons.append("상품 메인 영상 후보")
-        if "实拍" in text:
-            reasons.append("실제 촬영 영상")
-        if "买家秀" in text:
-            reasons.append("구매자 사용 장면")
-        if "安装" in text or "사용" in text:
-            reasons.append("사용/설치 장면 포함")
-        if "review" in text.lower():
-            reasons.append("리뷰형 영상 후보")
+        for key in (
+            "score",
+            "vision_score",
+            "confidence",
+            "suitability_score",
+        ):
+            if vision.get(key) is not None:
+                value = self._safe_float(
+                    vision.get(key)
+                )
 
-        video_quality = item.get("video_quality") or {}
-        quality_score = video_quality.get("score")
-        if isinstance(quality_score, (int, float)):
-            if quality_score >= 85:
-                reasons.append("화질 우수")
-            elif quality_score >= 70:
-                reasons.append("화질 양호")
+                if key == "confidence" and value <= 1:
+                    value *= 100
 
-        shopping_fit = (
-            item.get("shopping_shorts_fit")
-            or item.get("shopping_fit")
-            or item.get("shorts_fit")
-            or {}
+                return self._clamp_score(value)
+
+        score = 0.0
+
+        if vision.get("ok"):
+            score += 35
+
+        summary = str(
+            vision.get("summary", "")
         )
-        fit_score = shopping_fit.get("score")
-        if isinstance(fit_score, (int, float)):
-            if fit_score >= 85:
-                reasons.append("쇼핑쇼츠 적합도 높음")
-            elif fit_score >= 70:
-                reasons.append("쇼핑쇼츠 활용 가능")
+        lower = summary.lower()
 
-        real_vision = item.get("real_vision") or {}
-        summary = str(real_vision.get("summary", ""))
+        if (
+            "product" in lower
+            or "상품" in summary
+            or "제품" in summary
+        ):
+            score += 25
 
-        if real_vision.get("ok"):
-            reasons.append("Real Vision 분석 완료")
+        if (
+            "hand" in lower
+            or "손" in summary
+        ):
+            score += 15
 
-        if "product" in summary.lower() or "상품" in summary:
-            reasons.append("상품 노출 확인")
-        if "hand" in summary.lower() or "손" in summary:
-            reasons.append("손/사용 장면 확인")
-        if "demo" in summary.lower() or "사용" in summary:
+        if (
+            "demo" in lower
+            or "use" in lower
+            or "사용" in summary
+        ):
+            score += 20
+
+        if (
+            "before" in lower
+            or "after" in lower
+            or "비포" in summary
+            or "애프터" in summary
+        ):
+            score += 5
+
+        return self._clamp_score(score)
+
+    def _scene_value_score(
+        self,
+        item: Dict[str, Any],
+    ) -> float:
+        text = self._candidate_text(item)
+        score = 40.0
+
+        positive_words = {
+            "사용": 18,
+            "시연": 18,
+            "설치": 15,
+            "리뷰": 12,
+            "언박싱": 14,
+            "비교": 14,
+            "before": 15,
+            "after": 15,
+            "demo": 18,
+            "review": 12,
+            "unboxing": 14,
+            "实拍": 18,
+            "买家秀": 15,
+            "安装": 15,
+            "使用": 18,
+            "测评": 14,
+            "对比": 14,
+        }
+
+        for word, value in positive_words.items():
+            if word.lower() in text:
+                score += value
+
+        negative_words = {
+            "슬라이드": 25,
+            "사진모음": 25,
+            "밈": 20,
+            "meme": 20,
+            "talking": 10,
+            "reaction": 10,
+            "直播": 12,
+            "纯文字": 25,
+            "图文": 20,
+        }
+
+        for word, value in negative_words.items():
+            if word.lower() in text:
+                score -= value
+
+        return self._clamp_score(score)
+
+    def _penalty(
+        self,
+        item: Dict[str, Any],
+    ) -> tuple[float, List[str]]:
+        penalty = 0.0
+        warnings: List[str] = []
+        text = self._candidate_text(item)
+
+        duration = self._safe_float(
+            item.get(
+                "duration",
+                item.get(
+                    "duration_seconds",
+                    item.get("video_duration", 0),
+                ),
+            )
+        )
+
+        if duration > 0 and duration < 4:
+            penalty += 18
+            warnings.append("영상 길이가 4초 미만")
+
+        elif duration > 180:
+            penalty += 12
+            warnings.append("영상 길이가 3분 초과")
+
+        bad_signals = {
+            "slideshow": (
+                25,
+                "슬라이드쇼 후보",
+            ),
+            "watermark_heavy": (
+                20,
+                "워터마크가 과도함",
+            ),
+            "face_only": (
+                18,
+                "얼굴 위주 영상",
+            ),
+            "text_only": (
+                25,
+                "텍스트 위주 영상",
+            ),
+            "is_live": (
+                15,
+                "라이브 영상",
+            ),
+            "blocked": (
+                40,
+                "차단 또는 재생 불가",
+            ),
+        }
+
+        for key, (
+            value,
+            message,
+        ) in bad_signals.items():
+            if self._truthy(item.get(key)):
+                penalty += value
+                warnings.append(message)
+
+        keyword_penalties = {
+            "纯文字": (
+                25,
+                "중국어 텍스트 영상 가능성",
+            ),
+            "图文": (
+                20,
+                "이미지 슬라이드 가능성",
+            ),
+            "meme": (
+                15,
+                "밈 영상 가능성",
+            ),
+            "reaction": (
+                10,
+                "리액션 위주 가능성",
+            ),
+        }
+
+        for keyword, (
+            value,
+            message,
+        ) in keyword_penalties.items():
+            if keyword.lower() in text:
+                penalty += value
+                warnings.append(message)
+
+        if not (
+            item.get("url")
+            or item.get("video_url")
+            or item.get("play_url")
+            or item.get("path")
+            or item.get("video_path")
+        ):
+            penalty += 30
+            warnings.append("사용 가능한 영상 경로가 없음")
+
+        return min(penalty, 80.0), warnings
+
+    def _reasons(
+        self,
+        item: Dict[str, Any],
+        candidate_score: float,
+        quality_score: float,
+        shopping_score: float,
+        vision_score: float,
+        scene_score: float,
+    ) -> List[str]:
+        reasons: List[str] = []
+
+        if candidate_score >= 70:
+            reasons.append("후보 반응 점수 우수")
+        elif candidate_score >= 45:
+            reasons.append("후보 반응 점수 양호")
+
+        if quality_score >= 80:
+            reasons.append("영상 화질 우수")
+        elif quality_score >= 60:
+            reasons.append("영상 화질 사용 가능")
+
+        if shopping_score >= 80:
+            reasons.append("쇼핑쇼츠 적합도 우수")
+        elif shopping_score >= 60:
+            reasons.append("쇼핑쇼츠 활용 가능")
+
+        if vision_score >= 75:
             reasons.append("제품 사용 장면 확인")
+        elif vision_score >= 50:
+            reasons.append("제품 노출 확인")
 
-        if not reasons:
-            reasons.append("기본 후보")
+        if scene_score >= 75:
+            reasons.append("편집 가치가 높은 장면")
 
-        return reasons[:6]
+        views = self._safe_int(
+            item.get("view_count")
+        )
 
-    def _recommendation(self, score):
-        if score >= 90:
-            return "최우선 후보"
-        if score >= 80:
-            return "우선 후보"
-        if score >= 70:
-            return "검토 후보"
-        if score >= 60:
-            return "보조 후보"
-        return "낮은 우선순위"
+        if views >= 1_000_000:
+            reasons.append("조회수 100만 이상")
+        elif views >= 100_000:
+            reasons.append("조회수 10만 이상")
+
+        if str(
+            item.get("metadata_source", "")
+        ) == "tiktok-video-detail":
+            reasons.append("TikTok 상세 통계 확인")
+
+        return reasons or ["기본 종합 점수 적용"]
+
+    def _candidate_text(
+        self,
+        item: Dict[str, Any],
+    ) -> str:
+        values = [
+            item.get("title", ""),
+            item.get("purpose", ""),
+            item.get("keyword", ""),
+            item.get("description", ""),
+            item.get("caption", ""),
+            item.get("note", ""),
+        ]
+
+        return " ".join(
+            str(value)
+            for value in values
+            if value is not None
+        ).lower()
+
+    def _clamp_score(
+        self,
+        value: Any,
+    ) -> float:
+        return max(
+            min(
+                self._safe_float(value),
+                100.0,
+            ),
+            0.0,
+        )
+
+    def _truthy(
+        self,
+        value: Any,
+    ) -> bool:
+        if isinstance(value, bool):
+            return value
+
+        if isinstance(value, str):
+            return value.strip().lower() in {
+                "1",
+                "true",
+                "yes",
+                "y",
+                "on",
+            }
+
+        return bool(value)
+
+    def _safe_int(
+        self,
+        value: Any,
+    ) -> int:
+        try:
+            return max(
+                int(float(value or 0)),
+                0,
+            )
+        except (TypeError, ValueError):
+            return 0
+
+    def _safe_float(
+        self,
+        value: Any,
+    ) -> float:
+        try:
+            return max(
+                float(value or 0),
+                0.0,
+            )
+        except (TypeError, ValueError):
+            return 0.0

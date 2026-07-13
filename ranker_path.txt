@@ -1,0 +1,2 @@
+C:\Users\user\Downloads\AutoCommerceAI_4.0_PlaywrightSourceCollector-0630\modules copy\video\video_candidate_selector.py
+C:\Users\user\Downloads\AutoCommerceAI_4.0_PlaywrightSourceCollector-0630\modules\video\video_candidate_ranker.py

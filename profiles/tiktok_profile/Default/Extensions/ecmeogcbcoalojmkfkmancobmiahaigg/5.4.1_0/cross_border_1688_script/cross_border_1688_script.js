@@ -1,0 +1,1 @@
+(()=>{"use strict";const e=()=>{window.dispatchEvent(new CustomEvent("service-plugin-dock-event",{detail:{type:"register",name:"itemscout"}}))};window.onload=()=>{window._ServicePluginDockInit?e():window.addEventListener("service-plugin-dock-event-init",(i=>e()),!1)}})();

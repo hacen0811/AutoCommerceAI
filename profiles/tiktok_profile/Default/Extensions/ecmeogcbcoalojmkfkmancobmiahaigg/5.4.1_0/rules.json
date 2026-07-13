@@ -1,0 +1,551 @@
+[
+  {
+    "id": 1,
+    "priority": 1,
+    "action": {
+      "type": "modifyHeaders",
+      "requestHeaders": [
+        { "header": "Origin", "operation": "set", "value": "https://datalab.naver.com" },
+        {
+          "header": "Referer",
+          "operation": "set",
+          "value": "https://datalab.naver.com/shoppingInsight/sKeyword.naver"
+        }
+      ]
+    },
+    "condition": {
+      "urlFilter": "datalab.naver.com/shoppingInsight",
+      "excludedResourceTypes": ["main_frame"]
+    }
+  },
+  {
+    "id": 2,
+    "priority": 2,
+    "action": {
+      "type": "modifyHeaders",
+      "requestHeaders": [
+        { "header": "Origin", "operation": "set", "value": "https://datalab.naver.com" },
+        {
+          "header": "Referer",
+          "operation": "set",
+          "value": "https://datalab.naver.com/keyword/trendSearch.naver"
+        }
+      ]
+    },
+    "condition": {
+      "regexFilter": "datalab.naver.com/(keyword/trendResult.naver|qcHash.naver)",
+      "excludedResourceTypes": ["main_frame"]
+    }
+  },
+  {
+    "id": 3,
+    "priority": 1,
+    "action": {
+      "type": "modifyHeaders",
+      "requestHeaders": [
+        {
+          "header": "user-agent",
+          "operation": "set",
+          "value": "Mozilla/5.0 (iPhone; CPU iPhone OS 13_2_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.0.3 Mobile/15E148 Safari/604.1"
+        }
+      ]
+    },
+    "condition": {
+      "urlFilter": "||smartstore.naver.com",
+      "resourceTypes": ["sub_frame"],
+      "initiatorDomains": ["itemscout.io"]
+    }
+  },
+  {
+    "id": 4,
+    "priority": 1,
+    "action": {
+      "type": "modifyHeaders",
+      "requestHeaders": [
+        {
+          "header": "user-agent",
+          "operation": "set",
+          "value": "Mozilla/5.0 (iPhone; CPU iPhone OS 13_2_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.0.3 Mobile/15E148 Safari/604.1"
+        }
+      ]
+    },
+    "condition": {
+      "urlFilter": "||brand.naver.com",
+      "resourceTypes": ["sub_frame"],
+      "initiatorDomains": ["itemscout.io"]
+    }
+  },
+  {
+    "id": 5,
+    "priority": 1,
+    "action": {
+      "type": "modifyHeaders",
+      "requestHeaders": [
+        {
+          "header": "user-agent",
+          "operation": "set",
+          "value": "Mozilla/5.0 (iPhone; CPU iPhone OS 13_2_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.0.3 Mobile/15E148 Safari/604.1"
+        }
+      ]
+    },
+    "condition": {
+      "urlFilter": "mw.wemakeprice.com",
+      "resourceTypes": ["sub_frame"],
+      "initiatorDomains": ["itemscout.io"]
+    }
+  },
+  {
+    "id": 6,
+    "priority": 1,
+    "action": {
+      "type": "modifyHeaders",
+      "requestHeaders": [
+        {
+          "header": "user-agent",
+          "operation": "set",
+          "value": "Mozilla/5.0 (iPhone; CPU iPhone OS 13_2_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.0.3 Mobile/15E148 Safari/604.1"
+        }
+      ]
+    },
+    "condition": {
+      "urlFilter": "mticket.wemakeprice.com",
+      "resourceTypes": ["sub_frame"],
+      "initiatorDomains": ["itemscout.io"]
+    }
+  },
+  {
+    "id": 7,
+    "priority": 1,
+    "action": {
+      "type": "modifyHeaders",
+      "requestHeaders": [
+        {
+          "header": "user-agent",
+          "operation": "set",
+          "value": "Mozilla/5.0 (iPhone; CPU iPhone OS 13_2_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.0.3 Mobile/15E148 Safari/604.1"
+        }
+      ]
+    },
+    "condition": {
+      "urlFilter": "||shopping.naver.com",
+      "resourceTypes": ["sub_frame"],
+      "initiatorDomains": ["itemscout.io"]
+    }
+  },
+  {
+    "id": 8,
+    "priority": 1,
+    "action": {
+      "type": "modifyHeaders",
+      "requestHeaders": [
+        { "header": "sec-fetch-site", "operation": "set", "value": "same-origin" },
+        {
+          "header": "Referer",
+          "operation": "set",
+          "value": "https://search.shopping.naver.com/aitems"
+        }
+      ]
+    },
+    "condition": {
+      "urlFilter": "search.shopping.naver.com/api/product-zzim/products",
+      "excludedInitiatorDomains": ["search.shopping.naver.com"]
+    }
+  },
+  {
+    "id": 9,
+    "priority": 1,
+    "action": {
+      "type": "modifyHeaders",
+      "requestHeaders": [
+        {
+          "header": "user-agent",
+          "operation": "set",
+          "value": "Mozilla/5.0 (iPhone; CPU iPhone OS 13_2_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.0.3 Mobile/15E148 Safari/604.1"
+        }
+      ]
+    },
+    "condition": {
+      "urlFilter": "mw.wemakeprice.com",
+      "resourceTypes": ["sub_frame"],
+      "initiatorDomains": ["itemscout.io"]
+    }
+  },{
+    "id": 10,
+    "priority": 1,
+    "action": {
+      "type": "modifyHeaders",
+      "requestHeaders": [
+        {
+          "header": "user-agent",
+          "operation": "set",
+          "value": "Mozilla/5.0 (iPhone; CPU iPhone OS 13_2_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.0.3 Mobile/15E148 Safari/604.1"
+        }
+      ]
+    },
+    "condition": {
+      "urlFilter": "mw.wemakeprice.com",
+      "resourceTypes": ["sub_frame"],
+      "initiatorDomains": ["itemscout.io"]
+    }
+  },{
+    "id": 11,
+    "priority": 1,
+    "action": {
+      "type": "modifyHeaders",
+      "requestHeaders": [
+        {
+          "header": "user-agent",
+          "operation": "set",
+          "value": "Mozilla/5.0 (iPhone; CPU iPhone OS 13_2_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.0.3 Mobile/15E148 Safari/604.1"
+        }
+      ]
+    },
+    "condition": {
+      "urlFilter": "mw.wemakeprice.com",
+      "resourceTypes": ["sub_frame"],
+      "initiatorDomains": ["itemscout.io"]
+    }
+  },{
+    "id": 12,
+    "priority": 1,
+    "action": {
+      "type": "modifyHeaders",
+      "requestHeaders": [
+        {
+          "header": "user-agent",
+          "operation": "set",
+          "value": "Mozilla/5.0 (iPhone; CPU iPhone OS 13_2_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.0.3 Mobile/15E148 Safari/604.1"
+        }
+      ]
+    },
+    "condition": {
+      "urlFilter": "mw.wemakeprice.com",
+      "resourceTypes": ["sub_frame"],
+      "initiatorDomains": ["itemscout.io"]
+    }
+  },{
+    "id": 13,
+    "priority": 1,
+    "action": {
+      "type": "modifyHeaders",
+      "requestHeaders": [
+        {
+          "header": "user-agent",
+          "operation": "set",
+          "value": "Mozilla/5.0 (iPhone; CPU iPhone OS 13_2_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.0.3 Mobile/15E148 Safari/604.1"
+        }
+      ]
+    },
+    "condition": {
+      "urlFilter": "mw.wemakeprice.com",
+      "resourceTypes": ["sub_frame"],
+      "initiatorDomains": ["itemscout.io"]
+    }
+  },{
+    "id": 14,
+    "priority": 1,
+    "action": {
+      "type": "modifyHeaders",
+      "requestHeaders": [
+        {
+          "header": "user-agent",
+          "operation": "set",
+          "value": "Mozilla/5.0 (iPhone; CPU iPhone OS 13_2_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.0.3 Mobile/15E148 Safari/604.1"
+        }
+      ]
+    },
+    "condition": {
+      "urlFilter": "mw.wemakeprice.com",
+      "resourceTypes": ["sub_frame"],
+      "initiatorDomains": ["itemscout.io"]
+    }
+  },{
+    "id": 15,
+    "priority": 1,
+    "action": {
+      "type": "modifyHeaders",
+      "requestHeaders": [
+        {
+          "header": "user-agent",
+          "operation": "set",
+          "value": "Mozilla/5.0 (iPhone; CPU iPhone OS 13_2_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.0.3 Mobile/15E148 Safari/604.1"
+        }
+      ]
+    },
+    "condition": {
+      "urlFilter": "mw.wemakeprice.com",
+      "resourceTypes": ["sub_frame"],
+      "initiatorDomains": ["itemscout.io"]
+    }
+  },{
+    "id": 16,
+    "priority": 1,
+    "action": {
+      "type": "modifyHeaders",
+      "requestHeaders": [
+        {
+          "header": "user-agent",
+          "operation": "set",
+          "value": "Mozilla/5.0 (iPhone; CPU iPhone OS 13_2_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.0.3 Mobile/15E148 Safari/604.1"
+        }
+      ]
+    },
+    "condition": {
+      "urlFilter": "mw.wemakeprice.com",
+      "resourceTypes": ["sub_frame"],
+      "initiatorDomains": ["itemscout.io"]
+    }
+  },{
+    "id": 17,
+    "priority": 1,
+    "action": {
+      "type": "modifyHeaders",
+      "requestHeaders": [
+        {
+          "header": "user-agent",
+          "operation": "set",
+          "value": "Mozilla/5.0 (iPhone; CPU iPhone OS 13_2_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.0.3 Mobile/15E148 Safari/604.1"
+        }
+      ]
+    },
+    "condition": {
+      "urlFilter": "mw.wemakeprice.com",
+      "resourceTypes": ["sub_frame"],
+      "initiatorDomains": ["itemscout.io"]
+    }
+  },{
+    "id": 18,
+    "priority": 1,
+    "action": {
+      "type": "modifyHeaders",
+      "requestHeaders": [
+        {
+          "header": "user-agent",
+          "operation": "set",
+          "value": "Mozilla/5.0 (iPhone; CPU iPhone OS 13_2_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.0.3 Mobile/15E148 Safari/604.1"
+        }
+      ]
+    },
+    "condition": {
+      "urlFilter": "mw.wemakeprice.com",
+      "resourceTypes": ["sub_frame"],
+      "initiatorDomains": ["itemscout.io"]
+    }
+  },{
+    "id": 19,
+    "priority": 1,
+    "action": {
+      "type": "modifyHeaders",
+      "requestHeaders": [
+        {
+          "header": "user-agent",
+          "operation": "set",
+          "value": "Mozilla/5.0 (iPhone; CPU iPhone OS 13_2_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.0.3 Mobile/15E148 Safari/604.1"
+        }
+      ]
+    },
+    "condition": {
+      "urlFilter": "mw.wemakeprice.com",
+      "resourceTypes": ["sub_frame"],
+      "initiatorDomains": ["itemscout.io"]
+    }
+  },{
+    "id": 20,
+    "priority": 1,
+    "action": {
+      "type": "modifyHeaders",
+      "requestHeaders": [
+        {
+          "header": "user-agent",
+          "operation": "set",
+          "value": "Mozilla/5.0 (iPhone; CPU iPhone OS 13_2_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.0.3 Mobile/15E148 Safari/604.1"
+        }
+      ]
+    },
+    "condition": {
+      "urlFilter": "mw.wemakeprice.com",
+      "resourceTypes": ["sub_frame"],
+      "initiatorDomains": ["itemscout.io"]
+    }
+  },{
+    "id": 21,
+    "priority": 1,
+    "action": {
+      "type": "modifyHeaders",
+      "requestHeaders": [
+        {
+          "header": "user-agent",
+          "operation": "set",
+          "value": "Mozilla/5.0 (iPhone; CPU iPhone OS 13_2_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.0.3 Mobile/15E148 Safari/604.1"
+        }
+      ]
+    },
+    "condition": {
+      "urlFilter": "mw.wemakeprice.com",
+      "resourceTypes": ["sub_frame"],
+      "initiatorDomains": ["itemscout.io"]
+    }
+  },{
+    "id": 22,
+    "priority": 1,
+    "action": {
+      "type": "modifyHeaders",
+      "requestHeaders": [
+        {
+          "header": "user-agent",
+          "operation": "set",
+          "value": "Mozilla/5.0 (iPhone; CPU iPhone OS 13_2_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.0.3 Mobile/15E148 Safari/604.1"
+        }
+      ]
+    },
+    "condition": {
+      "urlFilter": "mw.wemakeprice.com",
+      "resourceTypes": ["sub_frame"],
+      "initiatorDomains": ["itemscout.io"]
+    }
+  },{
+    "id": 23,
+    "priority": 1,
+    "action": {
+      "type": "modifyHeaders",
+      "requestHeaders": [
+        {
+          "header": "user-agent",
+          "operation": "set",
+          "value": "Mozilla/5.0 (iPhone; CPU iPhone OS 13_2_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.0.3 Mobile/15E148 Safari/604.1"
+        }
+      ]
+    },
+    "condition": {
+      "urlFilter": "mw.wemakeprice.com",
+      "resourceTypes": ["sub_frame"],
+      "initiatorDomains": ["itemscout.io"]
+    }
+  },{
+    "id": 24,
+    "priority": 1,
+    "action": {
+      "type": "modifyHeaders",
+      "requestHeaders": [
+        {
+          "header": "user-agent",
+          "operation": "set",
+          "value": "Mozilla/5.0 (iPhone; CPU iPhone OS 13_2_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.0.3 Mobile/15E148 Safari/604.1"
+        }
+      ]
+    },
+    "condition": {
+      "urlFilter": "mw.wemakeprice.com",
+      "resourceTypes": ["sub_frame"],
+      "initiatorDomains": ["itemscout.io"]
+    }
+  },{
+    "id": 25,
+    "priority": 1,
+    "action": {
+      "type": "modifyHeaders",
+      "requestHeaders": [
+        {
+          "header": "user-agent",
+          "operation": "set",
+          "value": "Mozilla/5.0 (iPhone; CPU iPhone OS 13_2_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.0.3 Mobile/15E148 Safari/604.1"
+        }
+      ]
+    },
+    "condition": {
+      "urlFilter": "mw.wemakeprice.com",
+      "resourceTypes": ["sub_frame"],
+      "initiatorDomains": ["itemscout.io"]
+    }
+  },{
+    "id": 26,
+    "priority": 1,
+    "action": {
+      "type": "modifyHeaders",
+      "requestHeaders": [
+        {
+          "header": "user-agent",
+          "operation": "set",
+          "value": "Mozilla/5.0 (iPhone; CPU iPhone OS 13_2_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.0.3 Mobile/15E148 Safari/604.1"
+        }
+      ]
+    },
+    "condition": {
+      "urlFilter": "mw.wemakeprice.com",
+      "resourceTypes": ["sub_frame"],
+      "initiatorDomains": ["itemscout.io"]
+    }
+  },{
+    "id": 27,
+    "priority": 1,
+    "action": {
+      "type": "modifyHeaders",
+      "requestHeaders": [
+        {
+          "header": "user-agent",
+          "operation": "set",
+          "value": "Mozilla/5.0 (iPhone; CPU iPhone OS 13_2_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.0.3 Mobile/15E148 Safari/604.1"
+        }
+      ]
+    },
+    "condition": {
+      "urlFilter": "mw.wemakeprice.com",
+      "resourceTypes": ["sub_frame"],
+      "initiatorDomains": ["itemscout.io"]
+    }
+  },{
+    "id": 28,
+    "priority": 1,
+    "action": {
+      "type": "modifyHeaders",
+      "requestHeaders": [
+        {
+          "header": "user-agent",
+          "operation": "set",
+          "value": "Mozilla/5.0 (iPhone; CPU iPhone OS 13_2_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.0.3 Mobile/15E148 Safari/604.1"
+        }
+      ]
+    },
+    "condition": {
+      "urlFilter": "mw.wemakeprice.com",
+      "resourceTypes": ["sub_frame"],
+      "initiatorDomains": ["itemscout.io"]
+    }
+  },{
+    "id": 29,
+    "priority": 1,
+    "action": {
+      "type": "modifyHeaders",
+      "requestHeaders": [
+        {
+          "header": "user-agent",
+          "operation": "set",
+          "value": "Mozilla/5.0 (iPhone; CPU iPhone OS 13_2_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.0.3 Mobile/15E148 Safari/604.1"
+        }
+      ]
+    },
+    "condition": {
+      "urlFilter": "mw.wemakeprice.com",
+      "resourceTypes": ["sub_frame"],
+      "initiatorDomains": ["itemscout.io"]
+    }
+  },{
+    "id": 30,
+    "priority": 1,
+    "action": {
+      "type": "modifyHeaders",
+      "requestHeaders": [
+        {
+          "header": "user-agent",
+          "operation": "set",
+          "value": "Mozilla/5.0 (iPhone; CPU iPhone OS 13_2_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.0.3 Mobile/15E148 Safari/604.1"
+        }
+      ]
+    },
+    "condition": {
+      "urlFilter": "mw.wemakeprice.com",
+      "resourceTypes": ["sub_frame"],
+      "initiatorDomains": ["itemscout.io"]
+    }
+  }
+]

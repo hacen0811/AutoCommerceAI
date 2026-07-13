@@ -1,0 +1,1 @@
+(()=>{"use strict";!function(t,e){const r=document.getElementsByTagName(e)[0],s=document.createElement("script");s.setAttribute("type","text/javascript"),s.setAttribute("src",t),r.appendChild(s)}(chrome.runtime.getURL("cross_border_1688_script/cross_border_1688_script.js"),"body")})();

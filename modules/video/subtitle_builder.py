@@ -1,28 +1,28 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Tuple
 
 
 class SubtitleBuilder:
     """
-    Sprint 55-1 Subtitle Builder
+    Sprint 56-1 Subtitle Builder
 
     역할:
     - AI 콘텐츠 팩에서 자막 후보 추출
     - timeline / cut_plan / captions 구조 지원
     - 시작·종료 시간을 초 단위로 정규화
     - 빈 자막 자동 제외
-    - 긴 자막을 의미 단위로 최대 2줄 정리
+    - 의미 단위 중심으로 최대 2줄 정리
+    - 한국어 조사와 어미가 부자연스럽게 분리되지 않도록 보호
     - SubtitleEngine에 전달할 표준 자막 리스트 생성
     """
 
-    BUILDER_VERSION = "subtitle-builder-55-1"
+    BUILDER_VERSION = "subtitle-builder-56-1"
 
-    # 세로형 쇼츠 기준 한 줄 권장 길이
     DEFAULT_MAX_CHARS_PER_LINE = 16
+    DEFAULT_MAX_LINES = 2
 
-    # 자연스러운 줄바꿈 위치로 우선 사용하는 표현
     SEMANTIC_BREAK_WORDS = (
         "그래서",
         "하지만",
@@ -34,14 +34,14 @@ class SubtitleBuilder:
         "특히",
         "사실",
         "결국",
-        "대신",
+        "또",
         "때문에",
         "덕분에",
         "사용하면",
-        "놓으면",
+        "붙이면",
         "누르면",
         "열면",
-        "닫으면",
+        "넣으면",
         "정리하면",
         "확인하면",
         "필요하면",
@@ -50,6 +50,45 @@ class SubtitleBuilder:
         "사용해보세요",
         "확인해보세요",
     )
+
+    PROTECTED_ENDINGS = (
+        "은",
+        "는",
+        "이",
+        "가",
+        "을",
+        "를",
+        "에",
+        "에서",
+        "와",
+        "과",
+        "도",
+        "만",
+        "의",
+        "로",
+        "으로",
+        "에게",
+        "보다",
+        "처럼",
+        "까지",
+        "부터",
+        "하고",
+        "하며",
+        "해서",
+        "하면",
+        "하면요",
+        "인데",
+        "인데요",
+        "입니다",
+        "됩니다",
+        "있어요",
+        "없어요",
+        "해요",
+        "예요",
+        "이에요",
+    )
+
+    SENTENCE_PATTERN = re.compile(r"[,.!?…。！？]+")
 
     def build(
         self,
@@ -77,7 +116,7 @@ class SubtitleBuilder:
             formatted_text = self._format_subtitle_text(
                 raw_text,
                 max_chars_per_line=self.DEFAULT_MAX_CHARS_PER_LINE,
-                max_lines=2,
+                max_lines=self.DEFAULT_MAX_LINES,
             )
 
             if not formatted_text:
@@ -255,9 +294,10 @@ class SubtitleBuilder:
 
         우선순위:
         1. 기존 줄바꿈 존중
-        2. 문장부호 뒤에서 분리
-        3. 접속어·조건 표현 앞에서 분리
-        4. 띄어쓰기 기준으로 길이 균형 분리
+        2. 문장부호 뒤 분리
+        3. 접속사·전환 표현 앞 분리
+        4. 띄어쓰기 위치 기준 분리
+        5. 마지막으로 글자 수 기준 분리
         """
         text = self._normalize_spaces(text)
 
@@ -297,6 +337,12 @@ class SubtitleBuilder:
         if not first or not second:
             return text
 
+        first, second = self._rebalance_lines(
+            first=first,
+            second=second,
+            max_chars_per_line=max_chars_per_line,
+        )
+
         return self._join_two_lines(
             first,
             second,
@@ -307,26 +353,23 @@ class SubtitleBuilder:
         self,
         text: str,
         max_chars_per_line: int,
-    ) -> int | None:
+    ) -> Optional[int]:
         text_length = len(text)
         midpoint = text_length / 2
 
-        candidates: List[tuple[float, int]] = []
+        candidates: List[Tuple[float, int]] = []
 
-        # 쉼표, 마침표, 물음표 등 문장부호 뒤
-        for match in re.finditer(r"[,.!?。！？,，]\s*", text):
+        for match in self.SENTENCE_PATTERN.finditer(text):
             position = match.end()
 
             if 2 <= position <= text_length - 2:
                 score = abs(position - midpoint)
 
-                # 권장 길이를 크게 벗어나지 않는 지점 우선
                 if position <= max_chars_per_line + 4:
-                    score -= 5
+                    score -= 6
 
                 candidates.append((score, position))
 
-        # 의미 전환 표현 앞
         for word in self.SEMANTIC_BREAK_WORDS:
             start = 0
 
@@ -340,13 +383,12 @@ class SubtitleBuilder:
                     score = abs(position - midpoint) + 2
 
                     if position <= max_chars_per_line + 4:
-                        score -= 4
+                        score -= 5
 
                     candidates.append((score, position))
 
                 start = position + len(word)
 
-        # 띄어쓰기 위치
         for match in re.finditer(r"\s+", text):
             position = match.start()
 
@@ -355,6 +397,9 @@ class SubtitleBuilder:
 
                 if position <= max_chars_per_line + 2:
                     score -= 3
+
+                if self._is_protected_split(text, position):
+                    score += 20
 
                 candidates.append((score, position))
 
@@ -365,15 +410,23 @@ class SubtitleBuilder:
             )
 
         candidates.sort(key=lambda item: item[0])
-        return candidates[0][1]
+
+        for _, position in candidates:
+            if not self._is_protected_split(text, position):
+                return position
+
+        return self._fallback_split_index(
+            text,
+            max_chars_per_line,
+        )
 
     def _fallback_split_index(
         self,
         text: str,
         max_chars_per_line: int,
-    ) -> int | None:
+    ) -> Optional[int]:
         """
-        띄어쓰기가 거의 없는 문장도 두 줄로 나눌 수 있도록 처리합니다.
+        띄어쓰기가 거의 없는 문장도 최대 2줄로 나눌 수 있도록 처리합니다.
         """
         if len(text) <= max_chars_per_line:
             return None
@@ -383,42 +436,93 @@ class SubtitleBuilder:
             max(len(text) // 2, 1),
         )
 
-        # 조사나 어미 중간이 아닌 위치를 약하게 탐색
-        protected_endings = (
-            "은",
-            "는",
-            "이",
-            "가",
-            "을",
-            "를",
-            "에",
-            "의",
-            "와",
-            "과",
-            "도",
-            "로",
-            "으로",
-        )
-
-        for offset in range(0, 5):
-            for position in (
+        for offset in range(0, 7):
+            positions = (
                 target + offset,
                 target - offset,
-            ):
+            )
+
+            for position in positions:
                 if position <= 1 or position >= len(text):
                     continue
 
-                left = text[:position]
-
-                if any(
-                    left.endswith(ending)
-                    for ending in protected_endings
-                ):
+                if self._is_protected_split(text, position):
                     continue
 
                 return position
 
         return target
+
+    def _is_protected_split(
+        self,
+        text: str,
+        position: int,
+    ) -> bool:
+        left = text[:position].rstrip()
+        right = text[position:].lstrip()
+
+        if not left or not right:
+            return True
+
+        if left.endswith(self.PROTECTED_ENDINGS):
+            return True
+
+        if right.startswith(self.PROTECTED_ENDINGS):
+            return True
+
+        return False
+
+    def _rebalance_lines(
+        self,
+        first: str,
+        second: str,
+        max_chars_per_line: int,
+    ) -> Tuple[str, str]:
+        """
+        한쪽 줄이 지나치게 길거나 짧으면 공백 단위로 균형을 조정합니다.
+        """
+        first = self._normalize_spaces(first)
+        second = self._normalize_spaces(second)
+
+        combined = f"{first} {second}".strip()
+
+        if (
+            len(first) <= max_chars_per_line + 4
+            and len(second) <= max_chars_per_line + 4
+        ):
+            return first, second
+
+        spaces = [
+            match.start()
+            for match in re.finditer(r"\s+", combined)
+        ]
+
+        if not spaces:
+            return first, second
+
+        midpoint = len(combined) / 2
+
+        valid_positions = [
+            position
+            for position in spaces
+            if not self._is_protected_split(combined, position)
+        ]
+
+        if not valid_positions:
+            return first, second
+
+        best_position = min(
+            valid_positions,
+            key=lambda position: abs(position - midpoint),
+        )
+
+        balanced_first = combined[:best_position].strip()
+        balanced_second = combined[best_position:].strip()
+
+        if not balanced_first or not balanced_second:
+            return first, second
+
+        return balanced_first, balanced_second
 
     def _join_two_lines(
         self,
@@ -440,8 +544,7 @@ class SubtitleBuilder:
     ) -> str:
         text = str(value or "")
 
-        # 기존 줄바꿈은 보존하고 각 줄 내부 공백만 정리
-        lines = []
+        lines: List[str] = []
 
         for line in re.split(r"[\r\n]+", text):
             cleaned = re.sub(r"[ \t]+", " ", line).strip()

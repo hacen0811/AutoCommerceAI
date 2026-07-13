@@ -51,7 +51,15 @@ def read_json(path, default=None):
 
 def write_json(path, data):
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    path.write_text(
+        json.dumps(
+            data,
+            ensure_ascii=False,
+            indent=2,
+            default=str,
+        ),
+        encoding="utf-8",
+    )
 
 
 def normalize_text(value, fallback=""):
@@ -280,6 +288,10 @@ def show_search_links(keywords, key_prefix="main"):
             st.success("도우인 검색을 열었습니다.")
 
 def run_project_pipeline(project, sample_count):
+    print(
+        "[Sprint61] run_project_pipeline entered",
+        flush=True,
+    )
     result = WorkflowEngine().run_project(project, sample_count=sample_count)
     save_pipeline_result(project, result)
     st.session_state[f"one_click_result_{safe_project_id(project)}"] = result
@@ -305,6 +317,12 @@ def render_project_pipeline(project, sample_count):
     c1, c2 = st.columns(2)
 
     if c1.button("현재 프로젝트 원클릭 실행", use_container_width=True):
+        print(
+            "[Sprint61] One Click button pressed",
+            flush=True,
+        )
+
+        
         with st.spinner("One Click Pipeline 실행 중입니다..."):
             result = run_project_pipeline(project, sample_count)
         st.success("원클릭 실행 결과를 저장했습니다.")
@@ -322,26 +340,44 @@ def render_project_pipeline(project, sample_count):
             st.caption(f"최근 원클릭 결과를 복원했습니다: {pipeline_result_path(project)}")
 
     if result:
-        show_pipeline_result(project, result, path_debug)
+        st.success("최근 원클릭 실행 결과가 있습니다.")
 
-        # ✅ 채택 영상 후보 화면
-        show_selected_sources(project)
-
-        show_content_pack_view_new(
-            project=project,
-            result=result,
-            content_pack=st.session_state.get(
-                f"content_pack_{safe_project_id(project)}",
-                {}
-            ),
-            paths=st.session_state.get(
-                f"ai_content_pack_export_{getattr(project, 'id', '')}",
-                {}
-            ),
+        show_result_detail = st.checkbox(
+            "최근 실행 결과 상세 화면 열기",
+            value=False,
+            key=f"show_result_detail_{project_safe_id}",
         )
 
+        if show_result_detail:
+            show_pipeline_result(
+                project,
+                result,
+                path_debug,
+            )
+
+        # ✅ 채택 영상 후보 화면
+            show_selected_sources(
+                project
+            )
+
+            show_content_pack_view_new(
+                project=project,
+                result=result,
+                content_pack=st.session_state.get(
+                    f"content_pack_{project_safe_id}",
+                    {},
+                ),
+                paths=st.session_state.get(
+                    f"ai_content_pack_export_{getattr(project, 'id', '')}",
+                    {},
+                ),
+            )
+
     else:
-        st.info("원클릭 결과가 아직 없습니다. 먼저 원클릭 실행을 완료해 주세요.")
+        st.info(
+            "원클릭 결과가 아직 없습니다. "
+            "먼저 원클릭 실행을 완료해 주세요."
+        )
 
 
 def show_one_click_pipeline():

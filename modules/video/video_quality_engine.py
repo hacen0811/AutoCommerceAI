@@ -3,6 +3,7 @@ import subprocess
 import json
 
 
+
 class VideoQualityEngine:
     def score(self, video_path, real_vision=None):
         path = Path(video_path) if video_path else None

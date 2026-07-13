@@ -1,0 +1,84 @@
+{
+   "action": {
+      "default_icon": {
+         "128": "static/icons/icon_128.png",
+         "48": "static/icons/icon_48.png"
+      },
+      "default_popup": "popup/popup.html",
+      "default_title": "itemscout"
+   },
+   "author": "아이템스카우트",
+   "background": {
+      "service_worker": "background.js",
+      "type": "module"
+   },
+   "content_scripts": [ {
+      "css": [ "image_search_script/image_search_script.css" ],
+      "js": [ "inject/inject.js", "image_search_script/image_search_script.js" ],
+      "matches": [ "\u003Call_urls>" ]
+   }, {
+      "js": [ "coupang_partners_script/coupang_partners_script.js" ],
+      "matches": [ "https://11st.co.kr/products/*", "https://*.11st.co.kr/products/*" ]
+   }, {
+      "js": [ "coupang_partners_script/coupang_partners_script.js" ],
+      "matches": [ "https://detail.1688.com/offer/*" ]
+   }, {
+      "js": [ "coupang_tracking_list_script/coupang_tracking_list_script.js" ],
+      "matches": [ "https://www.coupang.com/?src=*", "https://www.coupang.com/", "https://www.coupang.com/np/*", "https://www.coupang.com/vp/*", "https://pages.coupang.com/p/*", "https://cart.coupang.com/*", "https://mc.coupang.com/*" ]
+   }, {
+      "js": [ "coupang_tracking_script/coupang_tracking_script.js" ],
+      "matches": [ "https://www.coupang.com/vp/products/*" ]
+   }, {
+      "js": [ "margin_calculator_itemscout_script/margin_calculator_itemscout_script.js" ],
+      "matches": [ "https://*.itemscout.io/sourcing/1688/product/*", "https://itemscout.io/sourcing/1688/product/*" ]
+   }, {
+      "js": [ "margin_calculator_itemscout_script/margin_calculator_itemscout_script.js" ],
+      "matches": [ "https://*.itemscout.io/register/sourcing/1688/product/*", "https://itemscout.io/register/sourcing/1688/product/*" ]
+   }, {
+      "js": [ "margin_calculator_script/margin_calculator_script.js" ],
+      "matches": [ "https://detail.1688.com/offer/*", "https://item.taobao.com/item.htm*", "https://chaoshi.detail.tmall.com/item.htm*", "https://detail.tmall.hk/hk/item.htm*", "https://detail.tmall.com/item.htm*" ]
+   }, {
+      "js": [ "margin_calculator_small_script/margin_calculator_small_script.js" ],
+      "matches": [ "https://detail.1688.com/offer/*", "https://detail.tmall.com/item.htm*", "https://item.taobao.com/item.htm*", "https://chaoshi.detail.tmall.com/item.htm*", "https://detail.tmall.hk/hk/item.htm*" ]
+   }, {
+      "WORLD": "MAIN",
+      "js": [ "cross_border_1688_inject/cross_border_1688_inject.js" ],
+      "matches": [ "https://detail.1688.com/offer/*.html*", "https://cart.1688.com/cart.htm*", "https://cart.1688.com/daixiao_cart.htm*" ]
+   }, {
+      "js": [ "alibaba_script/alibaba_script.js" ],
+      "matches": [ "https://www.alibaba.com/product-detail/*.html*" ]
+   }, {
+      "js": [ "open_tab_script/open_tab_script.js" ],
+      "matches": [ "https://smartstore.naver.com/*", "https://*.smartstore.naver.com/*", "https://brand.naver.com/*", "https://*.brand.naver.com/*", "https://shopping.naver.com/*" ]
+   } ],
+   "content_security_policy": {
+      "extension_page": "script-src 'self' 'wasm-unsafe-eval' 'unsafe-eval'; object-src 'self'; default-src 'self'"
+   },
+   "declarative_net_request": {
+      "rule_resources": [ {
+         "enabled": true,
+         "id": "ruleset",
+         "path": "rules.json"
+      } ]
+   },
+   "description": "아이템스카우트 공식 확장 프로그램(스마트스토어 및 이커머스 키워드 분석 툴)",
+   "externally_connectable": {
+      "matches": [ "*://itemscout.io/*", "*://*.itemscout.io/*" ]
+   },
+   "host_permissions": [ "https://smartstore.naver.com/*", "https://*.smartstore.naver.com/*", "https://manage.searchad.naver.com/*", "https://brand.naver.com/*", "https://*.brand.naver.com/*", "https://shopping.naver.com/*", "https://search.shopping.naver.com/*", "https://datalab.naver.com/*", "https://sell.smartstore.naver.com/*", "https://coupang.com/*", "https://www.coupang.com/*", "https://shop.coupang.com/*", "https://interpark.com/*", "https://front.wemakeprice.com/*", "https://tmon.co.kr/*", "https://m.tmon.co.kr/*", "https://m.shop.interpark.com/*", "https://m.11st.co.kr/*", "https://mw.wemakeprice.com/*", "https://mticket.wemakeprice.com/*", "https://m.shopping.naver.com/*", "*://itemscout.io/*", "*://*.itemscout.io/*", "https://detail.1688.com/*", "https://detail.tmall.com/*", "https://item.taobao.com/*", "https://detail.tmall.hk/hk/item.htm*", "https://chaoshi.detail.tmall.com/item.htm*", "https://www.alibaba.com/product-detail/*.html*", "https://www.naver.com/*", "https://11st.co.kr/*", "https://*.11st.co.kr/*", "https://musinsa.com/*", "https://*.musinsa.com/*", "https://gmarket.co.kr/*", "https://*.gmarket.co.kr/*", "https://auction.co.kr/*", "https://*.auction.co.kr/*" ],
+   "icons": {
+      "1": "static/icons/itemscout_logo.png",
+      "128": "static/icons/icon_128.png",
+      "48": "static/icons/icon_48.png"
+   },
+   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAmlvhIT/yN9iPhViPdpFNaQPqYTzAHkGOnYbxYgIOMbmlVa6tO8j4LV3+ICMI9W1tirqGp89rZMrKExYr/9yiTIuw/0AiMBAgXJfFlOLU9UAgMczd5pwQ/VnpGysDPSkNMeh+A7E2Lr6EZ/KaN1eJS4UPMh2bJO9KrE2sKyXNjCrAkUqTL1x3zVQCPPGB8jNwD2CTOMl/dbSPSukTIRhw7BrVfjP21KNfGYgba6s6okydcdgw8w+vecvptDH++66nax9m35WrYiWwLPxAvTeopXepZpccengUUIyypgi51kyBD78rJr8B7tr6wwDJKjHY6CquivyEA78RyvfKhp9fQQIDAQAB",
+   "manifest_version": 3,
+   "name": "아이템스카우트",
+   "permissions": [ "storage", "background", "tabs", "activeTab", "scripting", "cookies", "declarativeNetRequestWithHostAccess", "declarativeNetRequestFeedback", "contextMenus", "gcm", "alarms" ],
+   "update_url": "https://clients2.google.com/service/update2/crx",
+   "version": "5.4.1",
+   "web_accessible_resources": [ {
+      "matches": [ "\u003Call_urls>" ],
+      "resources": [ "popup/popup.html", "keyword_analysis/keyword_analysis.html", "product_analysis/product_analysis.html", "product_analysis_extracting_page/product_analysis_extracting_page.html", "margin_calculator/margin_calculator.html", "margin_calculator_itemscout/margin_calculator_itemscout.html", "margin_calculator_small/margin_calculator_small.html", "alibaba/alibaba.html", "coupang_partners/coupang_partners.html", "coupang_tracking/coupang_tracking.html", "coupang_tracking_list/coupang_tracking_list.html", "static/icons/*.png", "static/images/*.png", "content_script/content_script.js", "iframe_script/iframe_script.js", "image_search_script/image_search_script.js", "open_tab_script/open_tab_script.js", "window_script/window_script.js", "cross_border_1688_script/cross_border_1688_script.js" ]
+   } ]
+}

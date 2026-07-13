@@ -64,10 +64,33 @@ class VideoComposer:
         content_pack = content_pack or {}
 
         cut_plan = content_pack.get("cut_plan") or []
-        selected_sources = (
-            content_pack.get("selected_sources")
-            or content_pack.get("sources")
+
+        composer_candidate = (
+            content_pack.get("composer_candidate")
+        )
+
+        ranked_sources = (
+            content_pack.get("ranked_video_candidates")
             or []
+        )
+
+        if composer_candidate:
+            selected_sources = [composer_candidate]
+
+        elif ranked_sources:
+            selected_sources = ranked_sources
+
+        else:
+            selected_sources = (
+                content_pack.get("selected_sources")
+                or content_pack.get("sources")
+                or []
+            )
+
+        print(
+            "[Sprint60] Composer selected:",
+            len(selected_sources),
+            flush=True,
         )
 
         project_video_paths = self._project_video_paths(
