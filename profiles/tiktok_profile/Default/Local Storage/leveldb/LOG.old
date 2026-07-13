@@ -1,9 +1,19 @@
-2026/07/14-02:12:07.535 6848 Reusing MANIFEST C:\Users\user\Downloads\AutoCommerceAI_4.0_PlaywrightSourceCollector-0630\profiles\tiktok_profile\Default\Local Storage\leveldb/MANIFEST-000001
-2026/07/14-02:12:07.539 6848 Recovering log #16
-2026/07/14-02:12:07.543 6848 Reusing old log C:\Users\user\Downloads\AutoCommerceAI_4.0_PlaywrightSourceCollector-0630\profiles\tiktok_profile\Default\Local Storage\leveldb/000016.log 
-2026/07/14-02:14:35.815 7acc Level-0 table #21: started
-2026/07/14-02:14:35.819 7acc Level-0 table #21: 42966 bytes OK
-2026/07/14-02:14:35.820 7acc Delete type=0 #16
-2026/07/14-02:16:32.175 7acc Level-0 table #23: started
-2026/07/14-02:16:32.196 7acc Level-0 table #23: 93673 bytes OK
-2026/07/14-02:16:32.197 7acc Delete type=0 #20
+2026/07/14-02:21:19.216 79b0 Reusing MANIFEST C:\Users\user\Downloads\AutoCommerceAI_4.0_PlaywrightSourceCollector-0630\profiles\tiktok_profile\Default\Local Storage\leveldb/MANIFEST-000001
+2026/07/14-02:21:19.221 79b0 Recovering log #26
+2026/07/14-02:21:19.221 79b0 Level-0 table #28: started
+2026/07/14-02:21:19.225 79b0 Level-0 table #28: 37260 bytes OK
+2026/07/14-02:21:19.226 79b0 Recovering log #27
+2026/07/14-02:21:19.228 79b0 Reusing old log C:\Users\user\Downloads\AutoCommerceAI_4.0_PlaywrightSourceCollector-0630\profiles\tiktok_profile\Default\Local Storage\leveldb/000027.log 
+2026/07/14-02:21:19.229 79b0 Delete type=0 #26
+2026/07/14-02:21:19.231 5454 Compacting 4@0 + 1@1 files
+2026/07/14-02:21:19.238 5454 Generated table #29@0: 52 keys, 128569 bytes
+2026/07/14-02:21:19.238 5454 Compacted 4@0 + 1@1 files => 128569 bytes
+2026/07/14-02:21:19.239 5454 compacted to: files[ 0 1 1 0 0 0 0 ]
+2026/07/14-02:21:19.239 5454 Delete type=2 #18
+2026/07/14-02:21:19.239 5454 Delete type=2 #21
+2026/07/14-02:21:19.239 5454 Delete type=2 #23
+2026/07/14-02:21:19.239 5454 Delete type=2 #25
+2026/07/14-02:21:19.239 5454 Delete type=2 #28
+2026/07/14-02:21:41.062 5454 Level-0 table #31: started
+2026/07/14-02:21:41.102 5454 Level-0 table #31: 37852 bytes OK
+2026/07/14-02:21:41.103 5454 Delete type=0 #27
