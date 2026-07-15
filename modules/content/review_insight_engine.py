@@ -19,7 +19,7 @@ class ReviewInsightEngine:
     외부 AI API 없이 실행되는 규칙 기반 엔진입니다.
     """
 
-    VERSION = "review-insight-engine-72-2"
+    VERSION = "review-insight-engine-74-3b"
 
     PAIN_PATTERNS = {
         "슬리퍼가 바닥에 흩어져 있다": [
@@ -124,6 +124,71 @@ class ReviewInsightEngine:
             "베란다",
             "다용도",
             "여러 곳",
+        ],
+    }
+
+    GENERAL_PAIN_PATTERNS = {
+        "짐을 정리하고 분리 수납하기 어렵다": [
+            "물건들이 섞",
+            "분리하기",
+            "수납이 부족",
+            "정리가 어렵",
+            "짐 정리",
+        ],
+        "여행 중 짐을 이동하기 불편하다": [
+            "이동할 때 불편",
+            "들고 다니기",
+            "무거워",
+            "이동이 불편",
+            "끌기 불편",
+        ],
+        "여행 기간에 맞는 크기를 고르기 어렵다": [
+            "크기 고민",
+            "몇 인치",
+            "24인치",
+            "20인치",
+            "여행 기간",
+        ],
+        "내부 수납공간 활용이 아쉽다": [
+            "내부 공간",
+            "수납공간",
+            "공간이 부족",
+            "수납이 아쉽",
+        ],
+    }
+
+    GENERAL_BENEFIT_PATTERNS = {
+        "내부 공간을 나눠 깔끔하게 분리 수납할 수 있다": [
+            "지퍼로 완전히 닫",
+            "물건들이 섞이지",
+            "분리하기 좋",
+            "메쉬 포켓",
+            "내부 공간 구성",
+        ],
+        "가볍고 이동이 편하다": [
+            "가볍고",
+            "이동까지 편",
+            "이동이 편",
+            "끌기 편",
+            "휴대가 편",
+        ],
+        "여행 짐을 넉넉하게 수납할 수 있다": [
+            "수납이 넉넉",
+            "짐이 많이",
+            "공간이 알차",
+            "24인치가 딱",
+        ],
+        "튼튼해서 오래 사용할 수 있다": [
+            "튼튼",
+            "오래 쓸",
+            "내구성",
+            "질리지 않고",
+        ],
+        "디자인이 깔끔하고 세련됐다": [
+            "깔끔하고 세련",
+            "디자인",
+            "색상",
+            "예쁘",
         ],
     }
 
@@ -288,15 +353,25 @@ class ReviewInsightEngine:
                 product_name
             )
 
+        pain_pattern_map = {
+            **self.PAIN_PATTERNS,
+            **self.GENERAL_PAIN_PATTERNS,
+        }
+
+        benefit_pattern_map = {
+            **self.BENEFIT_PATTERNS,
+            **self.GENERAL_BENEFIT_PATTERNS,
+        }
+
         pain_points = self._extract_pattern_insights(
             reviews=normalized_reviews,
-            pattern_map=self.PAIN_PATTERNS,
+            pattern_map=pain_pattern_map,
             insight_type="pain",
         )
 
         benefits = self._extract_pattern_insights(
             reviews=normalized_reviews,
-            pattern_map=self.BENEFIT_PATTERNS,
+            pattern_map=benefit_pattern_map,
             insight_type="benefit",
         )
 
@@ -316,15 +391,21 @@ class ReviewInsightEngine:
             normalized_reviews
         )
 
+        best_evidence = self._select_best_evidence(
+            normalized_reviews
+        )
+
         pain_points = self._apply_pain_fallbacks(
             pain_points,
             benefits,
             normalized_reviews,
+            product_name=product_name,
         )
 
         benefits = self._apply_benefit_fallbacks(
             benefits,
             normalized_reviews,
+            product_name=product_name,
         )
 
         buy_reasons = self._apply_buy_reason_fallbacks(
@@ -359,6 +440,37 @@ class ReviewInsightEngine:
             "욕실 정리를 중요하게 생각하는 사람",
         )
 
+        print(
+            "[Sprint74-3 Insight] Version:",
+            self.VERSION,
+            flush=True,
+        )
+        print(
+            "[Sprint74-3 Insight] Input Reviews:",
+            len(normalized_reviews),
+            flush=True,
+        )
+        print(
+            "[Sprint74-3 Insight] Best Evidence:",
+            repr(best_evidence.get("text", "")),
+            flush=True,
+        )
+        print(
+            "[Sprint74-3 Insight] Evidence Score:",
+            best_evidence.get("evidence_score", 0),
+            flush=True,
+        )
+        print(
+            "[Sprint74-3 Insight] Best Pain:",
+            repr(best_pain),
+            flush=True,
+        )
+        print(
+            "[Sprint74-3 Insight] Best Benefit:",
+            repr(best_benefit),
+            flush=True,
+        )
+
         return {
             "ok": True,
             "version": self.VERSION,
@@ -374,6 +486,9 @@ class ReviewInsightEngine:
             "best_benefit": best_benefit,
             "best_buy_reason": best_buy_reason,
             "best_persona": best_persona,
+            "best_quote": best_evidence.get("text", ""),
+            "best_evidence": best_evidence,
+            "ranked_reviews": normalized_reviews[:5],
             "content_angle": self._select_content_angle(
                 best_pain=best_pain,
                 best_benefit=best_benefit,
@@ -385,13 +500,19 @@ class ReviewInsightEngine:
     def _normalize_reviews(
         self,
         reviews: Any,
-    ) -> List[str]:
+    ) -> List[Dict[str, Any]]:
         if reviews is None:
             return []
 
         if isinstance(reviews, str):
             text = self._clean_text(reviews)
-            return [text] if text else []
+            return [
+                self._build_review_item(
+                    text=text,
+                    quality_score=70.0,
+                    source="text",
+                )
+            ] if text else []
 
         if isinstance(reviews, dict):
             for key in (
@@ -407,51 +528,316 @@ class ReviewInsightEngine:
                     return self._normalize_reviews(value)
 
             text = self._review_dict_to_text(reviews)
-            return [text] if text else []
+
+            if not text:
+                return []
+
+            return [
+                self._build_review_item(
+                    text=text,
+                    quality_score=self._safe_float(
+                        reviews.get("quality_score"),
+                        70.0,
+                    ),
+                    source=str(
+                        reviews.get("source")
+                        or reviews.get("ocr_engine")
+                        or "dict"
+                    ),
+                )
+            ]
 
         if not isinstance(reviews, list):
             return []
 
-        result: List[str] = []
+        result: List[Dict[str, Any]] = []
 
         for item in reviews:
             if isinstance(item, str):
                 text = self._clean_text(item)
 
+                review_item = self._build_review_item(
+                    text=text,
+                    quality_score=70.0,
+                    source="text",
+                )
+
             elif isinstance(item, dict):
                 text = self._review_dict_to_text(item)
 
-            else:
-                text = ""
+                review_item = self._build_review_item(
+                    text=text,
+                    quality_score=self._safe_float(
+                        item.get("quality_score"),
+                        70.0,
+                    ),
+                    source=str(
+                        item.get("source")
+                        or item.get("ocr_engine")
+                        or "dict"
+                    ),
+                )
 
-            if text and len(text) >= 5:
-                result.append(text)
+                review_item["image_index"] = item.get(
+                    "image_index"
+                )
+                review_item["paragraph_index"] = item.get(
+                    "paragraph_index"
+                )
+
+            else:
+                continue
+
+            if review_item["text"] and len(
+                review_item["text"]
+            ) >= 5:
+                result.append(review_item)
+
+        return self._merge_similar_reviews(result)
+
+    def _build_review_item(
+        self,
+        text: str,
+        quality_score: float,
+        source: str,
+    ) -> Dict[str, Any]:
+        cleaned = self._clean_text(text)
+        experience_score = self._experience_score(
+            cleaned
+        )
+        specificity_score = self._specificity_score(
+            cleaned
+        )
+        evidence_score = round(
+            quality_score * 0.60
+            + experience_score * 0.25
+            + specificity_score * 0.15,
+            1,
+        )
+
+        return {
+            "text": cleaned,
+            "quality_score": round(
+                max(0.0, min(100.0, quality_score)),
+                1,
+            ),
+            "experience_score": experience_score,
+            "specificity_score": specificity_score,
+            "evidence_score": evidence_score,
+            "source": source,
+        }
+
+    def _safe_float(
+        self,
+        value: Any,
+        fallback: float,
+    ) -> float:
+        try:
+            return float(value)
+        except Exception:
+            return fallback
+
+    def _experience_score(
+        self,
+        text: str,
+    ) -> float:
+        score = 35.0
+
+        patterns = {
+            r"\d+\s*(일|주|개월|달|년)": 22.0,
+            r"(며칠|몇주|한달|두달|세달|오래|계속)\s*(사용|써|쓰)": 18.0,
+            r"(사용해보니|써보니|붙여보니|설치해보니)": 16.0,
+            r"(매일|매번|꾸준히|계속)\s*(사용|쓰)": 14.0,
+            r"(아직도|지금도)\s*(안|잘|튼튼|멀쩡)": 14.0,
+            r"(재구매|다시\s*살|또\s*살|추천)": 10.0,
+        }
+
+        for pattern, weight in patterns.items():
+            if re.search(pattern, text):
+                score += weight
+
+        if len(text) >= 60:
+            score += 8.0
+        elif len(text) >= 35:
+            score += 5.0
+
+        return round(
+            max(0.0, min(100.0, score)),
+            1,
+        )
+
+    def _specificity_score(
+        self,
+        text: str,
+    ) -> float:
+        score = 30.0
+
+        if re.search(r"\d", text):
+            score += 15.0
+
+        concrete_words = (
+            "접착",
+            "설치",
+            "고정",
+            "수납",
+            "공간",
+            "욕실",
+            "벽",
+            "슬리퍼",
+            "건조",
+            "물기",
+            "떨어",
+            "무타공",
+        )
+
+        score += min(
+            sum(
+                7.0
+                for word in concrete_words
+                if word in text
+            ),
+            42.0,
+        )
+
+        if re.search(
+            r"(좋아요|만족합니다|추천합니다)$",
+            text,
+        ) and len(text) < 20:
+            score -= 18.0
+
+        return round(
+            max(0.0, min(100.0, score)),
+            1,
+        )
+
+    def _merge_similar_reviews(
+        self,
+        reviews: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        result: List[Dict[str, Any]] = []
+
+        for review in sorted(
+            reviews,
+            key=lambda item: (
+                item.get("evidence_score", 0),
+                len(item.get("text", "")),
+            ),
+            reverse=True,
+        ):
+            text = review.get("text", "")
+            tokens = self._token_set(text)
+
+            duplicate = False
+
+            for existing in result:
+                existing_tokens = self._token_set(
+                    existing.get("text", "")
+                )
+
+                union = tokens | existing_tokens
+                overlap = (
+                    len(tokens & existing_tokens)
+                    / max(len(union), 1)
+                )
+
+                if overlap >= 0.72:
+                    duplicate = True
+                    break
+
+            if not duplicate:
+                result.append(review)
 
         return result
+
+    def _token_set(
+        self,
+        text: str,
+    ) -> set[str]:
+        return {
+            token
+            for token in re.findall(
+                r"[가-힣A-Za-z0-9]{2,}",
+                text.lower(),
+            )
+            if token not in self.STOP_WORDS
+        }
+
+    def _select_best_evidence(
+        self,
+        reviews: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        if not reviews:
+            return {
+                "text": "",
+                "quality_score": 0.0,
+                "experience_score": 0.0,
+                "specificity_score": 0.0,
+                "evidence_score": 0.0,
+            }
+
+        ranked = sorted(
+            reviews,
+            key=lambda item: (
+                float(item.get("evidence_score", 0)),
+                float(item.get("experience_score", 0)),
+                len(item.get("text", "")),
+            ),
+            reverse=True,
+        )
+
+        return dict(ranked[0])
 
     def _review_dict_to_text(
         self,
         review: Dict[str, Any],
     ) -> str:
-        values: List[str] = []
-
-        for key in (
+        # OCR 리뷰는 content / text / review_text에 같은 문장이
+        # 반복 저장되므로 첫 번째 본문 값만 사용합니다.
+        primary_keys = (
             "content",
+            "review_text",
             "review",
             "text",
             "body",
             "comment",
             "review_content",
+        )
+
+        primary_text = ""
+
+        for key in primary_keys:
+            value = review.get(key)
+
+            if isinstance(value, str) and value.strip():
+                primary_text = value.strip()
+                break
+
+        title_text = ""
+
+        for key in (
             "headline",
             "title",
         ):
             value = review.get(key)
 
             if isinstance(value, str) and value.strip():
-                values.append(value.strip())
+                candidate = value.strip()
+
+                if (
+                    candidate
+                    and candidate != primary_text
+                    and candidate not in primary_text
+                ):
+                    title_text = candidate
+                    break
+
+        if title_text and primary_text:
+            return self._clean_text(
+                f"{title_text}. {primary_text}"
+            )
 
         return self._clean_text(
-            " ".join(values)
+            primary_text or title_text
         )
 
     def _clean_text(
@@ -467,14 +853,19 @@ class ReviewInsightEngine:
 
     def _extract_pattern_insights(
         self,
-        reviews: List[str],
+        reviews: List[Dict[str, Any]],
         pattern_map: Dict[str, List[str]],
         insight_type: str,
     ) -> List[Dict[str, Any]]:
         scored: Dict[str, Dict[str, Any]] = {}
 
-        for review_index, review in enumerate(reviews):
+        for review_index, review_item in enumerate(reviews):
+            review = review_item.get("text", "")
             lowered = review.lower()
+            review_weight = max(
+                0.5,
+                float(review_item.get("evidence_score", 70.0)) / 70.0,
+            )
 
             for label, patterns in pattern_map.items():
                 matched_patterns: List[str] = []
@@ -494,7 +885,7 @@ class ReviewInsightEngine:
                         continue
 
                     matched_patterns.append(pattern)
-                    score += self._pattern_weight(pattern)
+                    score += self._pattern_weight(pattern) * review_weight
 
                 if score <= 0:
                     continue
@@ -520,6 +911,9 @@ class ReviewInsightEngine:
                         {
                             "review_index": review_index,
                             "text": review[:180],
+                            "quality_score": review_item.get("quality_score", 0),
+                            "experience_score": review_item.get("experience_score", 0),
+                            "evidence_score": review_item.get("evidence_score", 0),
                         }
                     )
 
@@ -591,11 +985,12 @@ class ReviewInsightEngine:
 
     def _extract_common_keywords(
         self,
-        reviews: List[str],
+        reviews: List[Dict[str, Any]],
     ) -> List[Dict[str, Any]]:
         counter: Counter[str] = Counter()
 
-        for review in reviews:
+        for review_item in reviews:
+            review = review_item.get("text", "")
             words = re.findall(
                 r"[가-힣]{2,}|[A-Za-z]{3,}",
                 review,
@@ -624,10 +1019,35 @@ class ReviewInsightEngine:
         self,
         pain_points: List[Dict[str, Any]],
         benefits: List[Dict[str, Any]],
-        reviews: List[str],
+        reviews: List[Dict[str, Any]],
+        product_name: str = "",
     ) -> List[Dict[str, Any]]:
         if pain_points:
             return pain_points
+
+        combined_text = " ".join(
+            item.get("text", "")
+            for item in reviews
+        ).lower()
+
+        product_text = str(product_name or "").lower()
+
+        if (
+            "캐리어" in product_text
+            or "여행" in combined_text
+            or "24인치" in combined_text
+            or "20인치" in combined_text
+        ):
+            return [
+                self._inferred_item(
+                    "여행 짐을 정리하고 이동하기 불편하다",
+                    4.5,
+                ),
+                self._inferred_item(
+                    "여행 기간에 맞는 수납 크기를 고르기 어렵다",
+                    3.8,
+                ),
+            ]
 
         inferred: List[Tuple[str, float]] = []
 
@@ -691,10 +1111,35 @@ class ReviewInsightEngine:
     def _apply_benefit_fallbacks(
         self,
         benefits: List[Dict[str, Any]],
-        reviews: List[str],
+        reviews: List[Dict[str, Any]],
+        product_name: str = "",
     ) -> List[Dict[str, Any]]:
         if benefits:
             return benefits
+
+        combined_text = " ".join(
+            item.get("text", "")
+            for item in reviews
+        ).lower()
+
+        product_text = str(product_name or "").lower()
+
+        if (
+            "캐리어" in product_text
+            or "여행" in combined_text
+            or "24인치" in combined_text
+            or "20인치" in combined_text
+        ):
+            return [
+                self._inferred_item(
+                    "내부 공간을 나눠 깔끔하게 분리 수납할 수 있다",
+                    4.5,
+                ),
+                self._inferred_item(
+                    "튼튼하고 가벼워 여행 중 이동이 편하다",
+                    4.2,
+                ),
+            ]
 
         return [
             {
@@ -972,6 +1417,9 @@ class ReviewInsightEngine:
             "best_persona": (
                 "욕실 정리를 중요하게 생각하는 사람"
             ),
+            "best_quote": "",
+            "best_evidence": {},
+            "ranked_reviews": [],
             "content_angle": {
                 "type": "problem_solution",
                 "name": "문제 해결형",
