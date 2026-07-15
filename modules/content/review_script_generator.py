@@ -15,7 +15,7 @@ class ReviewScriptGenerator:
     - 외부 AI API 없이 규칙 기반으로 동작
     """
 
-    VERSION = "review-script-generator-79-1"
+    VERSION = "review-script-generator-79-2"
 
     def generate(
         self,
@@ -47,6 +47,23 @@ class ReviewScriptGenerator:
         shorts_strategy = self._first_text(
             product_strategy.get("shorts_strategy"),
             "review_evidence",
+        )
+
+        target_customer_result = self._classify_target_customer(
+            product_name=product_name,
+            product_type=product_type,
+            review_quotes=quotes,
+            review_insight=insight,
+        )
+
+        target_customer = self._first_text(
+            target_customer_result.get("target_customer"),
+            "일반 구매자",
+        )
+
+        target_reason = self._first_text(
+            target_customer_result.get("target_reason"),
+            "실제 사용 목적과 후기 내용을 기준으로 선정했습니다",
         )
 
         count = self._safe_int(
@@ -212,6 +229,13 @@ class ReviewScriptGenerator:
             dominant_review_type=dominant_review_type,
         )
 
+        target_bridge = self._target_customer_sentence(
+            target_customer=target_customer,
+            product_type=product_type,
+            product_name=product_name,
+            evidence_summary=evidence_summary,
+        )
+
         if not best_hook:
             best_hook = self._make_hook(
                 count=count,
@@ -229,6 +253,7 @@ class ReviewScriptGenerator:
             before_after_story=before_after_story,
             psychology_story=psychology_story,
             strategy_bridge=strategy_bridge,
+            target_bridge=target_bridge,
             review_count=count,
         )
 
@@ -245,6 +270,7 @@ class ReviewScriptGenerator:
             before_after_story=before_after_story,
             psychology_story=psychology_story,
             strategy_bridge=strategy_bridge,
+            target_bridge=target_bridge,
             review_count=count,
         )
 
@@ -260,6 +286,7 @@ class ReviewScriptGenerator:
             before_after_story=before_after_story,
             psychology_story=psychology_story,
             strategy_bridge=strategy_bridge,
+            target_bridge=target_bridge,
             review_count=count,
         )
 
@@ -307,89 +334,109 @@ class ReviewScriptGenerator:
         }
 
         print(
-            "[Sprint79-1 Script] Version:",
+            "[Sprint79-2 Script] Version:",
             self.VERSION,
             flush=True,
         )
         print(
-            "[Sprint79-1 Script] Product:",
+            "[Sprint79-2 Script] Product:",
             product_name,
             flush=True,
         )
         print(
-            "[Sprint79-1 Script] Product Type:",
+            "[Sprint79-2 Script] Product Type:",
             product_type,
             flush=True,
         )
         print(
-            "[Sprint79-1 Script] Shorts Strategy:",
+            "[Sprint79-2 Script] Shorts Strategy:",
             shorts_strategy,
             flush=True,
         )
         print(
-            "[Sprint79-1 Script] Strategy Reason:",
+            "[Sprint79-2 Script] Strategy Reason:",
             product_strategy.get("strategy_reason", ""),
             flush=True,
         )
         print(
-            "[Sprint79-1 Script] Strategy Bridge:",
+            "[Sprint79-2 Script] Strategy Bridge:",
             strategy_bridge,
             flush=True,
         )
         print(
-            "[Sprint79-1 Script] Hook Type:",
+            "[Sprint79-2 Script] Target Customer:",
+            target_customer,
+            flush=True,
+        )
+        print(
+            "[Sprint79-2 Script] Target Reason:",
+            target_reason,
+            flush=True,
+        )
+        print(
+            "[Sprint79-2 Script] Target Confidence:",
+            target_customer_result.get("confidence", 0),
+            flush=True,
+        )
+        print(
+            "[Sprint79-2 Script] Target Bridge:",
+            target_bridge,
+            flush=True,
+        )
+        print(
+            "[Sprint79-2 Script] Hook Type:",
             best_hook_type,
             flush=True,
         )
         print(
-            "[Sprint79-1 Script] Dominant Review Type:",
+            "[Sprint79-2 Script] Dominant Review Type:",
             review_type_result.get("dominant_type", ""),
             review_type_result.get("dominant_label", ""),
             flush=True,
         )
         print(
-            "[Sprint79-1 Script] Review Type Scores:",
+            "[Sprint79-2 Script] Review Type Scores:",
             review_type_result.get("scores", {}),
             flush=True,
         )
         print(
-            "[Sprint79-1 Script] Before:",
+            "[Sprint79-2 Script] Before:",
             before_after_story.get("before", ""),
             flush=True,
         )
         print(
-            "[Sprint79-1 Script] Choice:",
+            "[Sprint79-2 Script] Choice:",
             before_after_story.get("choice", ""),
             flush=True,
         )
         print(
-            "[Sprint79-1 Script] After:",
+            "[Sprint79-2 Script] After:",
             before_after_story.get("after", ""),
             flush=True,
         )
         print(
-            "[Sprint79-1 Script] Psychology Type:",
+            "[Sprint79-2 Script] Psychology Type:",
             psychology_result.get("dominant_type", ""),
             psychology_result.get("dominant_label", ""),
             flush=True,
         )
         print(
-            "[Sprint79-1 Script] Psychology Scores:",
+            "[Sprint79-2 Script] Psychology Scores:",
             psychology_result.get("scores", {}),
             flush=True,
         )
         print(
-            "[Sprint79-1 Script] Problem:",
+            "[Sprint79-2 Script] Problem:",
             psychology_story.get("problem", ""),
             flush=True,
         )
         print(
-            "[Sprint79-1 Script] Empathy:",
+            "[Sprint79-2 Script] Empathy:",
             psychology_story.get("empathy", ""),
             flush=True,
         )
         print(
-            "[Sprint79-1 Script] Short:",
+            "[Sprint79-2 Script] Short:",
             short_script.get("estimated_seconds", 0),
             "s",
             "error=",
@@ -403,7 +450,7 @@ class ReviewScriptGenerator:
             flush=True,
         )
         print(
-            "[Sprint79-1 Script] Medium:",
+            "[Sprint79-2 Script] Medium:",
             medium_script.get("estimated_seconds", 0),
             "s",
             "error=",
@@ -417,7 +464,7 @@ class ReviewScriptGenerator:
             flush=True,
         )
         print(
-            "[Sprint79-1 Script] Long:",
+            "[Sprint79-2 Script] Long:",
             long_script.get("estimated_seconds", 0),
             "s",
             "error=",
@@ -431,12 +478,12 @@ class ReviewScriptGenerator:
             flush=True,
         )
         print(
-            "[Sprint79-1 Script] Selected:",
+            "[Sprint79-2 Script] Selected:",
             "medium",
             flush=True,
         )
         print(
-            "[Sprint79-1 Script] Best Script:",
+            "[Sprint79-2 Script] Best Script:",
             best_script.get("text", ""),
             flush=True,
         )
@@ -450,6 +497,9 @@ class ReviewScriptGenerator:
             "product_type": product_type,
             "shorts_strategy": shorts_strategy,
             "product_strategy": product_strategy,
+            "target_customer": target_customer,
+            "target_reason": target_reason,
+            "target_customer_result": target_customer_result,
             "best_hook": best_hook,
             "best_hook_type": best_hook_type,
             "evidence_hook": evidence_hook,
@@ -493,6 +543,10 @@ class ReviewScriptGenerator:
                 "hook_psychology_type": hook_psychology_type,
                 "product_strategy": product_strategy,
                 "strategy_bridge": strategy_bridge,
+                "target_customer": target_customer,
+                "target_reason": target_reason,
+                "target_bridge": target_bridge,
+                "target_customer_result": target_customer_result,
                 "psychology_story": psychology_story,
                 "reason_summary": self._reason_sentence(
                     product_name=product_name,
@@ -514,6 +568,7 @@ class ReviewScriptGenerator:
         before_after_story: Dict[str, str],
         psychology_story: Dict[str, str],
         strategy_bridge: str,
+        target_bridge: str,
         review_count: int,
     ) -> Dict[str, Any]:
         sections = {
@@ -528,6 +583,9 @@ class ReviewScriptGenerator:
                     best_hook,
                     72,
                 )
+            ),
+            "target": self._sentence(
+                target_bridge
             ),
             "strategy": self._sentence(
                 strategy_bridge
@@ -579,6 +637,7 @@ class ReviewScriptGenerator:
         before_after_story: Dict[str, str],
         psychology_story: Dict[str, str],
         strategy_bridge: str,
+        target_bridge: str,
         review_count: int,
     ) -> Dict[str, Any]:
         sections = {
@@ -593,6 +652,9 @@ class ReviewScriptGenerator:
                     "empathy",
                     "한 번쯤 같은 고민을 하게 됩니다",
                 )
+            ),
+            "target": self._sentence(
+                target_bridge
             ),
             "strategy": self._sentence(
                 strategy_bridge
@@ -629,17 +691,17 @@ class ReviewScriptGenerator:
         }
 
         script = self._script(
-            script_type="medium_43s",
+            script_type="medium_47s",
             sections=sections,
             score=100,
             source="purchase_psychology_medium",
-            target_seconds=43,
+            target_seconds=47,
         )
 
         return self._fit_duration(
             script,
-            min_seconds=39,
-            max_seconds=46,
+            min_seconds=43,
+            max_seconds=50,
         )
 
     def _build_long_script(
@@ -655,6 +717,7 @@ class ReviewScriptGenerator:
         before_after_story: Dict[str, str],
         psychology_story: Dict[str, str],
         strategy_bridge: str,
+        target_bridge: str,
         review_count: int,
     ) -> Dict[str, Any]:
         sections = {
@@ -681,6 +744,9 @@ class ReviewScriptGenerator:
                     "risk",
                     "",
                 )
+            ),
+            "target": self._sentence(
+                target_bridge
             ),
             "strategy": self._sentence(
                 strategy_bridge
@@ -841,6 +907,222 @@ class ReviewScriptGenerator:
             return "실제 선택 기준은 수납공간과 내부 정리 방식입니다"
 
         return f"{product}를 고를 때는 실제 후기에서 반복되는 장점을 확인해야 합니다"
+
+    def _classify_target_customer(
+        self,
+        product_name: str,
+        product_type: str,
+        review_quotes: Dict[str, Any],
+        review_insight: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        product = self._clean_text(product_name)
+        product_type_text = self._clean_text(product_type)
+
+        combined = self._clean_text(
+            " ".join(
+                [
+                    product,
+                    self._clean_text(review_insight.get("best_evidence")),
+                    self._clean_text(review_insight.get("best_pain")),
+                    self._clean_text(review_insight.get("best_pain_point")),
+                    self._clean_text(review_insight.get("best_benefit")),
+                    self._clean_text(review_quotes.get("best_quote")),
+                    self._clean_text(review_quotes.get("best_benefit")),
+                ]
+            )
+        )
+
+        for source in (review_quotes, review_insight):
+            for key in (
+                "top_quotes",
+                "reviews",
+                "selected_reviews",
+                "top_evidence",
+            ):
+                values = source.get(key)
+
+                if not isinstance(values, list):
+                    continue
+
+                for item in values[:20]:
+                    combined += " " + self._clean_text(item)
+
+        combined = self._clean_text(combined)
+
+        if product_type_text == "travel":
+            if (
+                "3박 4일" in combined
+                or "3박4일" in combined
+            ):
+                return {
+                    "target_customer": "3박 4일 여행객",
+                    "target_reason": "후기 핵심 문장이 3박 4일 여행 기준으로 반복됐습니다",
+                    "target_type": "trip_duration",
+                    "confidence": 96,
+                }
+
+            if (
+                "2박 3일" in combined
+                or "2박3일" in combined
+            ):
+                return {
+                    "target_customer": "2박 3일 단기 여행객",
+                    "target_reason": "후기에서 짧은 여행 기간과 휴대성이 반복 언급됐습니다",
+                    "target_type": "short_trip",
+                    "confidence": 92,
+                }
+
+            return {
+                "target_customer": "여행 기간에 맞는 캐리어를 찾는 분",
+                "target_reason": "후기에서 크기와 여행 기간 비교가 가장 많이 나타났습니다",
+                "target_type": "travel_general",
+                "confidence": 84,
+            }
+
+        if product_type_text == "household":
+            targets = []
+
+            if any(
+                keyword in combined
+                for keyword in (
+                    "자취",
+                    "원룸",
+                    "좁은 공간",
+                )
+            ):
+                targets.append("자취생")
+
+            if any(
+                keyword in combined
+                for keyword in (
+                    "신혼",
+                    "부부",
+                    "새집",
+                )
+            ):
+                targets.append("신혼부부")
+
+            if any(
+                keyword in combined
+                for keyword in (
+                    "욕실",
+                    "정리",
+                    "바닥",
+                    "흩어",
+                )
+            ):
+                targets.append("욕실 정리가 필요한 분")
+
+            if not targets:
+                targets = ["생활공간을 깔끔하게 정리하고 싶은 분"]
+
+            return {
+                "target_customer": "·".join(targets[:3]),
+                "target_reason": "후기에서 공간 정리와 일상 불편 해결 요구가 반복됐습니다",
+                "target_type": "household_problem",
+                "confidence": 88,
+            }
+
+        if product_type_text == "kitchen":
+            targets = []
+
+            if any(
+                keyword in combined
+                for keyword in (
+                    "직장",
+                    "회사",
+                    "출근",
+                    "사무실",
+                )
+            ):
+                targets.append("직장인")
+
+            if any(
+                keyword in combined
+                for keyword in (
+                    "학생",
+                    "학교",
+                    "강의",
+                )
+            ):
+                targets.append("학생")
+
+            if any(
+                keyword in combined
+                for keyword in (
+                    "운전",
+                    "차량",
+                    "차 안",
+                )
+            ):
+                targets.append("운전자")
+
+            if not targets:
+                targets = ["사용 편의성을 중요하게 보는 분"]
+
+            return {
+                "target_customer": "·".join(targets[:3]),
+                "target_reason": "후기에서 휴대성과 반복 사용 편의가 주요 만족 이유로 나타났습니다",
+                "target_type": "daily_convenience",
+                "confidence": 86,
+            }
+
+        if product_type_text == "electronics":
+            return {
+                "target_customer": "성능과 실제 사용 후기를 꼼꼼히 비교하는 분",
+                "target_reason": "전자제품은 기능과 성능 검증 후 구매하는 경향이 강합니다",
+                "target_type": "performance_buyer",
+                "confidence": 85,
+            }
+
+        if product_type_text == "seasonal":
+            return {
+                "target_customer": "계절 불편을 미리 해결하려는 분",
+                "target_reason": "후기에서 특정 계절의 반복 불편과 해결 필요가 나타났습니다",
+                "target_type": "seasonal_need",
+                "confidence": 87,
+            }
+
+        return {
+            "target_customer": "실제 후기를 기준으로 제품을 선택하는 분",
+            "target_reason": "제품 유형이 명확하지 않아 후기 기반 일반 타깃을 사용합니다",
+            "target_type": "general_review_buyer",
+            "confidence": 70,
+        }
+
+    def _target_customer_sentence(
+        self,
+        target_customer: str,
+        product_type: str,
+        product_name: str,
+        evidence_summary: str,
+    ) -> str:
+        target = self._clean_text(target_customer)
+        product_type_text = self._clean_text(product_type)
+        evidence = self._clean_text(evidence_summary)
+
+        if (
+            product_type_text == "travel"
+            and "3박 4일" in evidence
+        ):
+            return "특히 3박 4일 여행을 준비하는 분이라면 이 기준이 가장 중요합니다"
+
+        if product_type_text == "travel":
+            return f"{target}이라면 여행 기간과 짐의 양을 먼저 확인해야 합니다"
+
+        if product_type_text == "household":
+            return f"{target}이라면 매일 반복되는 정리 불편을 줄이는지가 중요합니다"
+
+        if product_type_text == "kitchen":
+            return f"{target}이라면 휴대성과 사용 편의성을 함께 확인하는 것이 좋습니다"
+
+        if product_type_text == "electronics":
+            return f"{target}이라면 광고보다 실제 사용 성능을 먼저 확인해야 합니다"
+
+        if product_type_text == "seasonal":
+            return f"{target}이라면 필요한 계절이 오기 전에 준비하는 것이 좋습니다"
+
+        return f"{target}이라면 실제 후기에서 반복되는 장점을 먼저 확인해 보세요"
 
     def _classify_purchase_psychology(
         self,
