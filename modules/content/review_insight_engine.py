@@ -19,7 +19,7 @@ class ReviewInsightEngine:
     외부 AI API 없이 실행되는 규칙 기반 엔진입니다.
     """
 
-    VERSION = "review-insight-engine-65-3"
+    VERSION = "review-insight-engine-72-2"
 
     PAIN_PATTERNS = {
         "슬리퍼가 바닥에 흩어져 있다": [
@@ -267,12 +267,26 @@ class ReviewInsightEngine:
     def analyze(
         self,
         reviews: Any,
+        social_comments: Any = None,
         product_name: str = "",
     ) -> Dict[str, Any]:
-        normalized_reviews = self._normalize_reviews(reviews)
+        normalized_reviews = self._normalize_reviews(
+            reviews
+        )
+
+        normalized_social = self._normalize_reviews(
+            social_comments
+        )
+
+        if normalized_social:
+            normalized_reviews.extend(
+                normalized_social
+            )
 
         if not normalized_reviews:
-            return self._empty_result(product_name)
+            return self._empty_result(
+                product_name
+            )
 
         pain_points = self._extract_pattern_insights(
             reviews=normalized_reviews,
@@ -350,6 +364,7 @@ class ReviewInsightEngine:
             "version": self.VERSION,
             "product_name": product_name,
             "review_count": len(normalized_reviews),
+            "social_comment_count": len(normalized_social),
             "pain_points": pain_points[:5],
             "benefits": benefits[:5],
             "buy_reasons": buy_reasons[:5],

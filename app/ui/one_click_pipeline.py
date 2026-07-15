@@ -35,8 +35,16 @@ except Exception:
     SearchKeywordEngine = None
 
 
-UI_VERSION = "sprint50-coupang-restore-001"
+UI_VERSION = "sprint72-1-review-image-upload-001"
 RESULT_DIR = Path("exports/one_click_results")
+REVIEW_IMAGE_ROOT = Path("assets/review_images")
+SUPPORTED_REVIEW_IMAGE_SUFFIXES = {
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".webp",
+    ".bmp",
+}
 
 
 def read_json(path, default=None):
@@ -105,6 +113,62 @@ def load_pipeline_result(project):
     return data if isinstance(data, dict) else {}
 
 
+def review_image_dir(project):
+    return REVIEW_IMAGE_ROOT / f"project_{safe_project_id(project)}"
+
+
+def list_saved_review_images(project):
+    folder = review_image_dir(project)
+
+    if not folder.exists():
+        return []
+
+    return [
+        str(path)
+        for path in sorted(folder.iterdir())
+        if path.is_file()
+        and path.suffix.lower() in SUPPORTED_REVIEW_IMAGE_SUFFIXES
+    ]
+
+
+def save_uploaded_review_images(project, uploaded_files):
+    """
+    업로드된 리뷰 이미지를 프로젝트별 폴더에 저장합니다.
+
+    같은 프로젝트에서 새 이미지를 업로드하면 기존 review_* 이미지들은
+    제거한 뒤 이번 업로드 파일로 교체합니다.
+    """
+    files = list(uploaded_files or [])
+
+    if not files:
+        return list_saved_review_images(project)
+
+    folder = review_image_dir(project)
+    folder.mkdir(parents=True, exist_ok=True)
+
+    for old_path in folder.iterdir():
+        if (
+            old_path.is_file()
+            and old_path.suffix.lower() in SUPPORTED_REVIEW_IMAGE_SUFFIXES
+        ):
+            old_path.unlink()
+
+    saved_paths = []
+
+    for index, uploaded_file in enumerate(files, start=1):
+        original_name = getattr(uploaded_file, "name", "") or ""
+        suffix = Path(original_name).suffix.lower()
+
+        if suffix not in SUPPORTED_REVIEW_IMAGE_SUFFIXES:
+            suffix = ".png"
+
+        destination = folder / f"review_{index:02d}{suffix}"
+        destination.write_bytes(uploaded_file.getbuffer())
+        saved_paths.append(str(destination))
+
+    return saved_paths
+
+
 def extract_product_payload(built, coupang_url, product_name):
     if not isinstance(built, dict):
         return {
@@ -159,7 +223,10 @@ def build_keywords(product_payload, product_name):
 
         if isinstance(result, dict):
             result.setdefault("main_keyword", product_name)
-            result.setdefault("taobao_keyword", result.get("main_keyword", product_name))
+            result.setdefault(
+                "taobao_keyword",
+                result.get("main_keyword", product_name),
+            )
             return result
 
     return fallback
@@ -189,7 +256,10 @@ def create_project_from_payload(product_payload, keywords):
         except TypeError:
             try:
                 project = method(
-                    product_name=payload.get("product_name") or payload.get("title"),
+                    product_name=(
+                        payload.get("product_name")
+                        or payload.get("title")
+                    ),
                     coupang_url=payload.get("coupang_url"),
                     keywords=keywords,
                     payload=payload,
@@ -201,12 +271,17 @@ def create_project_from_payload(product_payload, keywords):
         except Exception:
             continue
 
-    raise RuntimeError("ProjectService에서 사용 가능한 프로젝트 생성 메서드를 찾지 못했습니다.")
+    raise RuntimeError(
+        "ProjectService에서 사용 가능한 프로젝트 생성 메서드를 찾지 못했습니다."
+    )
 
 
 def rebuild_project_from_coupang(coupang_url, product_name):
     if ProductEngine is None:
-        raise RuntimeError("ProductEngine import 실패: modules.product.product_engine 확인 필요")
+        raise RuntimeError(
+            "ProductEngine import 실패: "
+            "modules.product.product_engine 확인 필요"
+        )
 
     built = ProductEngine().build_from_coupang(
         coupang_url,
@@ -214,7 +289,11 @@ def rebuild_project_from_coupang(coupang_url, product_name):
         manual_product_name=product_name,
     )
 
-    product_payload = extract_product_payload(built, coupang_url, product_name)
+    product_payload = extract_product_payload(
+        built,
+        coupang_url,
+        product_name,
+    )
     keywords = build_keywords(product_payload, product_name)
 
     project = create_project_from_payload(product_payload, keywords)
@@ -266,7 +345,9 @@ def show_search_links(keywords, key_prefix="main"):
             key=f"{key_prefix}_search_taobao",
             use_container_width=True,
         ):
-            open_with_login_browser(make_search_url("taobao", taobao_keyword))
+            open_with_login_browser(
+                make_search_url("taobao", taobao_keyword)
+            )
             st.success("타오바오 검색을 열었습니다.")
 
     with c2:
@@ -275,7 +356,9 @@ def show_search_links(keywords, key_prefix="main"):
             key=f"{key_prefix}_search_1688",
             use_container_width=True,
         ):
-            open_with_login_browser(make_search_url("1688", source_1688_keyword))
+            open_with_login_browser(
+                make_search_url("1688", source_1688_keyword)
+            )
             st.success("1688 검색을 열었습니다.")
 
     with c3:
@@ -284,18 +367,77 @@ def show_search_links(keywords, key_prefix="main"):
             key=f"{key_prefix}_search_douyin",
             use_container_width=True,
         ):
-            open_with_login_browser(make_search_url("douyin", douyin_keyword))
+            open_with_login_browser(
+                make_search_url("douyin", douyin_keyword)
+            )
             st.success("도우인 검색을 열었습니다.")
 
-def run_project_pipeline(project, sample_count):
+
+def run_project_pipeline(
+    project,
+    sample_count,
+    review_image_paths=None,
+):
     print(
-        "[Sprint61] run_project_pipeline entered",
+        "[Sprint72-1] run_project_pipeline entered",
         flush=True,
     )
-    result = WorkflowEngine().run_project(project, sample_count=sample_count)
+
+    review_image_paths = list(review_image_paths or [])
+
+    print(
+        "[Sprint72-1] Review Images:",
+        len(review_image_paths),
+        review_image_paths,
+        flush=True,
+    )
+
+    result = WorkflowEngine().run_project(
+        project,
+        sample_count=sample_count,
+        review_image_paths=review_image_paths,
+    )
+
     save_pipeline_result(project, result)
-    st.session_state[f"one_click_result_{safe_project_id(project)}"] = result
+
+    st.session_state[
+        f"one_click_result_{safe_project_id(project)}"
+    ] = result
+
     return result
+
+
+def show_review_upload_area(project, key_prefix):
+    project_safe_id = safe_project_id(project)
+    saved_paths = list_saved_review_images(project)
+
+    st.subheader("리뷰 이미지 OCR")
+    st.caption(
+        "쿠팡 리뷰 캡처 이미지를 여러 장 선택하면 "
+        "프로젝트별 폴더에 저장한 뒤 OCR과 리뷰 분석에 사용합니다."
+    )
+
+    uploaded_files = st.file_uploader(
+        "리뷰 이미지 선택",
+        type=["png", "jpg", "jpeg", "webp", "bmp"],
+        accept_multiple_files=True,
+        key=f"{key_prefix}_review_images_{project_safe_id}",
+    )
+
+    if uploaded_files:
+        st.success(
+            f"새 리뷰 이미지 {len(uploaded_files)}장이 선택되었습니다."
+        )
+    elif saved_paths:
+        st.info(
+            f"이 프로젝트에 저장된 리뷰 이미지 {len(saved_paths)}장을 "
+            "다시 사용합니다."
+        )
+        st.caption(str(review_image_dir(project)))
+    else:
+        st.caption("선택되거나 저장된 리뷰 이미지가 없습니다.")
+
+    return uploaded_files
 
 
 def render_project_pipeline(project, sample_count):
@@ -305,30 +447,99 @@ def render_project_pipeline(project, sample_count):
     result_key = f"one_click_result_{project_safe_id}"
 
     path_debug = VideoPathResolver().debug(project)
-    project_name = getattr(project, "product_name", "") or getattr(project, "title", "")
+    project_name = (
+        getattr(project, "product_name", "")
+        or getattr(project, "title", "")
+    )
 
     st.success(f"선택된 프로젝트: {project_name}")
 
     if not path_debug.get("exists"):
         st.warning("이 프로젝트에는 아직 원본 영상이 없습니다.")
     else:
-        st.caption(f"영상: {path_debug.get('video_path')} / {path_debug.get('size_mb')}MB")
+        st.caption(
+            f"영상: {path_debug.get('video_path')} / "
+            f"{path_debug.get('size_mb')}MB"
+        )
+
+    uploaded_review_images = show_review_upload_area(
+        project,
+        key_prefix="existing",
+    )
 
     c1, c2 = st.columns(2)
 
-    if c1.button("현재 프로젝트 원클릭 실행", use_container_width=True):
+    if c1.button(
+        "현재 프로젝트 원클릭 실행",
+        use_container_width=True,
+    ):
         print(
-            "[Sprint61] One Click button pressed",
+            "[Sprint72-1] One Click button pressed",
             flush=True,
         )
 
-        
+        try:
+            review_paths = save_uploaded_review_images(
+                project,
+                uploaded_review_images,
+            )
+        except Exception as exc:
+            st.error(f"리뷰 이미지 저장 실패: {exc}")
+            return
+
+        if review_paths:
+            st.info(
+                f"리뷰 이미지 {len(review_paths)}장을 OCR에 전달합니다."
+            )
+
         with st.spinner("One Click Pipeline 실행 중입니다..."):
-            result = run_project_pipeline(project, sample_count)
+            try:
+                result = run_project_pipeline(
+                    project,
+                    sample_count,
+                    review_image_paths=review_paths,
+                )
+            except Exception as exc:
+                st.error(f"원클릭 실행 실패: {exc}")
+                return
+
         st.success("원클릭 실행 결과를 저장했습니다.")
 
+        outputs = (
+            result.get("outputs", {})
+            if isinstance(result, dict)
+            else {}
+        )
+
+        review_ocr = outputs.get("review_ocr", {})
+        review_insight = outputs.get("review_insight", {})
+        product_plan = outputs.get("product_plan", {})
+
+        st.write(
+            "OCR 이미지 수:",
+            review_ocr.get("image_count", len(review_paths)),
+        )
+        st.write(
+            "OCR 리뷰 수:",
+            review_ocr.get("review_count", 0),
+        )
+        st.write(
+            "최종 병합 리뷰 수:",
+            product_plan.get(
+                "review_count",
+                review_insight.get("review_count", 0),
+            ),
+        )
+        st.write(
+            "리뷰 분석 성공:",
+            bool(review_insight.get("ok")),
+        )
+
     if c2.button("큐에 추가", use_container_width=True):
-        job = JobQueue().add(getattr(project, "id", ""), project_name)
+        job = JobQueue().add(
+            getattr(project, "id", ""),
+            project_name,
+        )
         st.success(f"큐 추가 완료: {job.get('job_id')}")
 
     result = st.session_state.get(result_key)
@@ -337,7 +548,10 @@ def render_project_pipeline(project, sample_count):
         result = load_pipeline_result(project)
         if result:
             st.session_state[result_key] = result
-            st.caption(f"최근 원클릭 결과를 복원했습니다: {pipeline_result_path(project)}")
+            st.caption(
+                "최근 원클릭 결과를 복원했습니다: "
+                f"{pipeline_result_path(project)}"
+            )
 
     if result:
         st.success("최근 원클릭 실행 결과가 있습니다.")
@@ -355,10 +569,7 @@ def render_project_pipeline(project, sample_count):
                 path_debug,
             )
 
-        # ✅ 채택 영상 후보 화면
-            show_selected_sources(
-                project
-            )
+            show_selected_sources(project)
 
             show_content_pack_view_new(
                 project=project,
@@ -368,7 +579,8 @@ def render_project_pipeline(project, sample_count):
                     {},
                 ),
                 paths=st.session_state.get(
-                    f"ai_content_pack_export_{getattr(project, 'id', '')}",
+                    f"ai_content_pack_export_"
+                    f"{getattr(project, 'id', '')}",
                     {},
                 ),
             )
@@ -382,10 +594,19 @@ def render_project_pipeline(project, sample_count):
 
 def show_one_click_pipeline():
     st.title("⚡ 원클릭 파이프라인")
-    st.caption("쿠팡 링크 → 상품 분석 → 검색 키워드 → 프로젝트 생성 → 후보 수집 → 콘텐츠 팩까지 연결합니다.")
+    st.caption(
+        "쿠팡 링크 → 상품 분석 → 검색 키워드 → 프로젝트 생성 → "
+        "후보 수집 → 리뷰 OCR → 콘텐츠 팩까지 연결합니다."
+    )
     st.caption(f"UI 버전: {UI_VERSION}")
-    
-    sample_count = st.slider("Vision 분석 프레임 수", 4, 12, 6, 2)
+
+    sample_count = st.slider(
+        "Vision 분석 프레임 수",
+        4,
+        12,
+        6,
+        2,
+    )
 
     st.divider()
     st.subheader("쿠팡 링크로 새 프로젝트 생성")
@@ -402,9 +623,33 @@ def show_one_click_pipeline():
         placeholder="쿠팡 상품명을 붙여넣어 주세요.",
     )
 
-    auto_run = st.checkbox("프로젝트 생성 후 바로 원클릭 실행", value=True)
+    new_project_review_images = st.file_uploader(
+        "새 프로젝트 리뷰 이미지",
+        type=["png", "jpg", "jpeg", "webp", "bmp"],
+        accept_multiple_files=True,
+        key="new_project_review_images",
+        help=(
+            "프로젝트 생성 후 "
+            "assets/review_images/project_{프로젝트ID}에 저장됩니다."
+        ),
+    )
 
-    if st.button("쿠팡 링크로 프로젝트 생성", type="primary", use_container_width=True):
+    if new_project_review_images:
+        st.success(
+            f"리뷰 이미지 {len(new_project_review_images)}장이 "
+            "선택되었습니다."
+        )
+
+    auto_run = st.checkbox(
+        "프로젝트 생성 후 바로 원클릭 실행",
+        value=True,
+    )
+
+    if st.button(
+        "쿠팡 링크로 프로젝트 생성",
+        type="primary",
+        use_container_width=True,
+    ):
         if not coupang_url.strip():
             st.error("쿠팡 링크를 입력해 주세요.")
             return
@@ -413,35 +658,90 @@ def show_one_click_pipeline():
             st.error("상품명을 입력해 주세요.")
             return
 
-        with st.spinner("ProductEngine → SearchKeywordEngine → ProjectService 실행 중입니다..."):
+        with st.spinner(
+            "ProductEngine → SearchKeywordEngine → "
+            "ProjectService 실행 중입니다..."
+        ):
             try:
-                project, product_payload, keywords = rebuild_project_from_coupang(
-                    coupang_url.strip(),
-                    product_name.strip(),
+                project, product_payload, keywords = (
+                    rebuild_project_from_coupang(
+                        coupang_url.strip(),
+                        product_name.strip(),
+                    )
                 )
-            except Exception as e:
-                st.error(f"프로젝트 생성 실패: {e}")
+            except Exception as exc:
+                st.error(f"프로젝트 생성 실패: {exc}")
                 return
 
-        st.session_state["sprint50_created_project_id"] = getattr(project, "id", None)
+        try:
+            review_paths = save_uploaded_review_images(
+                project,
+                new_project_review_images,
+            )
+        except Exception as exc:
+            st.error(f"리뷰 이미지 저장 실패: {exc}")
+            return
+
+        st.session_state["sprint50_created_project_id"] = (
+            getattr(project, "id", None)
+        )
         st.session_state["sprint50_product_payload"] = product_payload
         st.session_state["sprint50_keywords"] = keywords
 
         st.success("쿠팡 링크 기반 프로젝트를 생성했습니다.")
+
+        if review_paths:
+            st.success(
+                f"리뷰 이미지 {len(review_paths)}장을 저장했습니다."
+            )
+            st.caption(str(review_image_dir(project)))
+
         show_search_links(keywords, key_prefix="created")
 
         if auto_run:
-            with st.spinner("생성된 프로젝트로 원클릭 후보 수집을 실행 중입니다..."):
+            with st.spinner(
+                "생성된 프로젝트로 원클릭 후보 수집을 실행 중입니다..."
+            ):
                 try:
-                    run_project_pipeline(project, sample_count)
+                    result = run_project_pipeline(
+                        project,
+                        sample_count,
+                        review_image_paths=review_paths,
+                    )
                     st.success("원클릭 후보 수집까지 완료했습니다.")
-                except Exception as e:
-                    st.error(f"원클릭 실행 실패: {e}")
+
+                    outputs = (
+                        result.get("outputs", {})
+                        if isinstance(result, dict)
+                        else {}
+                    )
+                    review_ocr = outputs.get("review_ocr", {})
+                    review_insight = outputs.get(
+                        "review_insight",
+                        {},
+                    )
+
+                    st.write(
+                        "OCR 리뷰 수:",
+                        review_ocr.get("review_count", 0),
+                    )
+                    st.write(
+                        "리뷰 분석 성공:",
+                        bool(review_insight.get("ok")),
+                    )
+                except Exception as exc:
+                    st.error(f"원클릭 실행 실패: {exc}")
 
         if st.session_state.get("sprint50_keywords"):
-            with st.expander("최근 생성 키워드 보기", expanded=False):
+            with st.expander(
+                "최근 생성 키워드 보기",
+                expanded=False,
+            ):
                 show_search_links(
-                    st.session_state.get("sprint50_keywords", {}),
+                    st.session_state.get(
+                        "sprint50_keywords",
+                        {},
+                    ),
                     key_prefix="recent",
                 )
 
@@ -452,17 +752,24 @@ def show_one_click_pipeline():
     projects = selector.all_projects()
 
     if not projects:
-        st.info("아직 프로젝트가 없습니다. 위 쿠팡 링크 입력으로 새 프로젝트를 생성해 주세요.")
+        st.info(
+            "아직 프로젝트가 없습니다. "
+            "위 쿠팡 링크 입력으로 새 프로젝트를 생성해 주세요."
+        )
         return
 
     labels = selector.labels(projects)
 
-    created_project_id = st.session_state.get("sprint50_created_project_id")
+    created_project_id = st.session_state.get(
+        "sprint50_created_project_id"
+    )
     default_index = 0
 
     if created_project_id:
         for idx, item in enumerate(labels.values()):
-            if str(getattr(item, "id", "")) == str(created_project_id):
+            if str(getattr(item, "id", "")) == str(
+                created_project_id
+            ):
                 default_index = idx
                 break
 
@@ -485,11 +792,15 @@ def show_one_click_pipeline():
         st.caption("큐가 비어 있습니다.")
 
     for job in jobs:
-        st.write(f"• {job.get('job_id')} / {job.get('project_name')} / {job.get('status')}")
+        st.write(
+            f"• {job.get('job_id')} / "
+            f"{job.get('project_name')} / "
+            f"{job.get('status')}"
+        )
 
     st.subheader("최근 Pipeline 상태")
-    for f in PipelineState().list_recent(10):
-        st.write(f"• {f.name}")
+    for file_path in PipelineState().list_recent(10):
+        st.write(f"• {file_path.name}")
 
 
 from app.pages.pipeline_page import show_pipeline_page
