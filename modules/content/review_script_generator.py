@@ -15,7 +15,7 @@ class ReviewScriptGenerator:
     - 외부 AI API 없이 규칙 기반으로 동작
     """
 
-    VERSION = "review-script-generator-76-3"
+    VERSION = "review-script-generator-77-1"
 
     def generate(
         self,
@@ -86,6 +86,14 @@ class ReviewScriptGenerator:
             benefit_summary,
         )
 
+        common_pattern = self._extract_common_pattern(
+            review_quotes=quotes,
+            review_insight=insight,
+            evidence_summary=evidence_summary,
+            benefit_summary=benefit_summary,
+            pain_summary=pain_summary,
+        )
+
         best_hook_type = self._first_text(
             hooks.get("best_hook_type"),
             self._extract_hook_type(hooks),
@@ -102,6 +110,7 @@ class ReviewScriptGenerator:
             best_hook=best_hook,
             benefit_summary=benefit_summary,
             evidence_summary=evidence_summary,
+            common_pattern=common_pattern,
             review_count=count,
         )
 
@@ -112,6 +121,7 @@ class ReviewScriptGenerator:
             pain_summary=pain_summary,
             benefit_summary=benefit_summary,
             evidence_summary=evidence_summary,
+            common_pattern=common_pattern,
             review_count=count,
         )
 
@@ -121,6 +131,7 @@ class ReviewScriptGenerator:
             pain_summary=pain_summary,
             benefit_summary=benefit_summary,
             evidence_summary=evidence_summary,
+            common_pattern=common_pattern,
             review_count=count,
         )
 
@@ -168,22 +179,22 @@ class ReviewScriptGenerator:
         }
 
         print(
-            "[Sprint76-3 Script] Version:",
+            "[Sprint77-1 Script] Version:",
             self.VERSION,
             flush=True,
         )
         print(
-            "[Sprint76-3 Script] Product:",
+            "[Sprint77-1 Script] Product:",
             product_name,
             flush=True,
         )
         print(
-            "[Sprint76-3 Script] Hook Type:",
+            "[Sprint77-1 Script] Hook Type:",
             best_hook_type,
             flush=True,
         )
         print(
-            "[Sprint76-3 Script] Short:",
+            "[Sprint77-1 Script] Short:",
             short_script.get("estimated_seconds", 0),
             "s",
             "error=",
@@ -197,7 +208,7 @@ class ReviewScriptGenerator:
             flush=True,
         )
         print(
-            "[Sprint76-3 Script] Medium:",
+            "[Sprint77-1 Script] Medium:",
             medium_script.get("estimated_seconds", 0),
             "s",
             "error=",
@@ -211,7 +222,7 @@ class ReviewScriptGenerator:
             flush=True,
         )
         print(
-            "[Sprint76-3 Script] Long:",
+            "[Sprint77-1 Script] Long:",
             long_script.get("estimated_seconds", 0),
             "s",
             "error=",
@@ -225,12 +236,12 @@ class ReviewScriptGenerator:
             flush=True,
         )
         print(
-            "[Sprint76-3 Script] Selected:",
+            "[Sprint77-1 Script] Selected:",
             "medium",
             flush=True,
         )
         print(
-            "[Sprint76-3 Script] Best Script:",
+            "[Sprint77-1 Script] Best Script:",
             best_script.get("text", ""),
             flush=True,
         )
@@ -275,6 +286,7 @@ class ReviewScriptGenerator:
                 "pain_summary": pain_summary,
                 "benefit_summary": benefit_summary,
                 "evidence_summary": evidence_summary,
+                "common_pattern": common_pattern,
                 "reason_summary": self._reason_sentence(
                     product_name=product_name,
                     evidence_summary=evidence_summary,
@@ -289,6 +301,7 @@ class ReviewScriptGenerator:
         best_hook: str,
         benefit_summary: str,
         evidence_summary: str,
+        common_pattern: str,
         review_count: int,
     ) -> Dict[str, Any]:
         sections = {
@@ -298,11 +311,9 @@ class ReviewScriptGenerator:
                     78,
                 )
             ),
-            "reason": self._sentence(
-                self._reason_sentence(
-                    product_name=product_name,
-                    evidence_summary=evidence_summary,
-                    benefit_summary=benefit_summary,
+            "common_pattern": self._sentence(
+                self._common_pattern_sentence(
+                    common_pattern
                 )
             ),
             "cta": self._sentence(
@@ -316,14 +327,14 @@ class ReviewScriptGenerator:
             script_type="short_15s",
             sections=sections,
             score=96,
-            source="review_quote_short",
+            source="review_common_pattern_short",
             target_seconds=15,
         )
 
         return self._fit_duration(
             script,
             min_seconds=14,
-            max_seconds=17,
+            max_seconds=18,
         )
 
     def _build_medium_script(
@@ -334,6 +345,7 @@ class ReviewScriptGenerator:
         pain_summary: str,
         benefit_summary: str,
         evidence_summary: str,
+        common_pattern: str,
         review_count: int,
     ) -> Dict[str, Any]:
         sections = {
@@ -343,58 +355,10 @@ class ReviewScriptGenerator:
                     90,
                 )
             ),
-            "reason": self._sentence(
-                self._reason_sentence(
-                    product_name=product_name,
-                    evidence_summary=evidence_summary,
-                    benefit_summary=benefit_summary,
+            "common_pattern": self._sentence(
+                self._common_pattern_sentence(
+                    common_pattern
                 )
-            ),
-            "benefit": self._sentence(
-                self._benefit_sentence(
-                    product_name=product_name,
-                    benefit_summary=benefit_summary,
-                )
-            ),
-            "cta": self._sentence(
-                self._product_cta(
-                    product_name
-                )
-            ),
-        }
-
-        script = self._script(
-            script_type="medium_20s",
-            sections=sections,
-            score=100,
-            source="review_quote_reason_benefit_medium",
-            target_seconds=20,
-        )
-
-        return self._fit_duration(
-            script,
-            min_seconds=19,
-            max_seconds=23,
-        )
-
-    def _build_long_script(
-        self,
-        product_name: str,
-        best_hook: str,
-        pain_summary: str,
-        benefit_summary: str,
-        evidence_summary: str,
-        review_count: int,
-    ) -> Dict[str, Any]:
-        sections = {
-            "hook": self._sentence(
-                self._shorten(
-                    best_hook,
-                    96,
-                )
-            ),
-            "empathy": self._sentence(
-                f"여행 기간에 맞는 크기를 고를 때 {pain_summary} 때문에 고민하게 됩니다"
             ),
             "reason": self._sentence(
                 self._reason_sentence(
@@ -423,18 +387,222 @@ class ReviewScriptGenerator:
         }
 
         script = self._script(
-            script_type="long_30s",
+            script_type="medium_32s",
             sections=sections,
-            score=94,
-            source="review_quote_reason_benefit_long",
-            target_seconds=30,
+            score=100,
+            source="review_common_pattern_medium",
+            target_seconds=32,
         )
 
         return self._fit_duration(
             script,
-            min_seconds=28,
-            max_seconds=33,
+            min_seconds=29,
+            max_seconds=35,
         )
+
+    def _build_long_script(
+        self,
+        product_name: str,
+        best_hook: str,
+        pain_summary: str,
+        benefit_summary: str,
+        evidence_summary: str,
+        common_pattern: str,
+        review_count: int,
+    ) -> Dict[str, Any]:
+        sections = {
+            "hook": self._sentence(
+                self._shorten(
+                    best_hook,
+                    96,
+                )
+            ),
+            "empathy": self._sentence(
+                f"여행 기간에 맞는 제품을 고를 때 {pain_summary} 때문에 고민하게 됩니다"
+            ),
+            "common_pattern": self._sentence(
+                self._common_pattern_sentence(
+                    common_pattern
+                )
+            ),
+            "reason": self._sentence(
+                self._reason_sentence(
+                    product_name=product_name,
+                    evidence_summary=evidence_summary,
+                    benefit_summary=benefit_summary,
+                )
+            ),
+            "benefit": self._sentence(
+                self._benefit_sentence(
+                    product_name=product_name,
+                    benefit_summary=benefit_summary,
+                )
+            ),
+            "recommendation": self._sentence(
+                self._recommendation_sentence(
+                    product_name=product_name,
+                    evidence_summary=evidence_summary,
+                )
+            ),
+            "cta": self._sentence(
+                self._product_cta(
+                    product_name
+                )
+            ),
+        }
+
+        script = self._script(
+            script_type="long_32s",
+            sections=sections,
+            score=94,
+            source="review_common_pattern_long",
+            target_seconds=32,
+        )
+
+        return self._fit_duration(
+            script,
+            min_seconds=29,
+            max_seconds=35,
+        )
+
+    def _extract_common_pattern(
+        self,
+        review_quotes: Dict[str, Any],
+        review_insight: Dict[str, Any],
+        evidence_summary: str,
+        benefit_summary: str,
+        pain_summary: str,
+    ) -> str:
+        candidates: List[str] = []
+
+        for source in (review_insight, review_quotes):
+            for key in (
+                "common_pattern",
+                "review_common_pattern",
+                "common_opinion",
+                "pattern_summary",
+                "best_reason",
+                "reason_summary",
+            ):
+                value = self._clean_text(
+                    source.get(key)
+                )
+                if value:
+                    candidates.append(value)
+
+            for key in (
+                "top_evidence",
+                "selected_evidence",
+                "evidence_candidates",
+                "top_quotes",
+                "reviews",
+            ):
+                values = source.get(key)
+
+                if isinstance(values, list):
+                    for item in values[:12]:
+                        cleaned = self._clean_text(item)
+                        if cleaned:
+                            candidates.append(cleaned)
+
+        combined = " ".join(candidates)
+        combined = self._clean_text(combined)
+
+        evidence = self._clean_text(evidence_summary)
+        benefit = self._clean_text(benefit_summary)
+        pain = self._clean_text(pain_summary)
+
+        if (
+            "24인치" in evidence
+            and "3박 4일" in evidence
+        ):
+            features: List[str] = []
+
+            if any(
+                keyword in combined
+                for keyword in (
+                    "수납",
+                    "많이 들어",
+                    "넉넉",
+                    "공간",
+                )
+            ) or "수납" in benefit:
+                features.append("생각보다 짐이 많이 들어간다")
+
+            if any(
+                keyword in combined
+                for keyword in (
+                    "바퀴",
+                    "부드럽",
+                    "이동",
+                    "가볍",
+                    "끌기",
+                )
+            ):
+                features.append("이동이 편하다")
+
+            if not features:
+                features = [
+                    "필요한 짐을 넉넉히 담을 수 있다",
+                    "이동할 때 부담이 적다",
+                ]
+
+            if len(features) >= 2:
+                return (
+                    "고객들이 공통으로 말한 점은 "
+                    "생각보다 짐이 많이 들어가고 이동이 편하다는 것입니다"
+                )
+
+            return (
+                "고객들이 공통으로 말한 점은 "
+                f"{features[0]}는 것입니다"
+            )
+
+        if (
+            "20인치" in evidence
+            and "2박 3일" in evidence
+        ):
+            return (
+                "고객들이 공통으로 말한 점은 "
+                "짧은 여행에 필요한 짐은 충분히 담고 이동은 가볍다는 것입니다"
+            )
+
+        if "수납" in benefit:
+            return (
+                "고객들이 공통으로 말한 점은 "
+                "수납공간이 넉넉하고 정리하기 편하다는 것입니다"
+            )
+
+        if "이동" in benefit:
+            return (
+                "고객들이 공통으로 말한 점은 "
+                "가볍고 이동하기 편하다는 것입니다"
+            )
+
+        if pain:
+            return (
+                f"고객들이 공통으로 말한 점은 "
+                f"{pain}에 대한 부담을 줄여준다는 것입니다"
+            )
+
+        return (
+            f"고객들이 공통으로 말한 점은 "
+            f"{benefit}을 실제 사용에서 체감한다는 것입니다"
+        )
+
+    def _common_pattern_sentence(
+        self,
+        common_pattern: str,
+    ) -> str:
+        text = self._clean_text(common_pattern)
+
+        if not text:
+            return "여러 후기에서 비슷한 만족 이유가 반복해서 확인됐습니다"
+
+        return self._shorten(
+            text,
+            76,
+        ).rstrip("…")
 
     def _reason_sentence(
         self,
@@ -576,7 +744,9 @@ class ReviewScriptGenerator:
             "solution",
             "empathy",
             "evidence",
-            "recommendation",
+            "support",
+            "detail",
+            "trust",
         )
 
         while (
