@@ -15,7 +15,7 @@ class ReviewScriptGenerator:
     - 외부 AI API 없이 규칙 기반으로 동작
     """
 
-    VERSION = "review-script-generator-75-2a"
+    VERSION = "review-script-generator-75-3c"
 
     def generate(
         self,
@@ -90,37 +90,37 @@ class ReviewScriptGenerator:
                 benefit=benefit_summary,
             )
 
+        short_script = self._build_short_script(
+            product_name=product_name,
+            best_hook=best_hook,
+            benefit_summary=benefit_summary,
+            evidence_summary=evidence_summary,
+            review_count=count,
+        )
+
+        medium_script = self._build_medium_script(
+            hook_type=best_hook_type,
+            product_name=product_name,
+            best_hook=best_hook,
+            pain_summary=pain_summary,
+            benefit_summary=benefit_summary,
+            evidence_summary=evidence_summary,
+            review_count=count,
+        )
+
+        long_script = self._build_long_script(
+            product_name=product_name,
+            best_hook=best_hook,
+            pain_summary=pain_summary,
+            benefit_summary=benefit_summary,
+            evidence_summary=evidence_summary,
+            review_count=count,
+        )
+
         scripts = [
-            self._build_adaptive_script(
-                hook_type=best_hook_type,
-                product_name=product_name,
-                best_hook=best_hook,
-                pain_summary=pain_summary,
-                benefit_summary=benefit_summary,
-                evidence_summary=evidence_summary,
-                review_count=count,
-            ),
-            self._build_review_evidence_script(
-                product_name=product_name,
-                best_hook=best_hook,
-                pain_summary=pain_summary,
-                benefit_summary=benefit_summary,
-                evidence_summary=evidence_summary,
-                review_count=count,
-            ),
-            self._build_problem_solution_script(
-                product_name=product_name,
-                pain_summary=pain_summary,
-                benefit_summary=benefit_summary,
-                evidence_summary=evidence_summary,
-                review_count=count,
-            ),
-            self._build_before_after_script(
-                product_name=product_name,
-                pain_summary=pain_summary,
-                benefit_summary=benefit_summary,
-                review_count=count,
-            ),
+            short_script,
+            medium_script,
+            long_script,
         ]
 
         scripts = [
@@ -137,7 +137,7 @@ class ReviewScriptGenerator:
             key=lambda item: (
                 item.get("score", 0),
                 -abs(
-                    item.get("estimated_seconds", 0)
+                    item.get("target_seconds", 20)
                     - 20
                 ),
             ),
@@ -145,28 +145,85 @@ class ReviewScriptGenerator:
         )
 
         best_script = (
-            scripts[0]
-            if scripts
-            else {}
+            medium_script
+            if medium_script.get("text")
+            else (
+                scripts[0]
+                if scripts
+                else {}
+            )
         )
 
+        platform_recommendations = {
+            "tiktok": "short",
+            "instagram_reels": "medium",
+            "youtube_shorts": "long",
+        }
+
         print(
-            "[Sprint75-2 Script] Version:",
+            "[Sprint75-3C Script] Version:",
             self.VERSION,
             flush=True,
         )
         print(
-            "[Sprint75-2 Script] Product:",
+            "[Sprint75-3C Script] Product:",
             product_name,
             flush=True,
         )
         print(
-            "[Sprint75-2 Script] Hook Type:",
+            "[Sprint75-3C Script] Hook Type:",
             best_hook_type,
             flush=True,
         )
         print(
-            "[Sprint75-2 Script] Best Script:",
+            "[Sprint75-3C Script] Short:",
+            short_script.get("estimated_seconds", 0),
+            "s",
+            "error=",
+            short_script.get("duration_error", 0),
+            "status=",
+            short_script.get("duration_status", ""),
+            "compressed=",
+            short_script.get("compression_applied", False),
+            "expanded=",
+            short_script.get("expansion_applied", False),
+            flush=True,
+        )
+        print(
+            "[Sprint75-3C Script] Medium:",
+            medium_script.get("estimated_seconds", 0),
+            "s",
+            "error=",
+            medium_script.get("duration_error", 0),
+            "status=",
+            medium_script.get("duration_status", ""),
+            "compressed=",
+            medium_script.get("compression_applied", False),
+            "expanded=",
+            medium_script.get("expansion_applied", False),
+            flush=True,
+        )
+        print(
+            "[Sprint75-3C Script] Long:",
+            long_script.get("estimated_seconds", 0),
+            "s",
+            "error=",
+            long_script.get("duration_error", 0),
+            "status=",
+            long_script.get("duration_status", ""),
+            "compressed=",
+            long_script.get("compression_applied", False),
+            "expanded=",
+            long_script.get("expansion_applied", False),
+            flush=True,
+        )
+        print(
+            "[Sprint75-3C Script] Selected:",
+            "medium",
+            flush=True,
+        )
+        print(
+            "[Sprint75-3C Script] Best Script:",
             best_script.get("text", ""),
             flush=True,
         )
@@ -182,6 +239,13 @@ class ReviewScriptGenerator:
             "best_script": best_script.get("text", ""),
             "best_script_type": best_script.get("type", ""),
             "best_script_score": best_script.get("score", 0),
+            "short_script": short_script.get("text", ""),
+            "medium_script": medium_script.get("text", ""),
+            "long_script": long_script.get("text", ""),
+            "short_script_data": short_script,
+            "medium_script_data": medium_script,
+            "long_script_data": long_script,
+            "platform_recommendations": platform_recommendations,
             "best_script_sections": best_script.get(
                 "sections",
                 {},
@@ -205,6 +269,406 @@ class ReviewScriptGenerator:
                 "evidence_summary": evidence_summary,
             },
         }
+
+    def _build_short_script(
+        self,
+        product_name: str,
+        best_hook: str,
+        benefit_summary: str,
+        evidence_summary: str,
+        review_count: int,
+    ) -> Dict[str, Any]:
+        evidence = (
+            f"리뷰에서는 '{self._compress_evidence(evidence_summary)}'는 의견이 많았습니다"
+            if review_count > 0
+            else f"후기에서는 '{self._compress_evidence(evidence_summary)}'는 반응이 눈에 띄었습니다"
+        )
+
+        sections = {
+            "hook": self._sentence(
+                self._shorten(
+                    best_hook,
+                    48,
+                )
+            ),
+            "evidence": self._sentence(
+                evidence
+            ),
+            "cta": self._sentence(
+                self._short_cta(
+                    product_name
+                )
+            ),
+        }
+
+        script = self._script(
+            script_type="short_15s",
+            sections=sections,
+            score=96,
+            source="multi_length_short",
+            target_seconds=15,
+        )
+
+        return self._fit_duration(
+            script,
+            min_seconds=14,
+            max_seconds=16,
+        )
+
+    def _build_medium_script(
+        self,
+        hook_type: str,
+        product_name: str,
+        best_hook: str,
+        pain_summary: str,
+        benefit_summary: str,
+        evidence_summary: str,
+        review_count: int,
+    ) -> Dict[str, Any]:
+        evidence = (
+            f"리뷰 {review_count}개에서도 '{self._compress_evidence(evidence_summary)}'는 의견이 많았습니다"
+            if review_count > 0
+            else f"후기에서도 '{self._compress_evidence(evidence_summary)}'는 의견이 많았습니다"
+        )
+
+        sections = {
+            "hook": self._sentence(
+                self._shorten(
+                    best_hook,
+                    58,
+                )
+            ),
+            "evidence": self._sentence(
+                evidence
+            ),
+            "benefit": self._sentence(
+                f"{benefit_summary} 덕분에 여행 준비가 훨씬 편해집니다"
+            ),
+            "cta": self._sentence(
+                self._product_cta(
+                    product_name
+                )
+            ),
+        }
+
+        script = self._script(
+            script_type="medium_20s",
+            sections=sections,
+            score=100,
+            source="multi_length_medium",
+            target_seconds=20,
+        )
+
+        return self._fit_duration(
+            script,
+            min_seconds=19,
+            max_seconds=21,
+        )
+
+    def _build_long_script(
+        self,
+        product_name: str,
+        best_hook: str,
+        pain_summary: str,
+        benefit_summary: str,
+        evidence_summary: str,
+        review_count: int,
+    ) -> Dict[str, Any]:
+        sections = {
+            "hook": self._sentence(
+                self._shorten(
+                    best_hook,
+                    64,
+                )
+            ),
+            "empathy": self._sentence(
+                f"여행 준비를 할 때마다 {pain_summary} 때문에 고민하게 됩니다"
+            ),
+            "evidence": self._sentence(
+                (
+                    f"리뷰 {review_count}개를 살펴보니 "
+                    f"'{self._compress_evidence(evidence_summary)}'는 의견이 가장 많았습니다"
+                    if review_count > 0
+                    else f"후기에서는 '{self._compress_evidence(evidence_summary)}'는 의견이 많았습니다"
+                )
+            ),
+            "benefit": self._sentence(
+                f"{benefit_summary}이 가능해져 짐 정리와 이동이 훨씬 편해집니다"
+            ),
+            "cta": self._sentence(
+                self._product_cta(
+                    product_name
+                )
+            ),
+        }
+
+        script = self._script(
+            script_type="long_30s",
+            sections=sections,
+            score=94,
+            source="multi_length_long",
+            target_seconds=30,
+        )
+
+        return self._fit_duration(
+            script,
+            min_seconds=28,
+            max_seconds=32,
+        )
+
+    def _compress_evidence(
+        self,
+        evidence: str,
+    ) -> str:
+        text = self._clean_text(evidence)
+
+        replacements = (
+            (
+                "짐이 섞이지 않아 정리하기 편하다",
+                "짐 정리가 편하다",
+            ),
+            (
+                "가볍고 이동이 편하다",
+                "이동이 편하다",
+            ),
+            (
+                "튼튼해서 오래 사용할 수 있다",
+                "튼튼하고 오래 쓴다",
+            ),
+        )
+
+        for before, after in replacements:
+            if before in text:
+                return after
+
+        return self._shorten(
+            text,
+            24,
+        ).rstrip("…")
+
+    def _short_cta(
+        self,
+        product_name: str,
+    ) -> str:
+        if "캐리어" in product_name:
+            return "여행 전에 후기를 확인해 보세요"
+
+        return "구매 전에 후기를 확인해 보세요"
+
+    def _fit_duration(
+        self,
+        script: Dict[str, Any],
+        min_seconds: int,
+        max_seconds: int,
+    ) -> Dict[str, Any]:
+        sections = dict(
+            script.get("sections", {})
+        )
+
+        compression_applied = False
+
+        priority_order = (
+            "result",
+            "transition",
+            "solution",
+            "empathy",
+            "benefit",
+            "evidence",
+        )
+
+        while (
+            script.get("estimated_seconds", 0)
+            > max_seconds
+            and len(sections) > 3
+        ):
+            removed = False
+
+            for key in priority_order:
+                if key in sections:
+                    sections.pop(key)
+                    removed = True
+                    compression_applied = True
+                    break
+
+            if not removed:
+                break
+
+            script = self._script(
+                script_type=script.get("type", ""),
+                sections=sections,
+                score=script.get("score", 0),
+                source=script.get("source", ""),
+                target_seconds=script.get(
+                    "target_seconds",
+                    max_seconds,
+                ),
+            )
+
+        if (
+            script.get("estimated_seconds", 0)
+            > max_seconds
+        ):
+            sections = {
+                key: self._shorten(
+                    value,
+                    46 if key == "hook" else 40,
+                )
+                for key, value in sections.items()
+            }
+
+            compression_applied = True
+
+            script = self._script(
+                script_type=script.get("type", ""),
+                sections=sections,
+                score=script.get("score", 0),
+                source=script.get("source", ""),
+                target_seconds=script.get(
+                    "target_seconds",
+                    max_seconds,
+                ),
+            )
+
+        estimated = script.get(
+            "estimated_seconds",
+            0,
+        )
+
+        target = script.get(
+            "target_seconds",
+            0,
+        )
+
+        expansion_applied = False
+
+        if estimated < min_seconds:
+            # Short처럼 1~3초만 부족한 경우에는 새 문장을 추가하지 않고
+            # 기존 CTA를 조금만 확장해 목표 시간을 맞춥니다.
+            shortage = min_seconds - estimated
+
+            if (
+                shortage <= 3
+                and "cta" in sections
+            ):
+                cta_text = self._clean_text(
+                    sections.get("cta", "")
+                ).rstrip(".!?")
+
+                suffix = (
+                    " 수납 구성도 함께 보세요"
+                    if shortage >= 2
+                    else " 꼭 확인해 보세요"
+                )
+
+                if suffix.strip() not in cta_text:
+                    sections["cta"] = self._sentence(
+                        cta_text + suffix
+                    )
+
+                    expansion_applied = True
+
+                    script = self._script(
+                        script_type=script.get("type", ""),
+                        sections=sections,
+                        score=script.get("score", 0),
+                        source=script.get("source", ""),
+                        target_seconds=target,
+                    )
+
+                    estimated = script.get(
+                        "estimated_seconds",
+                        0,
+                    )
+
+            expansion_candidates = (
+                (
+                    "support",
+                    "실사용 후기를 기준으로 선택하면 실패를 줄일 수 있습니다.",
+                ),
+                (
+                    "detail",
+                    "수납 구조와 이동 편의성도 함께 확인해 보세요.",
+                ),
+                (
+                    "trust",
+                    "구매 전 실제 사용 후기를 비교하는 것이 좋습니다.",
+                ),
+            )
+
+            for key, sentence in expansion_candidates:
+                if estimated >= min_seconds:
+                    break
+
+                if key in sections:
+                    continue
+
+                sections[key] = self._sentence(
+                    sentence
+                )
+
+                expansion_applied = True
+
+                script = self._script(
+                    script_type=script.get("type", ""),
+                    sections=sections,
+                    score=script.get("score", 0),
+                    source=script.get("source", ""),
+                    target_seconds=target,
+                )
+
+                estimated = script.get(
+                    "estimated_seconds",
+                    0,
+                )
+
+        if estimated > max_seconds:
+            optional_keys = (
+                "trust",
+                "detail",
+                "support",
+            )
+
+            for key in optional_keys:
+                if estimated <= max_seconds:
+                    break
+
+                if key not in sections:
+                    continue
+
+                sections.pop(key)
+
+                script = self._script(
+                    script_type=script.get("type", ""),
+                    sections=sections,
+                    score=script.get("score", 0),
+                    source=script.get("source", ""),
+                    target_seconds=target,
+                )
+
+                estimated = script.get(
+                    "estimated_seconds",
+                    0,
+                )
+
+        script["duration_error"] = (
+            estimated - target
+        )
+
+        script["duration_status"] = (
+            "ok"
+            if min_seconds <= estimated <= max_seconds
+            else "out_of_range"
+        )
+
+        script["compression_applied"] = (
+            compression_applied
+        )
+
+        script["expansion_applied"] = (
+            expansion_applied
+        )
+
+        return script
 
     def _build_adaptive_script(
         self,
@@ -670,6 +1134,7 @@ class ReviewScriptGenerator:
         sections: Dict[str, str],
         score: int,
         source: str,
+        target_seconds: int = 20,
     ) -> Dict[str, Any]:
         clean_sections = {
             key: self._clean_text(value)
@@ -701,6 +1166,7 @@ class ReviewScriptGenerator:
             "estimated_seconds": self._estimate_seconds(
                 text
             ),
+            "target_seconds": int(target_seconds),
         }
 
     def _extract_hook_text(
