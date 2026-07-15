@@ -15,7 +15,7 @@ class ReviewScriptGenerator:
     - 외부 AI API 없이 규칙 기반으로 동작
     """
 
-    VERSION = "review-script-generator-77-3"
+    VERSION = "review-script-generator-78-1"
 
     def generate(
         self,
@@ -115,6 +115,23 @@ class ReviewScriptGenerator:
             dominant_review_type=dominant_review_type,
         )
 
+        psychology_result = self._classify_purchase_psychology(
+            product_name=product_name,
+            pain_summary=pain_summary,
+            evidence_summary=evidence_summary,
+            dominant_review_type=dominant_review_type,
+        )
+
+        psychology_story = self._build_psychology_story(
+            product_name=product_name,
+            pain_summary=pain_summary,
+            evidence_summary=evidence_summary,
+            psychology_type=self._first_text(
+                psychology_result.get("dominant_type"),
+                "empathy",
+            ),
+        )
+
         best_hook_type = self._first_text(
             hooks.get("best_hook_type"),
             self._extract_hook_type(hooks),
@@ -134,6 +151,7 @@ class ReviewScriptGenerator:
             common_pattern=common_pattern,
             dominant_review_type=dominant_review_type,
             before_after_story=before_after_story,
+            psychology_story=psychology_story,
             review_count=count,
         )
 
@@ -147,6 +165,7 @@ class ReviewScriptGenerator:
             common_pattern=common_pattern,
             dominant_review_type=dominant_review_type,
             before_after_story=before_after_story,
+            psychology_story=psychology_story,
             review_count=count,
         )
 
@@ -159,6 +178,7 @@ class ReviewScriptGenerator:
             common_pattern=common_pattern,
             dominant_review_type=dominant_review_type,
             before_after_story=before_after_story,
+            psychology_story=psychology_story,
             review_count=count,
         )
 
@@ -206,48 +226,69 @@ class ReviewScriptGenerator:
         }
 
         print(
-            "[Sprint77-3 Script] Version:",
+            "[Sprint78-1 Script] Version:",
             self.VERSION,
             flush=True,
         )
         print(
-            "[Sprint77-3 Script] Product:",
+            "[Sprint78-1 Script] Product:",
             product_name,
             flush=True,
         )
         print(
-            "[Sprint77-3 Script] Hook Type:",
+            "[Sprint78-1 Script] Hook Type:",
             best_hook_type,
             flush=True,
         )
         print(
-            "[Sprint77-3 Script] Dominant Review Type:",
+            "[Sprint78-1 Script] Dominant Review Type:",
             review_type_result.get("dominant_type", ""),
             review_type_result.get("dominant_label", ""),
             flush=True,
         )
         print(
-            "[Sprint77-3 Script] Review Type Scores:",
+            "[Sprint78-1 Script] Review Type Scores:",
             review_type_result.get("scores", {}),
             flush=True,
         )
         print(
-            "[Sprint77-3 Script] Before:",
+            "[Sprint78-1 Script] Before:",
             before_after_story.get("before", ""),
             flush=True,
         )
         print(
-            "[Sprint77-3 Script] Choice:",
+            "[Sprint78-1 Script] Choice:",
             before_after_story.get("choice", ""),
             flush=True,
         )
         print(
-            "[Sprint77-3 Script] After:",
+            "[Sprint78-1 Script] After:",
             before_after_story.get("after", ""),
             flush=True,
         )
         print(
-            "[Sprint77-3 Script] Short:",
+            "[Sprint78-1 Script] Psychology Type:",
+            psychology_result.get("dominant_type", ""),
+            psychology_result.get("dominant_label", ""),
+            flush=True,
+        )
+        print(
+            "[Sprint78-1 Script] Psychology Scores:",
+            psychology_result.get("scores", {}),
+            flush=True,
+        )
+        print(
+            "[Sprint78-1 Script] Problem:",
+            psychology_story.get("problem", ""),
+            flush=True,
+        )
+        print(
+            "[Sprint78-1 Script] Empathy:",
+            psychology_story.get("empathy", ""),
+            flush=True,
+        )
+        print(
+            "[Sprint78-1 Script] Short:",
             short_script.get("estimated_seconds", 0),
             "s",
             "error=",
@@ -261,7 +302,7 @@ class ReviewScriptGenerator:
             flush=True,
         )
         print(
-            "[Sprint77-3 Script] Medium:",
+            "[Sprint78-1 Script] Medium:",
             medium_script.get("estimated_seconds", 0),
             "s",
             "error=",
@@ -275,7 +316,7 @@ class ReviewScriptGenerator:
             flush=True,
         )
         print(
-            "[Sprint77-3 Script] Long:",
+            "[Sprint78-1 Script] Long:",
             long_script.get("estimated_seconds", 0),
             "s",
             "error=",
@@ -289,12 +330,12 @@ class ReviewScriptGenerator:
             flush=True,
         )
         print(
-            "[Sprint77-3 Script] Selected:",
+            "[Sprint78-1 Script] Selected:",
             "medium",
             flush=True,
         )
         print(
-            "[Sprint77-3 Script] Best Script:",
+            "[Sprint78-1 Script] Best Script:",
             best_script.get("text", ""),
             flush=True,
         )
@@ -343,6 +384,8 @@ class ReviewScriptGenerator:
                 "dominant_review_type": dominant_review_type,
                 "common_pattern": common_pattern,
                 "before_after_story": before_after_story,
+                "purchase_psychology": psychology_result,
+                "psychology_story": psychology_story,
                 "reason_summary": self._reason_sentence(
                     product_name=product_name,
                     evidence_summary=evidence_summary,
@@ -360,13 +403,20 @@ class ReviewScriptGenerator:
         common_pattern: str,
         dominant_review_type: str,
         before_after_story: Dict[str, str],
+        psychology_story: Dict[str, str],
         review_count: int,
     ) -> Dict[str, Any]:
         sections = {
-            "hook": self._sentence(
+            "problem": self._sentence(
+                psychology_story.get(
+                    "problem",
+                    before_after_story.get("before", ""),
+                )
+            ),
+            "evidence": self._sentence(
                 self._shorten(
                     best_hook,
-                    78,
+                    82,
                 )
             ),
             "after": self._sentence(
@@ -383,17 +433,17 @@ class ReviewScriptGenerator:
         }
 
         script = self._script(
-            script_type="short_16s",
+            script_type="short_18s",
             sections=sections,
             score=96,
-            source="review_before_after_short",
-            target_seconds=16,
+            source="purchase_psychology_short",
+            target_seconds=18,
         )
 
         return self._fit_duration(
             script,
-            min_seconds=15,
-            max_seconds=18,
+            min_seconds=16,
+            max_seconds=21,
         )
 
     def _build_medium_script(
@@ -407,25 +457,32 @@ class ReviewScriptGenerator:
         common_pattern: str,
         dominant_review_type: str,
         before_after_story: Dict[str, str],
+        psychology_story: Dict[str, str],
         review_count: int,
     ) -> Dict[str, Any]:
         sections = {
-            "hook": self._sentence(
-                self._shorten(
-                    best_hook,
-                    90,
+            "problem": self._sentence(
+                psychology_story.get(
+                    "problem",
+                    before_after_story.get("before", ""),
                 )
             ),
-            "before": self._sentence(
-                before_after_story.get(
-                    "before",
-                    pain_summary,
+            "empathy": self._sentence(
+                psychology_story.get(
+                    "empathy",
+                    "한 번쯤 같은 고민을 하게 됩니다",
+                )
+            ),
+            "evidence": self._sentence(
+                self._shorten(
+                    best_hook,
+                    96,
                 )
             ),
             "choice": self._sentence(
                 before_after_story.get(
                     "choice",
-                    self._with_object_particle(product_name),
+                    "",
                 )
             ),
             "after": self._sentence(
@@ -437,11 +494,7 @@ class ReviewScriptGenerator:
             "recommendation": self._sentence(
                 before_after_story.get(
                     "recommendation",
-                    self._recommendation_sentence(
-                        product_name=product_name,
-                        evidence_summary=evidence_summary,
-                        dominant_review_type=dominant_review_type,
-                    ),
+                    "",
                 )
             ),
             "cta": self._sentence(
@@ -452,17 +505,17 @@ class ReviewScriptGenerator:
         }
 
         script = self._script(
-            script_type="medium_36s",
+            script_type="medium_43s",
             sections=sections,
             score=100,
-            source="review_before_after_medium",
-            target_seconds=36,
+            source="purchase_psychology_medium",
+            target_seconds=43,
         )
 
         return self._fit_duration(
             script,
-            min_seconds=32,
-            max_seconds=38,
+            min_seconds=39,
+            max_seconds=46,
         )
 
     def _build_long_script(
@@ -475,19 +528,32 @@ class ReviewScriptGenerator:
         common_pattern: str,
         dominant_review_type: str,
         before_after_story: Dict[str, str],
+        psychology_story: Dict[str, str],
         review_count: int,
     ) -> Dict[str, Any]:
         sections = {
-            "hook": self._sentence(
-                self._shorten(
-                    best_hook,
-                    96,
+            "problem": self._sentence(
+                psychology_story.get(
+                    "problem",
+                    before_after_story.get("before", ""),
                 )
             ),
-            "before": self._sentence(
-                before_after_story.get(
-                    "before",
-                    pain_summary,
+            "empathy": self._sentence(
+                psychology_story.get(
+                    "empathy",
+                    "비슷한 고민을 하는 분들이 많습니다",
+                )
+            ),
+            "risk": self._sentence(
+                psychology_story.get(
+                    "risk",
+                    "",
+                )
+            ),
+            "evidence": self._sentence(
+                self._shorten(
+                    best_hook,
+                    102,
                 )
             ),
             "common_pattern": self._sentence(
@@ -498,7 +564,7 @@ class ReviewScriptGenerator:
             "choice": self._sentence(
                 before_after_story.get(
                     "choice",
-                    self._with_object_particle(product_name),
+                    "",
                 )
             ),
             "after": self._sentence(
@@ -510,11 +576,7 @@ class ReviewScriptGenerator:
             "recommendation": self._sentence(
                 before_after_story.get(
                     "recommendation",
-                    self._recommendation_sentence(
-                        product_name=product_name,
-                        evidence_summary=evidence_summary,
-                        dominant_review_type=dominant_review_type,
-                    ),
+                    "",
                 )
             ),
             "cta": self._sentence(
@@ -525,18 +587,162 @@ class ReviewScriptGenerator:
         }
 
         script = self._script(
-            script_type="long_34s",
+            script_type="long_46s",
             sections=sections,
             score=95,
-            source="review_before_after_long",
-            target_seconds=34,
+            source="purchase_psychology_long",
+            target_seconds=46,
         )
 
         return self._fit_duration(
             script,
-            min_seconds=31,
-            max_seconds=37,
+            min_seconds=41,
+            max_seconds=50,
         )
+
+    def _classify_purchase_psychology(
+        self,
+        product_name: str,
+        pain_summary: str,
+        evidence_summary: str,
+        dominant_review_type: str,
+    ) -> Dict[str, Any]:
+        product = self._clean_text(product_name)
+        pain = self._clean_text(pain_summary)
+        evidence = self._clean_text(evidence_summary)
+        review_type = self._clean_text(dominant_review_type)
+
+        scores = {
+            "anxiety": 0,
+            "empathy": 0,
+            "mistake_prevention": 0,
+            "comparison": 0,
+            "recommendation": 0,
+        }
+
+        if any(
+            keyword in pain
+            for keyword in (
+                "어렵",
+                "고민",
+                "불편",
+                "부담",
+                "걱정",
+            )
+        ):
+            scores["anxiety"] += 4
+            scores["empathy"] += 3
+
+        if any(
+            keyword in evidence
+            for keyword in (
+                "적당",
+                "맞",
+                "크기",
+                "인치",
+            )
+        ):
+            scores["comparison"] += 5
+            scores["mistake_prevention"] += 4
+
+        if review_type in (
+            "storage",
+            "mobility",
+            "durability",
+            "value",
+            "design",
+        ):
+            scores["recommendation"] += 2
+
+        if "캐리어" in product:
+            scores["comparison"] += 3
+            scores["mistake_prevention"] += 2
+
+        priority = {
+            "comparison": 5,
+            "mistake_prevention": 4,
+            "anxiety": 3,
+            "empathy": 2,
+            "recommendation": 1,
+        }
+
+        dominant_type = max(
+            scores,
+            key=lambda key: (
+                scores.get(key, 0),
+                priority.get(key, 0),
+            ),
+        )
+
+        labels = {
+            "anxiety": "불안형",
+            "empathy": "공감형",
+            "mistake_prevention": "실수방지형",
+            "comparison": "비교형",
+            "recommendation": "추천형",
+        }
+
+        return {
+            "dominant_type": dominant_type,
+            "dominant_label": labels.get(
+                dominant_type,
+                "공감형",
+            ),
+            "scores": scores,
+        }
+
+    def _build_psychology_story(
+        self,
+        product_name: str,
+        pain_summary: str,
+        evidence_summary: str,
+        psychology_type: str,
+    ) -> Dict[str, str]:
+        product = self._clean_text(product_name)
+        pain = self._clean_text(pain_summary)
+        evidence = self._clean_text(evidence_summary)
+        psychology = self._clean_text(psychology_type)
+
+        if (
+            "캐리어" in product
+            and "3박 4일" in evidence
+            and "24인치" in evidence
+        ):
+            base = {
+                "problem": "3박 4일 여행인데 20인치를 살지 24인치를 살지 고민하게 됩니다",
+                "empathy": "너무 작으면 짐이 부족하고 너무 크면 이동이 부담스러울 수 있습니다",
+                "risk": "크기를 잘못 고르면 여행 내내 수납과 이동이 불편해질 수 있습니다",
+            }
+        else:
+            base = {
+                "problem": f"{pain}, 구매 전에 가장 먼저 고민하게 되는 부분입니다",
+                "empathy": "비슷한 고민 때문에 결정을 미루는 분들이 많습니다",
+                "risk": "사용 목적과 맞지 않으면 구매 후 만족도가 떨어질 수 있습니다",
+            }
+
+        type_overrides = {
+            "anxiety": {
+                "empathy": "잘못 선택할까 걱정돼 쉽게 결정하기 어렵습니다",
+            },
+            "mistake_prevention": {
+                "risk": "기준 없이 선택하면 같은 제품을 다시 사게 될 수도 있습니다",
+            },
+            "comparison": {
+                "empathy": "비슷해 보여도 실제 사용에서는 크기와 구성이 크게 다릅니다",
+            },
+            "recommendation": {
+                "empathy": "실사용자의 공통 의견을 보면 선택 기준이 더 분명해집니다",
+            },
+        }
+
+        base.update(
+            type_overrides.get(
+                psychology,
+                {},
+            )
+        )
+
+        return base
 
     def _build_before_after_story(
         self,
@@ -1127,12 +1333,11 @@ class ReviewScriptGenerator:
             "result",
             "transition",
             "solution",
-            "empathy",
-            "evidence",
-            "common_pattern",
             "support",
             "detail",
             "trust",
+            "common_pattern",
+            "risk",
         )
 
         while (
