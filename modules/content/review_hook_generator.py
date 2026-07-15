@@ -15,7 +15,7 @@ class ReviewHookGenerator:
     - 외부 AI API 없이 규칙 기반으로 동작
     """
 
-    VERSION = "review-hook-generator-75-2a"
+    VERSION = "review-hook-generator-76-3"
 
     def generate(
         self,
@@ -48,6 +48,12 @@ class ReviewHookGenerator:
             quotes.get("best_quote"),
         )
 
+        best_evidence = self._first_text(
+            insight.get("best_evidence"),
+            quotes.get("best_evidence"),
+            best_quote,
+        )
+
         count = self._safe_int(
             review_count
             or insight.get("review_count")
@@ -57,6 +63,11 @@ class ReviewHookGenerator:
         benefit_summary = self._summarize_benefit(
             best_benefit,
             best_quote,
+        )
+
+        evidence_summary = self._summarize_evidence(
+            best_evidence,
+            benefit_summary,
         )
 
         pain_summary = self._summarize_pain(
@@ -75,9 +86,9 @@ class ReviewHookGenerator:
                 "review_evidence",
                 self._review_evidence_hook(
                     count=count,
-                    benefit=benefit_summary,
+                    evidence=evidence_summary,
                 ),
-                "benefit_summary",
+                "best_evidence",
             ),
             (
                 "curiosity",
@@ -134,8 +145,8 @@ class ReviewHookGenerator:
 
         hooks = self._dedupe_hooks(hooks)
         type_priority = {
+            "review_evidence": 6,
             "curiosity": 5,
-            "review_evidence": 4,
             "before_after": 3,
             "problem": 2,
             "result": 1,
@@ -156,30 +167,30 @@ class ReviewHookGenerator:
         best_hook = hooks[0] if hooks else {}
 
         print(
-            "[Sprint75-2 Hook] Version:",
+            "[Sprint76-3 Hook] Version:",
             self.VERSION,
             flush=True,
         )
         print(
-            "[Sprint75-2 Hook] Product:",
+            "[Sprint76-3 Hook] Product:",
             product_name,
             flush=True,
         )
         print(
-            "[Sprint75-2 Hook] Best Hook:",
+            "[Sprint76-3 Hook] Best Hook:",
             best_hook.get("text", ""),
             flush=True,
         )
 
         print(
-            "[Sprint75-2 Hook] Generated:",
+            "[Sprint76-3 Hook] Generated:",
             len(hooks),
             flush=True,
         )
 
         for item in hooks:
             print(
-                "[Sprint75-2 Hook] Score:",
+                "[Sprint76-3 Hook] Score:",
                 item.get("type"),
                 item.get("score"),
                 repr(item.get("text", "")),
@@ -187,7 +198,7 @@ class ReviewHookGenerator:
             )
 
         print(
-            "[Sprint75-2 Hook] Selected:",
+            "[Sprint76-3 Hook] Selected:",
             best_hook.get("type", ""),
             flush=True,
         )
@@ -211,25 +222,29 @@ class ReviewHookGenerator:
                 "best_pain": best_pain,
                 "best_benefit": best_benefit,
                 "best_quote": best_quote,
+                "best_evidence": best_evidence,
                 "pain_summary": pain_summary,
                 "benefit_summary": benefit_summary,
+                "evidence_summary": evidence_summary,
             },
         }
 
     def _review_evidence_hook(
         self,
         count: int,
-        benefit: str,
+        evidence: str,
     ) -> str:
+        quote = self._quote_style_evidence(evidence)
+
         if count > 0:
             return (
-                f"리뷰 {count}개를 분석했더니 "
-                f"가장 많이 나온 장점은 {benefit}이었습니다."
+                f"실제 구매 후기 {count}개에서 가장 많이 나온 말은 "
+                f'"{quote}"였습니다.'
             )
 
         return (
-            f"실사용 후기를 분석했더니 "
-            f"가장 많이 나온 장점은 {benefit}이었습니다."
+            f"실제 구매 후기에서 가장 많이 나온 말은 "
+            f'"{quote}"였습니다.'
         )
 
     def _curiosity_hook(
@@ -315,8 +330,8 @@ class ReviewHookGenerator:
             score += 4
 
         type_bonus = {
+            "review_evidence": 28,
             "curiosity": 12,
-            "review_evidence": 10,
             "before_after": 8,
             "problem": 6,
             "result": 5,
@@ -344,6 +359,96 @@ class ReviewHookGenerator:
                 int(score),
             ),
         )
+
+    def _summarize_evidence(
+        self,
+        evidence: str,
+        fallback_benefit: str,
+    ) -> str:
+        text = self._clean_text(evidence)
+
+        if not text:
+            return f"{fallback_benefit}이 만족스럽다"
+
+        text = re.sub(r"\b3\s*박\s*4\s*일\b", "3박 4일", text)
+        text = re.sub(r"\b(\d{2})\s*인치\b", r"\1인치", text)
+
+        if (
+            "3박 4일" in text
+            and "24인치" in text
+            and any(word in text for word in ("적당", "딱", "알맞"))
+        ):
+            return "3박 4일 여행에는 24인치가 딱 적당하다"
+
+        if (
+            "2박 3일" in text
+            and "20인치" in text
+            and any(word in text for word in ("적당", "딱", "알맞"))
+        ):
+            return "2박 3일 여행에는 20인치가 딱 적당하다"
+
+        replacements = (
+            ("정도의", ""),
+            ("인 것 같네요", "다"),
+            ("인 것 같아요", "다"),
+            ("것 같네요", "다"),
+            ("것 같아요", "다"),
+            ("했습니다", "했다"),
+            ("좋았습니다", "좋다"),
+        )
+
+        for before, after in replacements:
+            text = text.replace(before, after)
+
+        text = re.sub(r"\s+", " ", text).strip()
+        text = text.rstrip(".!? ")
+
+        return self._shorten(text, 38).rstrip("…")
+
+    def _evidence_clause(
+        self,
+        evidence: str,
+    ) -> str:
+        text = self._clean_text(evidence).rstrip(".!? ")
+
+        if not text:
+            return "실사용 만족도가 높다는"
+
+        if text.endswith("하다"):
+            return text[:-2] + "하다는"
+        if text.endswith("이다"):
+            return text[:-2] + "이라는"
+        if text.endswith("다"):
+            return text[:-1] + "다는"
+
+        return text + "라는"
+
+    def _quote_style_evidence(
+        self,
+        evidence: str,
+    ) -> str:
+        text = self._clean_text(evidence).rstrip(".!? ")
+
+        replacements = (
+            ("딱 적당하다", "딱 적당해요"),
+            ("적당하다", "적당해요"),
+            ("편하다", "편해요"),
+            ("좋다", "좋아요"),
+            ("만족스럽다", "만족스러워요"),
+            ("튼튼하다", "튼튼해요"),
+            ("가볍다", "가벼워요"),
+        )
+
+        for before, after in replacements:
+            if text.endswith(before):
+                text = text[: -len(before)] + after
+                break
+
+        if not text.endswith(("요", "니다", "죠")):
+            if text.endswith("다"):
+                text = text[:-1] + "요"
+
+        return self._shorten(text, 40).rstrip("…")
 
     def _summarize_benefit(
         self,

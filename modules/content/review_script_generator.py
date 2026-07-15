@@ -15,7 +15,7 @@ class ReviewScriptGenerator:
     - 외부 AI API 없이 규칙 기반으로 동작
     """
 
-    VERSION = "review-script-generator-76-2c"
+    VERSION = "review-script-generator-76-3"
 
     def generate(
         self,
@@ -168,22 +168,22 @@ class ReviewScriptGenerator:
         }
 
         print(
-            "[Sprint76-2C Script] Version:",
+            "[Sprint76-3 Script] Version:",
             self.VERSION,
             flush=True,
         )
         print(
-            "[Sprint76-2C Script] Product:",
+            "[Sprint76-3 Script] Product:",
             product_name,
             flush=True,
         )
         print(
-            "[Sprint76-2C Script] Hook Type:",
+            "[Sprint76-3 Script] Hook Type:",
             best_hook_type,
             flush=True,
         )
         print(
-            "[Sprint76-2C Script] Short:",
+            "[Sprint76-3 Script] Short:",
             short_script.get("estimated_seconds", 0),
             "s",
             "error=",
@@ -197,7 +197,7 @@ class ReviewScriptGenerator:
             flush=True,
         )
         print(
-            "[Sprint76-2C Script] Medium:",
+            "[Sprint76-3 Script] Medium:",
             medium_script.get("estimated_seconds", 0),
             "s",
             "error=",
@@ -211,7 +211,7 @@ class ReviewScriptGenerator:
             flush=True,
         )
         print(
-            "[Sprint76-2C Script] Long:",
+            "[Sprint76-3 Script] Long:",
             long_script.get("estimated_seconds", 0),
             "s",
             "error=",
@@ -225,12 +225,12 @@ class ReviewScriptGenerator:
             flush=True,
         )
         print(
-            "[Sprint76-2C Script] Selected:",
+            "[Sprint76-3 Script] Selected:",
             "medium",
             flush=True,
         )
         print(
-            "[Sprint76-2C Script] Best Script:",
+            "[Sprint76-3 Script] Best Script:",
             best_script.get("text", ""),
             flush=True,
         )
@@ -295,7 +295,7 @@ class ReviewScriptGenerator:
             "hook": self._sentence(
                 self._shorten(
                     best_hook,
-                    58,
+                    78,
                 )
             ),
             "reason": self._sentence(
@@ -316,14 +316,14 @@ class ReviewScriptGenerator:
             script_type="short_15s",
             sections=sections,
             score=96,
-            source="evidence_reason_short",
+            source="review_quote_short",
             target_seconds=15,
         )
 
         return self._fit_duration(
             script,
             min_seconds=14,
-            max_seconds=16,
+            max_seconds=17,
         )
 
     def _build_medium_script(
@@ -340,7 +340,7 @@ class ReviewScriptGenerator:
             "hook": self._sentence(
                 self._shorten(
                     best_hook,
-                    76,
+                    90,
                 )
             ),
             "reason": self._sentence(
@@ -367,14 +367,14 @@ class ReviewScriptGenerator:
             script_type="medium_20s",
             sections=sections,
             score=100,
-            source="evidence_reason_benefit_medium",
+            source="review_quote_reason_benefit_medium",
             target_seconds=20,
         )
 
         return self._fit_duration(
             script,
             min_seconds=19,
-            max_seconds=22,
+            max_seconds=23,
         )
 
     def _build_long_script(
@@ -390,7 +390,7 @@ class ReviewScriptGenerator:
             "hook": self._sentence(
                 self._shorten(
                     best_hook,
-                    76,
+                    96,
                 )
             ),
             "empathy": self._sentence(
@@ -426,14 +426,14 @@ class ReviewScriptGenerator:
             script_type="long_30s",
             sections=sections,
             score=94,
-            source="evidence_reason_benefit_long",
+            source="review_quote_reason_benefit_long",
             target_seconds=30,
         )
 
         return self._fit_duration(
             script,
             min_seconds=28,
-            max_seconds=32,
+            max_seconds=33,
         )
 
     def _reason_sentence(
@@ -1053,17 +1053,17 @@ class ReviewScriptGenerator:
         count: int,
         evidence: str,
     ) -> str:
-        clause = self._evidence_clause(evidence)
+        quote = self._quote_style_evidence(evidence)
 
         if count > 0:
             return (
-                f"리뷰 {count}개를 분석했더니 "
-                f"{clause} 후기가 가장 많았습니다."
+                f"실제 구매 후기 {count}개에서 가장 많이 나온 말은 "
+                f'"{quote}"였습니다.'
             )
 
         return (
-            f"실사용 후기를 분석했더니 "
-            f"{clause} 후기가 가장 많았습니다."
+            f"실제 구매 후기에서 가장 많이 나온 말은 "
+            f'"{quote}"였습니다.'
         )
 
     def _evidence_line(
@@ -1076,6 +1076,33 @@ class ReviewScriptGenerator:
             evidence=evidence,
             prefix="실제 구매자들의 후기를 보면",
         )
+
+    def _quote_style_evidence(
+        self,
+        evidence: str,
+    ) -> str:
+        text = self._clean_text(evidence).rstrip(".!? ")
+
+        replacements = (
+            ("딱 적당하다", "딱 적당해요"),
+            ("적당하다", "적당해요"),
+            ("편하다", "편해요"),
+            ("좋다", "좋아요"),
+            ("만족스럽다", "만족스러워요"),
+            ("튼튼하다", "튼튼해요"),
+            ("가볍다", "가벼워요"),
+        )
+
+        for before, after in replacements:
+            if text.endswith(before):
+                text = text[: -len(before)] + after
+                break
+
+        if not text.endswith(("요", "니다", "죠")):
+            if text.endswith("다"):
+                text = text[:-1] + "요"
+
+        return self._shorten(text, 40).rstrip("…")
 
     def _summarize_benefit(
         self,
