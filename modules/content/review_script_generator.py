@@ -15,67 +15,21 @@ class ReviewScriptGenerator:
     - 외부 AI API 없이 규칙 기반으로 동작
     """
 
-    VERSION = "review-script-generator-79-2"
+    VERSION = "review-script-generator-80-1"
 
-    def generate(
+    def _build_analysis_bundle(
         self,
-        review_hooks: Any = None,
-        review_quotes: Any = None,
-        review_insight: Any = None,
-        product_name: str = "",
-        review_count: int = 0,
+        hooks: Dict[str, Any],
+        quotes: Dict[str, Any],
+        insight: Dict[str, Any],
+        product_name: str,
+        review_count: int,
     ) -> Dict[str, Any]:
-        hooks = review_hooks if isinstance(review_hooks, dict) else {}
-        quotes = review_quotes if isinstance(review_quotes, dict) else {}
-        insight = review_insight if isinstance(review_insight, dict) else {}
-
-        product_name = self._clean_product_name(
-            product_name
-        )
-
-        product_strategy = self._classify_product_strategy(
-            product_name=product_name,
-            review_quotes=quotes,
-            review_insight=insight,
-        )
-
-        product_type = self._first_text(
-            product_strategy.get("product_type"),
-            "general",
-        )
-
-        shorts_strategy = self._first_text(
-            product_strategy.get("shorts_strategy"),
-            "review_evidence",
-        )
-
-        target_customer_result = self._classify_target_customer(
-            product_name=product_name,
-            product_type=product_type,
-            review_quotes=quotes,
-            review_insight=insight,
-        )
-
-        target_customer = self._first_text(
-            target_customer_result.get("target_customer"),
-            "일반 구매자",
-        )
-
-        target_reason = self._first_text(
-            target_customer_result.get("target_reason"),
-            "실제 사용 목적과 후기 내용을 기준으로 선정했습니다",
-        )
-
         count = self._safe_int(
             review_count
             or hooks.get("review_count")
             or insight.get("review_count")
             or quotes.get("review_count")
-        )
-
-        best_hook = self._first_text(
-            hooks.get("best_hook"),
-            self._extract_hook_text(hooks),
         )
 
         best_pain = self._first_text(
@@ -117,6 +71,39 @@ class ReviewScriptGenerator:
         evidence_summary = self._summarize_evidence(
             best_evidence,
             benefit_summary,
+        )
+
+        product_strategy = self._classify_product_strategy(
+            product_name=product_name,
+            review_quotes=quotes,
+            review_insight=insight,
+        )
+
+        product_type = self._first_text(
+            product_strategy.get("product_type"),
+            "general",
+        )
+
+        shorts_strategy = self._first_text(
+            product_strategy.get("shorts_strategy"),
+            "review_evidence",
+        )
+
+        target_customer_result = self._classify_target_customer(
+            product_name=product_name,
+            product_type=product_type,
+            review_quotes=quotes,
+            review_insight=insight,
+        )
+
+        target_customer = self._first_text(
+            target_customer_result.get("target_customer"),
+            "일반 구매자",
+        )
+
+        target_reason = self._first_text(
+            target_customer_result.get("target_reason"),
+            "실제 사용 목적과 후기 내용을 기준으로 선정했습니다",
         )
 
         review_type_result = self._classify_review_types(
@@ -210,6 +197,99 @@ class ReviewScriptGenerator:
                 psychology_result.get("dominant_type"),
                 "empathy",
             ),
+        )
+
+        strategy_bridge = self._strategy_bridge_sentence(
+            product_type=product_type,
+            shorts_strategy=shorts_strategy,
+            product_name=product_name,
+            dominant_review_type=dominant_review_type,
+        )
+
+        target_bridge = self._target_customer_sentence(
+            target_customer=target_customer,
+            product_type=product_type,
+            product_name=product_name,
+            evidence_summary=evidence_summary,
+        )
+
+        return {
+            "review_count": count,
+            "best_pain": best_pain,
+            "best_benefit": best_benefit,
+            "best_quote": best_quote,
+            "best_evidence": best_evidence,
+            "pain_summary": pain_summary,
+            "benefit_summary": benefit_summary,
+            "evidence_summary": evidence_summary,
+            "product_strategy": product_strategy,
+            "product_type": product_type,
+            "shorts_strategy": shorts_strategy,
+            "target_customer_result": target_customer_result,
+            "target_customer": target_customer,
+            "target_reason": target_reason,
+            "review_type_result": review_type_result,
+            "dominant_review_type": dominant_review_type,
+            "common_pattern": common_pattern,
+            "before_after_story": before_after_story,
+            "psychology_result": psychology_result,
+            "psychology_story": psychology_story,
+            "hook_psychology_type": hook_psychology_type,
+            "strategy_bridge": strategy_bridge,
+            "target_bridge": target_bridge,
+        }
+
+    def generate(
+        self,
+        review_hooks: Any = None,
+        review_quotes: Any = None,
+        review_insight: Any = None,
+        product_name: str = "",
+        review_count: int = 0,
+    ) -> Dict[str, Any]:
+        hooks = review_hooks if isinstance(review_hooks, dict) else {}
+        quotes = review_quotes if isinstance(review_quotes, dict) else {}
+        insight = review_insight if isinstance(review_insight, dict) else {}
+
+        product_name = self._clean_product_name(
+            product_name
+        )
+
+        bundle = self._build_analysis_bundle(
+            hooks=hooks,
+            quotes=quotes,
+            insight=insight,
+            product_name=product_name,
+            review_count=review_count,
+        )
+
+        count = bundle["review_count"]
+        best_pain = bundle["best_pain"]
+        best_benefit = bundle["best_benefit"]
+        best_quote = bundle["best_quote"]
+        best_evidence = bundle["best_evidence"]
+        pain_summary = bundle["pain_summary"]
+        benefit_summary = bundle["benefit_summary"]
+        evidence_summary = bundle["evidence_summary"]
+        product_strategy = bundle["product_strategy"]
+        product_type = bundle["product_type"]
+        shorts_strategy = bundle["shorts_strategy"]
+        target_customer_result = bundle["target_customer_result"]
+        target_customer = bundle["target_customer"]
+        target_reason = bundle["target_reason"]
+        review_type_result = bundle["review_type_result"]
+        dominant_review_type = bundle["dominant_review_type"]
+        common_pattern = bundle["common_pattern"]
+        before_after_story = bundle["before_after_story"]
+        psychology_result = bundle["psychology_result"]
+        psychology_story = bundle["psychology_story"]
+        hook_psychology_type = bundle["hook_psychology_type"]
+        strategy_bridge = bundle["strategy_bridge"]
+        target_bridge = bundle["target_bridge"]
+
+        best_hook = self._first_text(
+            hooks.get("best_hook"),
+            self._extract_hook_text(hooks),
         )
 
         best_hook_type = self._first_text(
@@ -334,109 +414,119 @@ class ReviewScriptGenerator:
         }
 
         print(
-            "[Sprint79-2 Script] Version:",
+            "[Sprint80-1 Script] Version:",
             self.VERSION,
             flush=True,
         )
         print(
-            "[Sprint79-2 Script] Product:",
+            "[Sprint80-1 Script] Analysis Bundle:",
+            "built_once",
+            flush=True,
+        )
+        print(
+            "[Sprint80-1 Script] Bundle Keys:",
+            sorted(bundle.keys()),
+            flush=True,
+        )
+        print(
+            "[Sprint80-1 Script] Product:",
             product_name,
             flush=True,
         )
         print(
-            "[Sprint79-2 Script] Product Type:",
+            "[Sprint80-1 Script] Product Type:",
             product_type,
             flush=True,
         )
         print(
-            "[Sprint79-2 Script] Shorts Strategy:",
+            "[Sprint80-1 Script] Shorts Strategy:",
             shorts_strategy,
             flush=True,
         )
         print(
-            "[Sprint79-2 Script] Strategy Reason:",
+            "[Sprint80-1 Script] Strategy Reason:",
             product_strategy.get("strategy_reason", ""),
             flush=True,
         )
         print(
-            "[Sprint79-2 Script] Strategy Bridge:",
+            "[Sprint80-1 Script] Strategy Bridge:",
             strategy_bridge,
             flush=True,
         )
         print(
-            "[Sprint79-2 Script] Target Customer:",
+            "[Sprint80-1 Script] Target Customer:",
             target_customer,
             flush=True,
         )
         print(
-            "[Sprint79-2 Script] Target Reason:",
+            "[Sprint80-1 Script] Target Reason:",
             target_reason,
             flush=True,
         )
         print(
-            "[Sprint79-2 Script] Target Confidence:",
+            "[Sprint80-1 Script] Target Confidence:",
             target_customer_result.get("confidence", 0),
             flush=True,
         )
         print(
-            "[Sprint79-2 Script] Target Bridge:",
+            "[Sprint80-1 Script] Target Bridge:",
             target_bridge,
             flush=True,
         )
         print(
-            "[Sprint79-2 Script] Hook Type:",
+            "[Sprint80-1 Script] Hook Type:",
             best_hook_type,
             flush=True,
         )
         print(
-            "[Sprint79-2 Script] Dominant Review Type:",
+            "[Sprint80-1 Script] Dominant Review Type:",
             review_type_result.get("dominant_type", ""),
             review_type_result.get("dominant_label", ""),
             flush=True,
         )
         print(
-            "[Sprint79-2 Script] Review Type Scores:",
+            "[Sprint80-1 Script] Review Type Scores:",
             review_type_result.get("scores", {}),
             flush=True,
         )
         print(
-            "[Sprint79-2 Script] Before:",
+            "[Sprint80-1 Script] Before:",
             before_after_story.get("before", ""),
             flush=True,
         )
         print(
-            "[Sprint79-2 Script] Choice:",
+            "[Sprint80-1 Script] Choice:",
             before_after_story.get("choice", ""),
             flush=True,
         )
         print(
-            "[Sprint79-2 Script] After:",
+            "[Sprint80-1 Script] After:",
             before_after_story.get("after", ""),
             flush=True,
         )
         print(
-            "[Sprint79-2 Script] Psychology Type:",
+            "[Sprint80-1 Script] Psychology Type:",
             psychology_result.get("dominant_type", ""),
             psychology_result.get("dominant_label", ""),
             flush=True,
         )
         print(
-            "[Sprint79-2 Script] Psychology Scores:",
+            "[Sprint80-1 Script] Psychology Scores:",
             psychology_result.get("scores", {}),
             flush=True,
         )
         print(
-            "[Sprint79-2 Script] Problem:",
+            "[Sprint80-1 Script] Problem:",
             psychology_story.get("problem", ""),
             flush=True,
         )
         print(
-            "[Sprint79-2 Script] Empathy:",
+            "[Sprint80-1 Script] Empathy:",
             psychology_story.get("empathy", ""),
             flush=True,
         )
         print(
-            "[Sprint79-2 Script] Short:",
+            "[Sprint80-1 Script] Short:",
             short_script.get("estimated_seconds", 0),
             "s",
             "error=",
@@ -450,7 +540,7 @@ class ReviewScriptGenerator:
             flush=True,
         )
         print(
-            "[Sprint79-2 Script] Medium:",
+            "[Sprint80-1 Script] Medium:",
             medium_script.get("estimated_seconds", 0),
             "s",
             "error=",
@@ -464,7 +554,7 @@ class ReviewScriptGenerator:
             flush=True,
         )
         print(
-            "[Sprint79-2 Script] Long:",
+            "[Sprint80-1 Script] Long:",
             long_script.get("estimated_seconds", 0),
             "s",
             "error=",
@@ -478,12 +568,12 @@ class ReviewScriptGenerator:
             flush=True,
         )
         print(
-            "[Sprint79-2 Script] Selected:",
+            "[Sprint80-1 Script] Selected:",
             "medium",
             flush=True,
         )
         print(
-            "[Sprint79-2 Script] Best Script:",
+            "[Sprint80-1 Script] Best Script:",
             best_script.get("text", ""),
             flush=True,
         )
@@ -497,6 +587,8 @@ class ReviewScriptGenerator:
             "product_type": product_type,
             "shorts_strategy": shorts_strategy,
             "product_strategy": product_strategy,
+            "analysis_bundle_version": "analysis-bundle-80-1",
+            "analysis_bundle_keys": sorted(bundle.keys()),
             "target_customer": target_customer,
             "target_reason": target_reason,
             "target_customer_result": target_customer_result,
@@ -547,6 +639,12 @@ class ReviewScriptGenerator:
                 "target_reason": target_reason,
                 "target_bridge": target_bridge,
                 "target_customer_result": target_customer_result,
+                "analysis_bundle_version": "analysis-bundle-80-1",
+                "analysis_bundle_reused_for": [
+                    "short_script",
+                    "medium_script",
+                    "long_script",
+                ],
                 "psychology_story": psychology_story,
                 "reason_summary": self._reason_sentence(
                     product_name=product_name,
