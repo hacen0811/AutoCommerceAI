@@ -15,7 +15,7 @@ class ReviewScriptGenerator:
     - 외부 AI API 없이 규칙 기반으로 동작
     """
 
-    VERSION = "review-script-generator-77-2"
+    VERSION = "review-script-generator-77-3"
 
     def generate(
         self,
@@ -107,6 +107,14 @@ class ReviewScriptGenerator:
             dominant_review_type=dominant_review_type,
         )
 
+        before_after_story = self._build_before_after_story(
+            product_name=product_name,
+            pain_summary=pain_summary,
+            benefit_summary=benefit_summary,
+            evidence_summary=evidence_summary,
+            dominant_review_type=dominant_review_type,
+        )
+
         best_hook_type = self._first_text(
             hooks.get("best_hook_type"),
             self._extract_hook_type(hooks),
@@ -125,6 +133,7 @@ class ReviewScriptGenerator:
             evidence_summary=evidence_summary,
             common_pattern=common_pattern,
             dominant_review_type=dominant_review_type,
+            before_after_story=before_after_story,
             review_count=count,
         )
 
@@ -137,6 +146,7 @@ class ReviewScriptGenerator:
             evidence_summary=evidence_summary,
             common_pattern=common_pattern,
             dominant_review_type=dominant_review_type,
+            before_after_story=before_after_story,
             review_count=count,
         )
 
@@ -148,6 +158,7 @@ class ReviewScriptGenerator:
             evidence_summary=evidence_summary,
             common_pattern=common_pattern,
             dominant_review_type=dominant_review_type,
+            before_after_story=before_after_story,
             review_count=count,
         )
 
@@ -195,33 +206,48 @@ class ReviewScriptGenerator:
         }
 
         print(
-            "[Sprint77-2 Script] Version:",
+            "[Sprint77-3 Script] Version:",
             self.VERSION,
             flush=True,
         )
         print(
-            "[Sprint77-2 Script] Product:",
+            "[Sprint77-3 Script] Product:",
             product_name,
             flush=True,
         )
         print(
-            "[Sprint77-2 Script] Hook Type:",
+            "[Sprint77-3 Script] Hook Type:",
             best_hook_type,
             flush=True,
         )
         print(
-            "[Sprint77-2 Script] Dominant Review Type:",
+            "[Sprint77-3 Script] Dominant Review Type:",
             review_type_result.get("dominant_type", ""),
             review_type_result.get("dominant_label", ""),
             flush=True,
         )
         print(
-            "[Sprint77-2 Script] Review Type Scores:",
+            "[Sprint77-3 Script] Review Type Scores:",
             review_type_result.get("scores", {}),
             flush=True,
         )
         print(
-            "[Sprint77-2 Script] Short:",
+            "[Sprint77-3 Script] Before:",
+            before_after_story.get("before", ""),
+            flush=True,
+        )
+        print(
+            "[Sprint77-3 Script] Choice:",
+            before_after_story.get("choice", ""),
+            flush=True,
+        )
+        print(
+            "[Sprint77-3 Script] After:",
+            before_after_story.get("after", ""),
+            flush=True,
+        )
+        print(
+            "[Sprint77-3 Script] Short:",
             short_script.get("estimated_seconds", 0),
             "s",
             "error=",
@@ -235,7 +261,7 @@ class ReviewScriptGenerator:
             flush=True,
         )
         print(
-            "[Sprint77-2 Script] Medium:",
+            "[Sprint77-3 Script] Medium:",
             medium_script.get("estimated_seconds", 0),
             "s",
             "error=",
@@ -249,7 +275,7 @@ class ReviewScriptGenerator:
             flush=True,
         )
         print(
-            "[Sprint77-2 Script] Long:",
+            "[Sprint77-3 Script] Long:",
             long_script.get("estimated_seconds", 0),
             "s",
             "error=",
@@ -263,12 +289,12 @@ class ReviewScriptGenerator:
             flush=True,
         )
         print(
-            "[Sprint77-2 Script] Selected:",
+            "[Sprint77-3 Script] Selected:",
             "medium",
             flush=True,
         )
         print(
-            "[Sprint77-2 Script] Best Script:",
+            "[Sprint77-3 Script] Best Script:",
             best_script.get("text", ""),
             flush=True,
         )
@@ -316,6 +342,7 @@ class ReviewScriptGenerator:
                 "review_type": review_type_result,
                 "dominant_review_type": dominant_review_type,
                 "common_pattern": common_pattern,
+                "before_after_story": before_after_story,
                 "reason_summary": self._reason_sentence(
                     product_name=product_name,
                     evidence_summary=evidence_summary,
@@ -332,6 +359,7 @@ class ReviewScriptGenerator:
         evidence_summary: str,
         common_pattern: str,
         dominant_review_type: str,
+        before_after_story: Dict[str, str],
         review_count: int,
     ) -> Dict[str, Any]:
         sections = {
@@ -341,9 +369,10 @@ class ReviewScriptGenerator:
                     78,
                 )
             ),
-            "common_pattern": self._sentence(
-                self._common_pattern_sentence(
-                    common_pattern
+            "after": self._sentence(
+                before_after_story.get(
+                    "after",
+                    benefit_summary,
                 )
             ),
             "cta": self._sentence(
@@ -354,16 +383,16 @@ class ReviewScriptGenerator:
         }
 
         script = self._script(
-            script_type="short_15s",
+            script_type="short_16s",
             sections=sections,
             score=96,
-            source="review_common_pattern_short",
-            target_seconds=15,
+            source="review_before_after_short",
+            target_seconds=16,
         )
 
         return self._fit_duration(
             script,
-            min_seconds=14,
+            min_seconds=15,
             max_seconds=18,
         )
 
@@ -377,6 +406,7 @@ class ReviewScriptGenerator:
         evidence_summary: str,
         common_pattern: str,
         dominant_review_type: str,
+        before_after_story: Dict[str, str],
         review_count: int,
     ) -> Dict[str, Any]:
         sections = {
@@ -386,31 +416,32 @@ class ReviewScriptGenerator:
                     90,
                 )
             ),
-            "common_pattern": self._sentence(
-                self._common_pattern_sentence(
-                    common_pattern
+            "before": self._sentence(
+                before_after_story.get(
+                    "before",
+                    pain_summary,
                 )
             ),
-            "reason": self._sentence(
-                self._reason_sentence(
-                    product_name=product_name,
-                    evidence_summary=evidence_summary,
-                    benefit_summary=benefit_summary,
-                    dominant_review_type=dominant_review_type,
+            "choice": self._sentence(
+                before_after_story.get(
+                    "choice",
+                    self._with_object_particle(product_name),
                 )
             ),
-            "benefit": self._sentence(
-                self._benefit_sentence(
-                    product_name=product_name,
-                    benefit_summary=benefit_summary,
-                    dominant_review_type=dominant_review_type,
+            "after": self._sentence(
+                before_after_story.get(
+                    "after",
+                    benefit_summary,
                 )
             ),
             "recommendation": self._sentence(
-                self._recommendation_sentence(
-                    product_name=product_name,
-                    evidence_summary=evidence_summary,
-                    dominant_review_type=dominant_review_type,
+                before_after_story.get(
+                    "recommendation",
+                    self._recommendation_sentence(
+                        product_name=product_name,
+                        evidence_summary=evidence_summary,
+                        dominant_review_type=dominant_review_type,
+                    ),
                 )
             ),
             "cta": self._sentence(
@@ -421,17 +452,17 @@ class ReviewScriptGenerator:
         }
 
         script = self._script(
-            script_type="medium_32s",
+            script_type="medium_36s",
             sections=sections,
             score=100,
-            source="review_common_pattern_medium",
-            target_seconds=32,
+            source="review_before_after_medium",
+            target_seconds=36,
         )
 
         return self._fit_duration(
             script,
-            min_seconds=29,
-            max_seconds=35,
+            min_seconds=32,
+            max_seconds=38,
         )
 
     def _build_long_script(
@@ -443,6 +474,7 @@ class ReviewScriptGenerator:
         evidence_summary: str,
         common_pattern: str,
         dominant_review_type: str,
+        before_after_story: Dict[str, str],
         review_count: int,
     ) -> Dict[str, Any]:
         sections = {
@@ -452,34 +484,37 @@ class ReviewScriptGenerator:
                     96,
                 )
             ),
-            "empathy": self._sentence(
-                f"여행 기간에 맞는 제품을 고를 때 {pain_summary} 때문에 고민하게 됩니다"
+            "before": self._sentence(
+                before_after_story.get(
+                    "before",
+                    pain_summary,
+                )
             ),
             "common_pattern": self._sentence(
                 self._common_pattern_sentence(
                     common_pattern
                 )
             ),
-            "reason": self._sentence(
-                self._reason_sentence(
-                    product_name=product_name,
-                    evidence_summary=evidence_summary,
-                    benefit_summary=benefit_summary,
-                    dominant_review_type=dominant_review_type,
+            "choice": self._sentence(
+                before_after_story.get(
+                    "choice",
+                    self._with_object_particle(product_name),
                 )
             ),
-            "benefit": self._sentence(
-                self._benefit_sentence(
-                    product_name=product_name,
-                    benefit_summary=benefit_summary,
-                    dominant_review_type=dominant_review_type,
+            "after": self._sentence(
+                before_after_story.get(
+                    "after",
+                    benefit_summary,
                 )
             ),
             "recommendation": self._sentence(
-                self._recommendation_sentence(
-                    product_name=product_name,
-                    evidence_summary=evidence_summary,
-                    dominant_review_type=dominant_review_type,
+                before_after_story.get(
+                    "recommendation",
+                    self._recommendation_sentence(
+                        product_name=product_name,
+                        evidence_summary=evidence_summary,
+                        dominant_review_type=dominant_review_type,
+                    ),
                 )
             ),
             "cta": self._sentence(
@@ -490,18 +525,101 @@ class ReviewScriptGenerator:
         }
 
         script = self._script(
-            script_type="long_32s",
+            script_type="long_34s",
             sections=sections,
-            score=94,
-            source="review_common_pattern_long",
-            target_seconds=32,
+            score=95,
+            source="review_before_after_long",
+            target_seconds=34,
         )
 
         return self._fit_duration(
             script,
-            min_seconds=29,
-            max_seconds=35,
+            min_seconds=31,
+            max_seconds=37,
         )
+
+    def _build_before_after_story(
+        self,
+        product_name: str,
+        pain_summary: str,
+        benefit_summary: str,
+        evidence_summary: str,
+        dominant_review_type: str,
+    ) -> Dict[str, str]:
+        product = self._clean_text(product_name)
+        pain = self._clean_text(pain_summary)
+        review_type = self._clean_text(dominant_review_type)
+        evidence = self._clean_text(evidence_summary)
+
+        before_map = {
+            "storage": "여행 전에는 짐이 많아질수록 수납과 정리가 가장 고민이었습니다",
+            "mobility": "여행 전에는 무거운 짐을 오래 끌고 이동하는 것이 가장 부담이었습니다",
+            "durability": "구매 전에는 자주 사용해도 오래 버틸 수 있을지가 가장 걱정됐습니다",
+            "value": "구매 전에는 가격과 필요한 기능 사이에서 선택하기가 어려웠습니다",
+            "design": "구매 전에는 실용성과 디자인을 함께 만족시키는 제품을 찾기 어려웠습니다",
+        }
+
+        choice_map = {
+            "storage": f"그래서 수납공간과 내부 구성을 기준으로 {self._with_object_particle(product)} 선택했습니다",
+            "mobility": f"그래서 바퀴 움직임과 무게를 기준으로 {self._with_object_particle(product)} 선택했습니다",
+            "durability": f"그래서 마감과 내구성을 기준으로 {self._with_object_particle(product)} 선택했습니다",
+            "value": f"그래서 가격 대비 구성과 기능을 비교해 {self._with_object_particle(product)} 선택했습니다",
+            "design": f"그래서 실용성과 디자인을 함께 보고 {self._with_object_particle(product)} 선택했습니다",
+        }
+
+        after_map = {
+            "storage": "사용 후에는 필요한 짐을 넉넉히 담으면서도 내부 정리가 한결 쉬워졌습니다",
+            "mobility": "사용 후에는 바퀴가 부드럽게 움직여 장거리 이동 부담이 줄었습니다",
+            "durability": "사용 후에는 단단한 마감 덕분에 반복해서 써도 안정감이 느껴졌습니다",
+            "value": "사용 후에는 필요한 기능을 충분히 활용하면서 구매 부담도 줄었습니다",
+            "design": "사용 후에는 깔끔한 디자인과 실용성을 함께 만족할 수 있었습니다",
+        }
+
+        recommendation_map = {
+            "storage": "짐이 많거나 내부 정리를 중요하게 보는 분께 특히 잘 맞습니다",
+            "mobility": "공항이나 이동 구간이 길어 바퀴 사용감을 중요하게 보는 분께 잘 맞습니다",
+            "durability": "한 번 구매해 오래 사용하려는 분께 잘 맞습니다",
+            "value": "예산 안에서 필요한 기능을 놓치고 싶지 않은 분께 잘 맞습니다",
+            "design": "실용성과 깔끔한 디자인을 함께 원하는 분께 잘 맞습니다",
+        }
+
+        before = before_map.get(
+            review_type,
+            f"사용 전에는 {pain} 때문에 선택이 쉽지 않았습니다",
+        )
+        choice = choice_map.get(
+            review_type,
+            f"그래서 실제 후기와 사용 목적을 기준으로 {self._with_object_particle(product)} 선택했습니다",
+        )
+        after = after_map.get(
+            review_type,
+            f"사용 후에는 {benefit_summary}을 실제로 체감할 수 있었습니다",
+        )
+        recommendation = recommendation_map.get(
+            review_type,
+            self._recommendation_sentence(
+                product_name=product,
+                evidence_summary=evidence,
+                dominant_review_type=review_type,
+            ),
+        )
+
+        if (
+            "3박 4일" in evidence
+            and "24인치" in evidence
+            and review_type == "storage"
+        ):
+            choice = (
+                "그래서 3박 4일 여행에 필요한 짐의 양을 기준으로 "
+                f"{self._with_object_particle(product)} 선택했습니다"
+            )
+
+        return {
+            "before": before,
+            "choice": choice,
+            "after": after,
+            "recommendation": recommendation,
+        }
 
     def _classify_review_types(
         self,
@@ -1011,6 +1129,7 @@ class ReviewScriptGenerator:
             "solution",
             "empathy",
             "evidence",
+            "common_pattern",
             "support",
             "detail",
             "trust",
