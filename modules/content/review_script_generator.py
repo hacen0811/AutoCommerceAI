@@ -15,7 +15,7 @@ class ReviewScriptGenerator:
     - 외부 AI API 없이 규칙 기반으로 동작
     """
 
-    VERSION = "review-script-generator-77-1"
+    VERSION = "review-script-generator-77-2"
 
     def generate(
         self,
@@ -86,12 +86,25 @@ class ReviewScriptGenerator:
             benefit_summary,
         )
 
+        review_type_result = self._classify_review_types(
+            review_quotes=quotes,
+            review_insight=insight,
+            evidence_summary=evidence_summary,
+            benefit_summary=benefit_summary,
+        )
+
+        dominant_review_type = self._first_text(
+            review_type_result.get("dominant_type"),
+            "general",
+        )
+
         common_pattern = self._extract_common_pattern(
             review_quotes=quotes,
             review_insight=insight,
             evidence_summary=evidence_summary,
             benefit_summary=benefit_summary,
             pain_summary=pain_summary,
+            dominant_review_type=dominant_review_type,
         )
 
         best_hook_type = self._first_text(
@@ -111,6 +124,7 @@ class ReviewScriptGenerator:
             benefit_summary=benefit_summary,
             evidence_summary=evidence_summary,
             common_pattern=common_pattern,
+            dominant_review_type=dominant_review_type,
             review_count=count,
         )
 
@@ -122,6 +136,7 @@ class ReviewScriptGenerator:
             benefit_summary=benefit_summary,
             evidence_summary=evidence_summary,
             common_pattern=common_pattern,
+            dominant_review_type=dominant_review_type,
             review_count=count,
         )
 
@@ -132,6 +147,7 @@ class ReviewScriptGenerator:
             benefit_summary=benefit_summary,
             evidence_summary=evidence_summary,
             common_pattern=common_pattern,
+            dominant_review_type=dominant_review_type,
             review_count=count,
         )
 
@@ -179,22 +195,33 @@ class ReviewScriptGenerator:
         }
 
         print(
-            "[Sprint77-1 Script] Version:",
+            "[Sprint77-2 Script] Version:",
             self.VERSION,
             flush=True,
         )
         print(
-            "[Sprint77-1 Script] Product:",
+            "[Sprint77-2 Script] Product:",
             product_name,
             flush=True,
         )
         print(
-            "[Sprint77-1 Script] Hook Type:",
+            "[Sprint77-2 Script] Hook Type:",
             best_hook_type,
             flush=True,
         )
         print(
-            "[Sprint77-1 Script] Short:",
+            "[Sprint77-2 Script] Dominant Review Type:",
+            review_type_result.get("dominant_type", ""),
+            review_type_result.get("dominant_label", ""),
+            flush=True,
+        )
+        print(
+            "[Sprint77-2 Script] Review Type Scores:",
+            review_type_result.get("scores", {}),
+            flush=True,
+        )
+        print(
+            "[Sprint77-2 Script] Short:",
             short_script.get("estimated_seconds", 0),
             "s",
             "error=",
@@ -208,7 +235,7 @@ class ReviewScriptGenerator:
             flush=True,
         )
         print(
-            "[Sprint77-1 Script] Medium:",
+            "[Sprint77-2 Script] Medium:",
             medium_script.get("estimated_seconds", 0),
             "s",
             "error=",
@@ -222,7 +249,7 @@ class ReviewScriptGenerator:
             flush=True,
         )
         print(
-            "[Sprint77-1 Script] Long:",
+            "[Sprint77-2 Script] Long:",
             long_script.get("estimated_seconds", 0),
             "s",
             "error=",
@@ -236,12 +263,12 @@ class ReviewScriptGenerator:
             flush=True,
         )
         print(
-            "[Sprint77-1 Script] Selected:",
+            "[Sprint77-2 Script] Selected:",
             "medium",
             flush=True,
         )
         print(
-            "[Sprint77-1 Script] Best Script:",
+            "[Sprint77-2 Script] Best Script:",
             best_script.get("text", ""),
             flush=True,
         )
@@ -286,6 +313,8 @@ class ReviewScriptGenerator:
                 "pain_summary": pain_summary,
                 "benefit_summary": benefit_summary,
                 "evidence_summary": evidence_summary,
+                "review_type": review_type_result,
+                "dominant_review_type": dominant_review_type,
                 "common_pattern": common_pattern,
                 "reason_summary": self._reason_sentence(
                     product_name=product_name,
@@ -302,6 +331,7 @@ class ReviewScriptGenerator:
         benefit_summary: str,
         evidence_summary: str,
         common_pattern: str,
+        dominant_review_type: str,
         review_count: int,
     ) -> Dict[str, Any]:
         sections = {
@@ -346,6 +376,7 @@ class ReviewScriptGenerator:
         benefit_summary: str,
         evidence_summary: str,
         common_pattern: str,
+        dominant_review_type: str,
         review_count: int,
     ) -> Dict[str, Any]:
         sections = {
@@ -365,18 +396,21 @@ class ReviewScriptGenerator:
                     product_name=product_name,
                     evidence_summary=evidence_summary,
                     benefit_summary=benefit_summary,
+                    dominant_review_type=dominant_review_type,
                 )
             ),
             "benefit": self._sentence(
                 self._benefit_sentence(
                     product_name=product_name,
                     benefit_summary=benefit_summary,
+                    dominant_review_type=dominant_review_type,
                 )
             ),
             "recommendation": self._sentence(
                 self._recommendation_sentence(
                     product_name=product_name,
                     evidence_summary=evidence_summary,
+                    dominant_review_type=dominant_review_type,
                 )
             ),
             "cta": self._sentence(
@@ -408,6 +442,7 @@ class ReviewScriptGenerator:
         benefit_summary: str,
         evidence_summary: str,
         common_pattern: str,
+        dominant_review_type: str,
         review_count: int,
     ) -> Dict[str, Any]:
         sections = {
@@ -430,18 +465,21 @@ class ReviewScriptGenerator:
                     product_name=product_name,
                     evidence_summary=evidence_summary,
                     benefit_summary=benefit_summary,
+                    dominant_review_type=dominant_review_type,
                 )
             ),
             "benefit": self._sentence(
                 self._benefit_sentence(
                     product_name=product_name,
                     benefit_summary=benefit_summary,
+                    dominant_review_type=dominant_review_type,
                 )
             ),
             "recommendation": self._sentence(
                 self._recommendation_sentence(
                     product_name=product_name,
                     evidence_summary=evidence_summary,
+                    dominant_review_type=dominant_review_type,
                 )
             ),
             "cta": self._sentence(
@@ -465,6 +503,168 @@ class ReviewScriptGenerator:
             max_seconds=35,
         )
 
+    def _classify_review_types(
+        self,
+        review_quotes: Dict[str, Any],
+        review_insight: Dict[str, Any],
+        evidence_summary: str,
+        benefit_summary: str,
+    ) -> Dict[str, Any]:
+        texts: List[str] = []
+
+        for source in (review_quotes, review_insight):
+            for key in (
+                "best_quote",
+                "best_evidence",
+                "best_benefit",
+                "best_result",
+                "common_pattern",
+                "review_common_pattern",
+            ):
+                value = self._clean_text(source.get(key))
+                if value:
+                    texts.append(value)
+
+            for key in (
+                "top_quotes",
+                "reviews",
+                "selected_reviews",
+                "top_evidence",
+                "evidence_candidates",
+            ):
+                values = source.get(key)
+                if not isinstance(values, list):
+                    continue
+
+                for item in values[:30]:
+                    value = self._clean_text(item)
+                    if value:
+                        texts.append(value)
+
+        texts.extend(
+            [
+                self._clean_text(evidence_summary),
+                self._clean_text(benefit_summary),
+            ]
+        )
+
+        category_keywords = {
+            "storage": (
+                "수납",
+                "많이 들어",
+                "넉넉",
+                "공간",
+                "분리",
+                "지퍼",
+                "포켓",
+                "정리",
+            ),
+            "mobility": (
+                "바퀴",
+                "부드럽",
+                "이동",
+                "가볍",
+                "끌기",
+                "손잡이",
+                "회전",
+            ),
+            "durability": (
+                "튼튼",
+                "내구",
+                "마감",
+                "견고",
+                "오래",
+                "단단",
+            ),
+            "value": (
+                "가성비",
+                "가격 대비",
+                "저렴",
+                "가격",
+                "합리",
+                "이 가격",
+            ),
+            "design": (
+                "디자인",
+                "색상",
+                "예쁘",
+                "깔끔",
+                "고급",
+                "세련",
+            ),
+        }
+
+        scores = {
+            category: 0
+            for category in category_keywords
+        }
+
+        matches = {
+            category: []
+            for category in category_keywords
+        }
+
+        for text in texts:
+            normalized = self._clean_text(text)
+
+            if not normalized:
+                continue
+
+            for category, keywords in category_keywords.items():
+                matched = [
+                    keyword
+                    for keyword in keywords
+                    if keyword in normalized
+                ]
+
+                if not matched:
+                    continue
+
+                scores[category] += len(matched)
+                matches[category].extend(matched)
+
+        priority = {
+            "storage": 5,
+            "mobility": 4,
+            "durability": 3,
+            "value": 2,
+            "design": 1,
+        }
+
+        dominant_type = max(
+            scores,
+            key=lambda category: (
+                scores.get(category, 0),
+                priority.get(category, 0),
+            ),
+        )
+
+        if scores.get(dominant_type, 0) <= 0:
+            dominant_type = "general"
+
+        labels = {
+            "storage": "수납형",
+            "mobility": "이동형",
+            "durability": "내구형",
+            "value": "가성비형",
+            "design": "디자인형",
+            "general": "일반형",
+        }
+
+        return {
+            "dominant_type": dominant_type,
+            "dominant_label": labels.get(
+                dominant_type,
+                "일반형",
+            ),
+            "scores": scores,
+            "matches": {
+                category: sorted(set(values))
+                for category, values in matches.items()
+            },
+            "source_count": len(texts),
+        }
+
     def _extract_common_pattern(
         self,
         review_quotes: Dict[str, Any],
@@ -472,6 +672,7 @@ class ReviewScriptGenerator:
         evidence_summary: str,
         benefit_summary: str,
         pain_summary: str,
+        dominant_review_type: str,
     ) -> str:
         candidates: List[str] = []
 
@@ -511,6 +712,33 @@ class ReviewScriptGenerator:
         evidence = self._clean_text(evidence_summary)
         benefit = self._clean_text(benefit_summary)
         pain = self._clean_text(pain_summary)
+        dominant_type = self._clean_text(dominant_review_type)
+
+        type_patterns = {
+            "storage": (
+                "고객들이 공통으로 말한 점은 "
+                "생각보다 짐이 많이 들어가고 내부 정리가 편하다는 것입니다"
+            ),
+            "mobility": (
+                "고객들이 공통으로 말한 점은 "
+                "바퀴 움직임이 부드럽고 이동할 때 부담이 적다는 것입니다"
+            ),
+            "durability": (
+                "고객들이 공통으로 말한 점은 "
+                "마감이 단단하고 오래 사용하기 좋다는 것입니다"
+            ),
+            "value": (
+                "고객들이 공통으로 말한 점은 "
+                "가격 대비 구성과 사용 만족도가 높다는 것입니다"
+            ),
+            "design": (
+                "고객들이 공통으로 말한 점은 "
+                "디자인이 깔끔하고 실제 모습도 만족스럽다는 것입니다"
+            ),
+        }
+
+        if dominant_type in type_patterns:
+            return type_patterns[dominant_type]
 
         if (
             "24인치" in evidence
@@ -609,9 +837,22 @@ class ReviewScriptGenerator:
         product_name: str,
         evidence_summary: str,
         benefit_summary: str,
+        dominant_review_type: str = "",
     ) -> str:
         evidence = self._clean_text(evidence_summary)
         product = self._clean_text(product_name)
+        review_type = self._clean_text(dominant_review_type)
+
+        type_reasons = {
+            "storage": "가장 큰 이유는 필요한 짐을 넉넉하게 담고도 내부 정리가 편하기 때문입니다",
+            "mobility": "가장 큰 이유는 바퀴 움직임이 부드럽고 오래 끌어도 부담이 적기 때문입니다",
+            "durability": "가장 큰 이유는 마감이 단단하고 반복 사용에도 안정감이 있기 때문입니다",
+            "value": "가장 큰 이유는 가격 대비 필요한 기능과 구성이 충분하기 때문입니다",
+            "design": "가장 큰 이유는 실용성을 유지하면서도 디자인이 깔끔하기 때문입니다",
+        }
+
+        if review_type in type_reasons:
+            return type_reasons[review_type]
 
         if (
             "3박 4일" in evidence
@@ -651,8 +892,21 @@ class ReviewScriptGenerator:
         self,
         product_name: str,
         benefit_summary: str,
+        dominant_review_type: str = "",
     ) -> str:
         product = self._clean_text(product_name)
+        review_type = self._clean_text(dominant_review_type)
+
+        type_benefits = {
+            "storage": "넉넉한 수납과 분리 정리 덕분에 여행 준비가 편해집니다",
+            "mobility": "부드러운 이동감 덕분에 공항이나 장거리 이동이 편해집니다",
+            "durability": "튼튼한 마감 덕분에 여러 번 사용해도 안정적으로 쓸 수 있습니다",
+            "value": "가격 대비 구성이 좋아 부담을 줄이면서 필요한 기능을 챙길 수 있습니다",
+            "design": "깔끔한 디자인 덕분에 실용성과 외관 만족을 함께 챙길 수 있습니다",
+        }
+
+        if review_type in type_benefits:
+            return type_benefits[review_type]
 
         if "캐리어" in product:
             return (
@@ -666,9 +920,22 @@ class ReviewScriptGenerator:
         self,
         product_name: str,
         evidence_summary: str,
+        dominant_review_type: str = "",
     ) -> str:
         evidence = self._clean_text(evidence_summary)
         product = self._clean_text(product_name)
+        review_type = self._clean_text(dominant_review_type)
+
+        type_recommendations = {
+            "storage": "짐이 많거나 수납 구성을 중요하게 보는 분께 잘 맞습니다",
+            "mobility": "이동이 많고 바퀴 사용감을 중요하게 보는 분께 잘 맞습니다",
+            "durability": "한 번 구매해 오래 사용하려는 분께 잘 맞습니다",
+            "value": "예산 안에서 실용적인 구성을 찾는 분께 잘 맞습니다",
+            "design": "깔끔한 디자인과 실용성을 함께 원하는 분께 잘 맞습니다",
+        }
+
+        if review_type in type_recommendations:
+            return type_recommendations[review_type]
 
         if (
             "3박 4일" in evidence
