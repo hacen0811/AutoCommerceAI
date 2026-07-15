@@ -15,7 +15,7 @@ class ReviewScriptGenerator:
     - 외부 AI API 없이 규칙 기반으로 동작
     """
 
-    VERSION = "review-script-generator-75-3c"
+    VERSION = "review-script-generator-76-2c"
 
     def generate(
         self,
@@ -65,6 +65,13 @@ class ReviewScriptGenerator:
             self._source_value(hooks, "best_quote"),
         )
 
+        best_evidence = self._first_text(
+            insight.get("best_evidence"),
+            quotes.get("best_evidence"),
+            self._source_value(hooks, "best_evidence"),
+            best_quote,
+        )
+
         pain_summary = self._summarize_pain(
             best_pain
         )
@@ -75,7 +82,7 @@ class ReviewScriptGenerator:
         )
 
         evidence_summary = self._summarize_evidence(
-            best_quote,
+            best_evidence,
             benefit_summary,
         )
 
@@ -87,7 +94,7 @@ class ReviewScriptGenerator:
         if not best_hook:
             best_hook = self._make_hook(
                 count=count,
-                benefit=benefit_summary,
+                evidence=evidence_summary,
             )
 
         short_script = self._build_short_script(
@@ -161,22 +168,22 @@ class ReviewScriptGenerator:
         }
 
         print(
-            "[Sprint75-3C Script] Version:",
+            "[Sprint76-2C Script] Version:",
             self.VERSION,
             flush=True,
         )
         print(
-            "[Sprint75-3C Script] Product:",
+            "[Sprint76-2C Script] Product:",
             product_name,
             flush=True,
         )
         print(
-            "[Sprint75-3C Script] Hook Type:",
+            "[Sprint76-2C Script] Hook Type:",
             best_hook_type,
             flush=True,
         )
         print(
-            "[Sprint75-3C Script] Short:",
+            "[Sprint76-2C Script] Short:",
             short_script.get("estimated_seconds", 0),
             "s",
             "error=",
@@ -190,7 +197,7 @@ class ReviewScriptGenerator:
             flush=True,
         )
         print(
-            "[Sprint75-3C Script] Medium:",
+            "[Sprint76-2C Script] Medium:",
             medium_script.get("estimated_seconds", 0),
             "s",
             "error=",
@@ -204,7 +211,7 @@ class ReviewScriptGenerator:
             flush=True,
         )
         print(
-            "[Sprint75-3C Script] Long:",
+            "[Sprint76-2C Script] Long:",
             long_script.get("estimated_seconds", 0),
             "s",
             "error=",
@@ -218,12 +225,12 @@ class ReviewScriptGenerator:
             flush=True,
         )
         print(
-            "[Sprint75-3C Script] Selected:",
+            "[Sprint76-2C Script] Selected:",
             "medium",
             flush=True,
         )
         print(
-            "[Sprint75-3C Script] Best Script:",
+            "[Sprint76-2C Script] Best Script:",
             best_script.get("text", ""),
             flush=True,
         )
@@ -264,9 +271,15 @@ class ReviewScriptGenerator:
                 "best_pain": best_pain,
                 "best_benefit": best_benefit,
                 "best_quote": best_quote,
+                "best_evidence": best_evidence,
                 "pain_summary": pain_summary,
                 "benefit_summary": benefit_summary,
                 "evidence_summary": evidence_summary,
+                "reason_summary": self._reason_sentence(
+                    product_name=product_name,
+                    evidence_summary=evidence_summary,
+                    benefit_summary=benefit_summary,
+                ),
             },
         }
 
@@ -278,21 +291,19 @@ class ReviewScriptGenerator:
         evidence_summary: str,
         review_count: int,
     ) -> Dict[str, Any]:
-        evidence = (
-            f"리뷰에서는 '{self._compress_evidence(evidence_summary)}'는 의견이 많았습니다"
-            if review_count > 0
-            else f"후기에서는 '{self._compress_evidence(evidence_summary)}'는 반응이 눈에 띄었습니다"
-        )
-
         sections = {
             "hook": self._sentence(
                 self._shorten(
                     best_hook,
-                    48,
+                    58,
                 )
             ),
-            "evidence": self._sentence(
-                evidence
+            "reason": self._sentence(
+                self._reason_sentence(
+                    product_name=product_name,
+                    evidence_summary=evidence_summary,
+                    benefit_summary=benefit_summary,
+                )
             ),
             "cta": self._sentence(
                 self._short_cta(
@@ -305,7 +316,7 @@ class ReviewScriptGenerator:
             script_type="short_15s",
             sections=sections,
             score=96,
-            source="multi_length_short",
+            source="evidence_reason_short",
             target_seconds=15,
         )
 
@@ -325,24 +336,25 @@ class ReviewScriptGenerator:
         evidence_summary: str,
         review_count: int,
     ) -> Dict[str, Any]:
-        evidence = (
-            f"리뷰 {review_count}개에서도 '{self._compress_evidence(evidence_summary)}'는 의견이 많았습니다"
-            if review_count > 0
-            else f"후기에서도 '{self._compress_evidence(evidence_summary)}'는 의견이 많았습니다"
-        )
-
         sections = {
             "hook": self._sentence(
                 self._shorten(
                     best_hook,
-                    58,
+                    76,
                 )
             ),
-            "evidence": self._sentence(
-                evidence
+            "reason": self._sentence(
+                self._reason_sentence(
+                    product_name=product_name,
+                    evidence_summary=evidence_summary,
+                    benefit_summary=benefit_summary,
+                )
             ),
             "benefit": self._sentence(
-                f"{benefit_summary} 덕분에 여행 준비가 훨씬 편해집니다"
+                self._benefit_sentence(
+                    product_name=product_name,
+                    benefit_summary=benefit_summary,
+                )
             ),
             "cta": self._sentence(
                 self._product_cta(
@@ -355,14 +367,14 @@ class ReviewScriptGenerator:
             script_type="medium_20s",
             sections=sections,
             score=100,
-            source="multi_length_medium",
+            source="evidence_reason_benefit_medium",
             target_seconds=20,
         )
 
         return self._fit_duration(
             script,
             min_seconds=19,
-            max_seconds=21,
+            max_seconds=22,
         )
 
     def _build_long_script(
@@ -378,22 +390,30 @@ class ReviewScriptGenerator:
             "hook": self._sentence(
                 self._shorten(
                     best_hook,
-                    64,
+                    76,
                 )
             ),
             "empathy": self._sentence(
-                f"여행 준비를 할 때마다 {pain_summary} 때문에 고민하게 됩니다"
+                f"여행 기간에 맞는 크기를 고를 때 {pain_summary} 때문에 고민하게 됩니다"
             ),
-            "evidence": self._sentence(
-                (
-                    f"리뷰 {review_count}개를 살펴보니 "
-                    f"'{self._compress_evidence(evidence_summary)}'는 의견이 가장 많았습니다"
-                    if review_count > 0
-                    else f"후기에서는 '{self._compress_evidence(evidence_summary)}'는 의견이 많았습니다"
+            "reason": self._sentence(
+                self._reason_sentence(
+                    product_name=product_name,
+                    evidence_summary=evidence_summary,
+                    benefit_summary=benefit_summary,
                 )
             ),
             "benefit": self._sentence(
-                f"{benefit_summary}이 가능해져 짐 정리와 이동이 훨씬 편해집니다"
+                self._benefit_sentence(
+                    product_name=product_name,
+                    benefit_summary=benefit_summary,
+                )
+            ),
+            "recommendation": self._sentence(
+                self._recommendation_sentence(
+                    product_name=product_name,
+                    evidence_summary=evidence_summary,
+                )
             ),
             "cta": self._sentence(
                 self._product_cta(
@@ -406,7 +426,7 @@ class ReviewScriptGenerator:
             script_type="long_30s",
             sections=sections,
             score=94,
-            source="multi_length_long",
+            source="evidence_reason_benefit_long",
             target_seconds=30,
         )
 
@@ -415,6 +435,89 @@ class ReviewScriptGenerator:
             min_seconds=28,
             max_seconds=32,
         )
+
+    def _reason_sentence(
+        self,
+        product_name: str,
+        evidence_summary: str,
+        benefit_summary: str,
+    ) -> str:
+        evidence = self._clean_text(evidence_summary)
+        product = self._clean_text(product_name)
+
+        if (
+            "3박 4일" in evidence
+            and "24인치" in evidence
+        ):
+            return (
+                "가장 큰 이유는 수납은 넉넉하면서도 "
+                "이동할 때 부담이 적기 때문입니다"
+            )
+
+        if (
+            "2박 3일" in evidence
+            and "20인치" in evidence
+        ):
+            return (
+                "필요한 짐은 충분히 담으면서도 "
+                "가볍게 이동하기 좋기 때문입니다"
+            )
+
+        if "캐리어" in product:
+            if "수납" in benefit_summary:
+                return (
+                    "필요한 짐을 넉넉히 담으면서도 "
+                    "정리와 이동이 편하기 때문입니다"
+                )
+            return "여행 짐을 담고 이동하기 편하기 때문입니다"
+
+        if "슬리퍼" in product:
+            return "바닥 공간을 덜 차지하면서 깔끔하게 정리할 수 있기 때문입니다"
+
+        if "텀블러" in product:
+            return "휴대하기 편하면서 원하는 온도를 오래 유지하기 때문입니다"
+
+        return f"{benefit_summary}을 실제 사용에서 체감하기 때문입니다"
+
+    def _benefit_sentence(
+        self,
+        product_name: str,
+        benefit_summary: str,
+    ) -> str:
+        product = self._clean_text(product_name)
+
+        if "캐리어" in product:
+            return (
+                f"{benefit_summary} 덕분에 "
+                "여행 준비와 이동이 편해집니다"
+            )
+
+        return f"{benefit_summary} 덕분에 일상에서 사용하기가 훨씬 편해집니다"
+
+    def _recommendation_sentence(
+        self,
+        product_name: str,
+        evidence_summary: str,
+    ) -> str:
+        evidence = self._clean_text(evidence_summary)
+        product = self._clean_text(product_name)
+
+        if (
+            "3박 4일" in evidence
+            and "24인치" in evidence
+        ):
+            return "그래서 3박 4일 여행용으로 많이 추천되고 있습니다"
+
+        if (
+            "2박 3일" in evidence
+            and "20인치" in evidence
+        ):
+            return "그래서 2박 3일 짧은 여행용으로 잘 맞습니다"
+
+        if "캐리어" in product:
+            return "그래서 여행 기간과 짐의 양을 기준으로 선택하기 좋습니다"
+
+        return "그래서 실제 사용 목적에 맞는지 확인하고 선택하는 것이 좋습니다"
 
     def _compress_evidence(
         self,
@@ -472,8 +575,8 @@ class ReviewScriptGenerator:
             "transition",
             "solution",
             "empathy",
-            "benefit",
             "evidence",
+            "recommendation",
         )
 
         while (
@@ -560,7 +663,13 @@ class ReviewScriptGenerator:
                     else " 꼭 확인해 보세요"
                 )
 
-                if suffix.strip() not in cta_text:
+                if (
+                    suffix.strip() not in cta_text
+                    and not (
+                        "꼭" in cta_text
+                        and "확인해 보세요" in suffix
+                    )
+                ):
                     sections["cta"] = self._sentence(
                         cta_text + suffix
                     )
@@ -942,17 +1051,19 @@ class ReviewScriptGenerator:
     def _make_hook(
         self,
         count: int,
-        benefit: str,
+        evidence: str,
     ) -> str:
+        clause = self._evidence_clause(evidence)
+
         if count > 0:
             return (
                 f"리뷰 {count}개를 분석했더니 "
-                f"가장 많이 나온 장점은 {benefit}이었습니다."
+                f"{clause} 후기가 가장 많았습니다."
             )
 
         return (
             f"실사용 후기를 분석했더니 "
-            f"가장 많이 나온 장점은 {benefit}이었습니다."
+            f"{clause} 후기가 가장 많았습니다."
         )
 
     def _evidence_line(
@@ -960,14 +1071,10 @@ class ReviewScriptGenerator:
         review_count: int,
         evidence: str,
     ) -> str:
-        prefix = (
-            f"실제 리뷰 {review_count}개를 살펴보니"
-            if review_count > 0
-            else "실사용 후기를 살펴보니"
-        )
-
-        return (
-            f"{prefix}, '{evidence}'라는 의견이 가장 눈에 띄었습니다"
+        return self._shared_evidence_sentence(
+            review_count=review_count,
+            evidence=evidence,
+            prefix="실제 구매자들의 후기를 보면",
         )
 
     def _summarize_benefit(
@@ -1052,38 +1159,89 @@ class ReviewScriptGenerator:
     ) -> str:
         text = self._clean_text(quote)
 
-        if any(
-            keyword in text
-            for keyword in (
-                "섞이지",
-                "분리",
-                "지퍼",
-                "메쉬 포켓",
-            )
+        if not text:
+            return f"{benefit}이 만족스럽다"
+
+        text = re.sub(r"\b3\s*박\s*4\s*일\b", "3박 4일", text)
+        text = re.sub(r"\b(\d{2})\s*인치\b", r"\1인치", text)
+
+        if (
+            "3박 4일" in text
+            and "24인치" in text
+            and any(word in text for word in ("적당", "딱", "알맞"))
         ):
+            return "3박 4일 여행에는 24인치가 딱 적당하다"
+
+        if (
+            "2박 3일" in text
+            and "20인치" in text
+            and any(word in text for word in ("적당", "딱", "알맞"))
+        ):
+            return "2박 3일 여행에는 20인치가 딱 적당하다"
+
+        if any(keyword in text for keyword in ("섞이지", "분리", "지퍼", "메쉬 포켓")):
             return "짐이 섞이지 않아 정리하기 편하다"
 
-        if any(
-            keyword in text
-            for keyword in (
-                "가볍",
-                "이동",
-                "끌기",
-            )
-        ):
+        if any(keyword in text for keyword in ("가볍", "이동", "끌기")):
             return "가볍고 이동이 편하다"
 
-        if any(
-            keyword in text
-            for keyword in (
-                "튼튼",
-                "오래",
-                "내구성",
-            )
-        ):
+        if any(keyword in text for keyword in ("튼튼", "오래", "내구성")):
             return "튼튼해서 오래 사용할 수 있다"
 
-        return f"{benefit}이 만족스럽다"
+        replacements = (
+            ("정도의", ""),
+            ("인 것 같네요", "다"),
+            ("인 것 같아요", "다"),
+            ("것 같네요", "다"),
+            ("것 같아요", "다"),
+        )
+        for before, after in replacements:
+            text = text.replace(before, after)
+
+        text = re.sub(r"\s+", " ", text).strip()
+        text = text.rstrip(".!? ")
+
+        return self._shorten(text, 38).rstrip("…")
+
+    def _evidence_clause(
+        self,
+        evidence: str,
+    ) -> str:
+        text = self._clean_text(evidence).rstrip(".!? ")
+
+        if not text:
+            return "실사용 만족도가 높다는"
+
+        if text.endswith("하다"):
+            return text[:-2] + "하다는"
+        if text.endswith("이다"):
+            return text[:-2] + "이라는"
+        if text.endswith("다"):
+            return text[:-1] + "다는"
+
+        return text + "라는"
+
+    def _shared_evidence_sentence(
+        self,
+        review_count: int,
+        evidence: str,
+        prefix: str = "",
+    ) -> str:
+        clause = self._evidence_clause(evidence)
+
+        if prefix:
+            return f"{prefix}, {clause} 의견이 가장 많았습니다"
+
+        if review_count > 0:
+            return (
+                f"리뷰 {review_count}개를 분석했더니 "
+                f"{clause} 후기가 가장 많았습니다"
+            )
+
+        return (
+            f"실사용 후기를 분석했더니 "
+            f"{clause} 후기가 가장 많았습니다"
+        )
 
     def _clean_product_name(
         self,
