@@ -15,7 +15,7 @@ class ReviewScriptGenerator:
     - 외부 AI API 없이 규칙 기반으로 동작
     """
 
-    VERSION = "review-script-generator-78-1"
+    VERSION = "review-script-generator-78-2"
 
     def generate(
         self,
@@ -115,12 +115,35 @@ class ReviewScriptGenerator:
             dominant_review_type=dominant_review_type,
         )
 
-        psychology_result = self._classify_purchase_psychology(
+        inferred_psychology = self._classify_purchase_psychology(
             product_name=product_name,
             pain_summary=pain_summary,
             evidence_summary=evidence_summary,
             dominant_review_type=dominant_review_type,
         )
+
+        hook_psychology_type = self._first_text(
+            hooks.get("psychology_type"),
+            self._source_value(hooks, "psychology_type"),
+        )
+
+        psychology_result = dict(inferred_psychology)
+
+        if hook_psychology_type:
+            psychology_result["dominant_type"] = hook_psychology_type
+            psychology_result["dominant_label"] = {
+                "comparison": "비교형",
+                "anxiety": "불안형",
+                "mistake_prevention": "실수방지형",
+                "empathy": "공감형",
+                "recommendation": "추천형",
+            }.get(
+                hook_psychology_type,
+                psychology_result.get("dominant_label", "공감형"),
+            )
+            psychology_result["source"] = "review_hook_generator"
+        else:
+            psychology_result["source"] = "review_script_generator"
 
         psychology_story = self._build_psychology_story(
             product_name=product_name,
@@ -137,6 +160,11 @@ class ReviewScriptGenerator:
             self._extract_hook_type(hooks),
         )
 
+        evidence_hook = self._make_hook(
+            count=count,
+            evidence=evidence_summary,
+        )
+
         if not best_hook:
             best_hook = self._make_hook(
                 count=count,
@@ -146,6 +174,7 @@ class ReviewScriptGenerator:
         short_script = self._build_short_script(
             product_name=product_name,
             best_hook=best_hook,
+            evidence_hook=evidence_hook,
             benefit_summary=benefit_summary,
             evidence_summary=evidence_summary,
             common_pattern=common_pattern,
@@ -159,6 +188,7 @@ class ReviewScriptGenerator:
             hook_type=best_hook_type,
             product_name=product_name,
             best_hook=best_hook,
+            evidence_hook=evidence_hook,
             pain_summary=pain_summary,
             benefit_summary=benefit_summary,
             evidence_summary=evidence_summary,
@@ -172,6 +202,7 @@ class ReviewScriptGenerator:
         long_script = self._build_long_script(
             product_name=product_name,
             best_hook=best_hook,
+            evidence_hook=evidence_hook,
             pain_summary=pain_summary,
             benefit_summary=benefit_summary,
             evidence_summary=evidence_summary,
@@ -226,69 +257,69 @@ class ReviewScriptGenerator:
         }
 
         print(
-            "[Sprint78-1 Script] Version:",
+            "[Sprint78-2 Script] Version:",
             self.VERSION,
             flush=True,
         )
         print(
-            "[Sprint78-1 Script] Product:",
+            "[Sprint78-2 Script] Product:",
             product_name,
             flush=True,
         )
         print(
-            "[Sprint78-1 Script] Hook Type:",
+            "[Sprint78-2 Script] Hook Type:",
             best_hook_type,
             flush=True,
         )
         print(
-            "[Sprint78-1 Script] Dominant Review Type:",
+            "[Sprint78-2 Script] Dominant Review Type:",
             review_type_result.get("dominant_type", ""),
             review_type_result.get("dominant_label", ""),
             flush=True,
         )
         print(
-            "[Sprint78-1 Script] Review Type Scores:",
+            "[Sprint78-2 Script] Review Type Scores:",
             review_type_result.get("scores", {}),
             flush=True,
         )
         print(
-            "[Sprint78-1 Script] Before:",
+            "[Sprint78-2 Script] Before:",
             before_after_story.get("before", ""),
             flush=True,
         )
         print(
-            "[Sprint78-1 Script] Choice:",
+            "[Sprint78-2 Script] Choice:",
             before_after_story.get("choice", ""),
             flush=True,
         )
         print(
-            "[Sprint78-1 Script] After:",
+            "[Sprint78-2 Script] After:",
             before_after_story.get("after", ""),
             flush=True,
         )
         print(
-            "[Sprint78-1 Script] Psychology Type:",
+            "[Sprint78-2 Script] Psychology Type:",
             psychology_result.get("dominant_type", ""),
             psychology_result.get("dominant_label", ""),
             flush=True,
         )
         print(
-            "[Sprint78-1 Script] Psychology Scores:",
+            "[Sprint78-2 Script] Psychology Scores:",
             psychology_result.get("scores", {}),
             flush=True,
         )
         print(
-            "[Sprint78-1 Script] Problem:",
+            "[Sprint78-2 Script] Problem:",
             psychology_story.get("problem", ""),
             flush=True,
         )
         print(
-            "[Sprint78-1 Script] Empathy:",
+            "[Sprint78-2 Script] Empathy:",
             psychology_story.get("empathy", ""),
             flush=True,
         )
         print(
-            "[Sprint78-1 Script] Short:",
+            "[Sprint78-2 Script] Short:",
             short_script.get("estimated_seconds", 0),
             "s",
             "error=",
@@ -302,7 +333,7 @@ class ReviewScriptGenerator:
             flush=True,
         )
         print(
-            "[Sprint78-1 Script] Medium:",
+            "[Sprint78-2 Script] Medium:",
             medium_script.get("estimated_seconds", 0),
             "s",
             "error=",
@@ -316,7 +347,7 @@ class ReviewScriptGenerator:
             flush=True,
         )
         print(
-            "[Sprint78-1 Script] Long:",
+            "[Sprint78-2 Script] Long:",
             long_script.get("estimated_seconds", 0),
             "s",
             "error=",
@@ -330,12 +361,12 @@ class ReviewScriptGenerator:
             flush=True,
         )
         print(
-            "[Sprint78-1 Script] Selected:",
+            "[Sprint78-2 Script] Selected:",
             "medium",
             flush=True,
         )
         print(
-            "[Sprint78-1 Script] Best Script:",
+            "[Sprint78-2 Script] Best Script:",
             best_script.get("text", ""),
             flush=True,
         )
@@ -348,6 +379,7 @@ class ReviewScriptGenerator:
             "review_count": count,
             "best_hook": best_hook,
             "best_hook_type": best_hook_type,
+            "evidence_hook": evidence_hook,
             "best_script": best_script.get("text", ""),
             "best_script_type": best_script.get("type", ""),
             "best_script_score": best_script.get("score", 0),
@@ -385,6 +417,7 @@ class ReviewScriptGenerator:
                 "common_pattern": common_pattern,
                 "before_after_story": before_after_story,
                 "purchase_psychology": psychology_result,
+                "hook_psychology_type": hook_psychology_type,
                 "psychology_story": psychology_story,
                 "reason_summary": self._reason_sentence(
                     product_name=product_name,
@@ -398,6 +431,7 @@ class ReviewScriptGenerator:
         self,
         product_name: str,
         best_hook: str,
+        evidence_hook: str,
         benefit_summary: str,
         evidence_summary: str,
         common_pattern: str,
@@ -413,10 +447,16 @@ class ReviewScriptGenerator:
                     before_after_story.get("before", ""),
                 )
             ),
-            "evidence": self._sentence(
+            "hook": self._sentence(
                 self._shorten(
                     best_hook,
-                    82,
+                    72,
+                )
+            ),
+            "evidence": self._sentence(
+                self._shorten(
+                    evidence_hook,
+                    88,
                 )
             ),
             "after": self._sentence(
@@ -451,6 +491,7 @@ class ReviewScriptGenerator:
         hook_type: str,
         product_name: str,
         best_hook: str,
+        evidence_hook: str,
         pain_summary: str,
         benefit_summary: str,
         evidence_summary: str,
@@ -461,10 +502,10 @@ class ReviewScriptGenerator:
         review_count: int,
     ) -> Dict[str, Any]:
         sections = {
-            "problem": self._sentence(
-                psychology_story.get(
-                    "problem",
-                    before_after_story.get("before", ""),
+            "hook": self._sentence(
+                self._shorten(
+                    best_hook,
+                    76,
                 )
             ),
             "empathy": self._sentence(
@@ -475,7 +516,7 @@ class ReviewScriptGenerator:
             ),
             "evidence": self._sentence(
                 self._shorten(
-                    best_hook,
+                    evidence_hook,
                     96,
                 )
             ),
@@ -522,6 +563,7 @@ class ReviewScriptGenerator:
         self,
         product_name: str,
         best_hook: str,
+        evidence_hook: str,
         pain_summary: str,
         benefit_summary: str,
         evidence_summary: str,
@@ -532,6 +574,12 @@ class ReviewScriptGenerator:
         review_count: int,
     ) -> Dict[str, Any]:
         sections = {
+            "hook": self._sentence(
+                self._shorten(
+                    best_hook,
+                    80,
+                )
+            ),
             "problem": self._sentence(
                 psychology_story.get(
                     "problem",
@@ -552,7 +600,7 @@ class ReviewScriptGenerator:
             ),
             "evidence": self._sentence(
                 self._shorten(
-                    best_hook,
+                    evidence_hook,
                     102,
                 )
             ),
