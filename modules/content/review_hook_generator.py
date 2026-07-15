@@ -15,7 +15,7 @@ class ReviewHookGenerator:
     - 외부 AI API 없이 규칙 기반으로 동작
     """
 
-    VERSION = "review-hook-generator-75-1"
+    VERSION = "review-hook-generator-75-2a"
 
     def generate(
         self,
@@ -65,45 +65,60 @@ class ReviewHookGenerator:
 
         hooks: List[Dict[str, Any]] = []
 
-        if benefit_summary:
-            hooks.append(
-                self._hook(
-                    "review_evidence",
-                    self._review_evidence_hook(
-                        count=count,
-                        benefit=benefit_summary,
-                    ),
-                    score=98,
-                    source="benefit_summary",
-                )
+        hook_candidates = [
+            (
+                "problem",
+                f"{pain_summary}, 아직도 고민하고 계세요?",
+                "pain_summary",
+            ),
+            (
+                "review_evidence",
+                self._review_evidence_hook(
+                    count=count,
+                    benefit=benefit_summary,
+                ),
+                "benefit_summary",
+            ),
+            (
+                "curiosity",
+                self._curiosity_hook(
+                    benefit_summary
+                ),
+                "benefit_summary",
+            ),
+            (
+                "result",
+                self._result_hook(
+                    product_name=product_name,
+                    benefit=benefit_summary,
+                ),
+                "benefit_summary",
+            ),
+            (
+                "before_after",
+                self._before_after_hook(
+                    pain=pain_summary,
+                    benefit=benefit_summary,
+                ),
+                "pain_and_benefit",
+            ),
+        ]
+
+        for hook_type, hook_text_value, source in hook_candidates:
+            viral_score = self._viral_score(
+                hook_type=hook_type,
+                text=hook_text_value,
+                count=count,
+                benefit=benefit_summary,
+                pain=pain_summary,
             )
 
             hooks.append(
                 self._hook(
-                    "result",
-                    f"의외로 만족도가 가장 높았던 건 {benefit_summary}이었습니다.",
-                    score=95,
-                    source="benefit_summary",
-                )
-            )
-
-        if pain_summary:
-            hooks.append(
-                self._hook(
-                    "problem_question",
-                    f"{pain_summary}, 아직도 참고 계세요?",
-                    score=92,
-                    source="pain_summary",
-                )
-            )
-
-        if product_name:
-            hooks.append(
-                self._hook(
-                    "product_result",
-                    f"{product_name}, 실제 후기를 보면 장점이 더 분명합니다.",
-                    score=88,
-                    source="product_name",
+                    hook_type,
+                    hook_text_value,
+                    score=viral_score,
+                    source=source,
                 )
             )
 
@@ -118,26 +133,62 @@ class ReviewHookGenerator:
             )
 
         hooks = self._dedupe_hooks(hooks)
+        type_priority = {
+            "curiosity": 5,
+            "review_evidence": 4,
+            "before_after": 3,
+            "problem": 2,
+            "result": 1,
+        }
+
         hooks.sort(
-            key=lambda item: item.get("score", 0),
+            key=lambda item: (
+                item.get("score", 0),
+                type_priority.get(
+                    item.get("type", ""),
+                    0,
+                ),
+                -item.get("length", 0),
+            ),
             reverse=True,
         )
 
         best_hook = hooks[0] if hooks else {}
 
         print(
-            "[Sprint75-1 Hook] Version:",
+            "[Sprint75-2 Hook] Version:",
             self.VERSION,
             flush=True,
         )
         print(
-            "[Sprint75-1 Hook] Product:",
+            "[Sprint75-2 Hook] Product:",
             product_name,
             flush=True,
         )
         print(
-            "[Sprint75-1 Hook] Best Hook:",
+            "[Sprint75-2 Hook] Best Hook:",
             best_hook.get("text", ""),
+            flush=True,
+        )
+
+        print(
+            "[Sprint75-2 Hook] Generated:",
+            len(hooks),
+            flush=True,
+        )
+
+        for item in hooks:
+            print(
+                "[Sprint75-2 Hook] Score:",
+                item.get("type"),
+                item.get("score"),
+                repr(item.get("text", "")),
+                flush=True,
+            )
+
+        print(
+            "[Sprint75-2 Hook] Selected:",
+            best_hook.get("type", ""),
             flush=True,
         )
 
@@ -151,6 +202,11 @@ class ReviewHookGenerator:
             "best_hook_type": best_hook.get("type", ""),
             "best_hook_score": best_hook.get("score", 0),
             "hooks": hooks,
+            "top_hooks": hooks[:3],
+            "hook_scores": {
+                item.get("type", ""): item.get("score", 0)
+                for item in hooks
+            },
             "source": {
                 "best_pain": best_pain,
                 "best_benefit": best_benefit,
@@ -174,6 +230,119 @@ class ReviewHookGenerator:
         return (
             f"실사용 후기를 분석했더니 "
             f"가장 많이 나온 장점은 {benefit}이었습니다."
+        )
+
+    def _curiosity_hook(
+        self,
+        benefit: str,
+    ) -> str:
+        if benefit == "깔끔한 디자인":
+            return "예뻐서 산 줄 알았는데, 만족한 이유는 따로 있었습니다."
+
+        return (
+            f"의외로 가장 만족도가 높았던 건 "
+            f"{benefit}이었습니다."
+        )
+
+    def _result_hook(
+        self,
+        product_name: str,
+        benefit: str,
+    ) -> str:
+        if "캐리어" in product_name:
+            return (
+                f"캐리어 하나 바꿨는데 "
+                f"여행 준비가 훨씬 편해졌습니다."
+            )
+
+        return (
+            f"{product_name} 하나 바꿨는데 "
+            f"{benefit}이 확실히 달라졌습니다."
+        )
+
+    def _before_after_hook(
+        self,
+        pain: str,
+        benefit: str,
+    ) -> str:
+        return (
+            f"예전에는 {pain}가 고민이었는데, "
+            f"지금은 {benefit}으로 훨씬 편해졌습니다."
+        )
+
+    def _viral_score(
+        self,
+        hook_type: str,
+        text: str,
+        count: int,
+        benefit: str,
+        pain: str,
+    ) -> int:
+        cleaned = self._clean_text(text)
+        score = 52
+
+        length = len(cleaned)
+
+        if 26 <= length <= 50:
+            score += 14
+        elif 20 <= length <= 64:
+            score += 10
+        elif length <= 76:
+            score += 5
+        else:
+            score -= 6
+
+        if count > 0 and str(count) in cleaned:
+            score += 7
+
+        curiosity_words = (
+            "의외로",
+            "따로",
+            "가장",
+            "왜",
+        )
+
+        if any(
+            word in cleaned
+            for word in curiosity_words
+        ):
+            score += 9
+
+        if benefit and benefit in cleaned:
+            score += 7
+
+        if pain and pain in cleaned:
+            score += 4
+
+        type_bonus = {
+            "curiosity": 12,
+            "review_evidence": 10,
+            "before_after": 8,
+            "problem": 6,
+            "result": 5,
+        }
+
+        score += type_bonus.get(
+            hook_type,
+            0,
+        )
+
+        if cleaned.endswith("?"):
+            score += 2
+
+        # 과장·중복 가능성이 높은 긴 문장은 감점
+        if cleaned.count("가장") > 1:
+            score -= 3
+
+        if len(cleaned) > 68:
+            score -= 4
+
+        return max(
+            0,
+            min(
+                99,
+                int(score),
+            ),
         )
 
     def _summarize_benefit(

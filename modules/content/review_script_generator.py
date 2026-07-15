@@ -15,7 +15,7 @@ class ReviewScriptGenerator:
     - 외부 AI API 없이 규칙 기반으로 동작
     """
 
-    VERSION = "review-script-generator-75-1a"
+    VERSION = "review-script-generator-75-2a"
 
     def generate(
         self,
@@ -79,6 +79,11 @@ class ReviewScriptGenerator:
             benefit_summary,
         )
 
+        best_hook_type = self._first_text(
+            hooks.get("best_hook_type"),
+            self._extract_hook_type(hooks),
+        )
+
         if not best_hook:
             best_hook = self._make_hook(
                 count=count,
@@ -86,6 +91,15 @@ class ReviewScriptGenerator:
             )
 
         scripts = [
+            self._build_adaptive_script(
+                hook_type=best_hook_type,
+                product_name=product_name,
+                best_hook=best_hook,
+                pain_summary=pain_summary,
+                benefit_summary=benefit_summary,
+                evidence_summary=evidence_summary,
+                review_count=count,
+            ),
             self._build_review_evidence_script(
                 product_name=product_name,
                 best_hook=best_hook,
@@ -137,17 +151,22 @@ class ReviewScriptGenerator:
         )
 
         print(
-            "[Sprint75-1 Script] Version:",
+            "[Sprint75-2 Script] Version:",
             self.VERSION,
             flush=True,
         )
         print(
-            "[Sprint75-1 Script] Product:",
+            "[Sprint75-2 Script] Product:",
             product_name,
             flush=True,
         )
         print(
-            "[Sprint75-1 Script] Best Script:",
+            "[Sprint75-2 Script] Hook Type:",
+            best_hook_type,
+            flush=True,
+        )
+        print(
+            "[Sprint75-2 Script] Best Script:",
             best_script.get("text", ""),
             flush=True,
         )
@@ -159,10 +178,7 @@ class ReviewScriptGenerator:
             "product_name": product_name,
             "review_count": count,
             "best_hook": best_hook,
-            "best_hook_type": hooks.get(
-                "best_hook_type",
-                "",
-            ),
+            "best_hook_type": best_hook_type,
             "best_script": best_script.get("text", ""),
             "best_script_type": best_script.get("type", ""),
             "best_script_score": best_script.get("score", 0),
@@ -189,6 +205,124 @@ class ReviewScriptGenerator:
                 "evidence_summary": evidence_summary,
             },
         }
+
+    def _build_adaptive_script(
+        self,
+        hook_type: str,
+        product_name: str,
+        best_hook: str,
+        pain_summary: str,
+        benefit_summary: str,
+        evidence_summary: str,
+        review_count: int,
+    ) -> Dict[str, Any]:
+        hook = self._sentence(
+            self._shorten(
+                best_hook,
+                76,
+            )
+        )
+
+        evidence = self._sentence(
+            self._evidence_line(
+                review_count=review_count,
+                evidence=evidence_summary,
+            )
+        )
+
+        benefit = self._sentence(
+            f"{benefit_summary} 덕분에 여행 준비와 짐 정리가 훨씬 편해집니다"
+        )
+
+        cta = self._sentence(
+            self._product_cta(
+                product_name
+            )
+        )
+
+        if hook_type == "curiosity":
+            sections = {
+                "hook": hook,
+                "reveal": self._sentence(
+                    f"실제로 가장 많이 언급된 부분은 {benefit_summary}이었습니다"
+                ),
+                "evidence": evidence,
+                "result": benefit,
+                "cta": cta,
+            }
+            score = 100
+
+        elif hook_type == "problem":
+            sections = {
+                "hook": hook,
+                "solution": self._sentence(
+                    f"{self._with_object_particle(product_name)} 사용하면 짐을 나눠 담기 편합니다"
+                ),
+                "evidence": evidence,
+                "result": benefit,
+                "cta": cta,
+            }
+            score = 98
+
+        elif hook_type == "before_after":
+            sections = {
+                "hook": hook,
+                "before": self._sentence(
+                    f"사용 전에는 {pain_summary}가 가장 불편했습니다"
+                ),
+                "after": self._sentence(
+                    f"사용 후에는 {benefit_summary}이 가능해졌습니다"
+                ),
+                "evidence": evidence,
+                "cta": cta,
+            }
+            score = 97
+
+        elif hook_type == "result":
+            sections = {
+                "hook": hook,
+                "reason": self._sentence(
+                    f"핵심은 {benefit_summary}입니다"
+                ),
+                "evidence": evidence,
+                "result": benefit,
+                "cta": cta,
+            }
+            score = 96
+
+        else:
+            sections = {
+                "hook": hook,
+                "evidence": evidence,
+                "result": benefit,
+                "cta": cta,
+            }
+            score = 99
+
+        return self._script(
+            script_type=f"adaptive_{hook_type or 'evidence'}",
+            sections=sections,
+            score=score,
+            source="selected_viral_hook",
+        )
+
+    def _product_cta(
+        self,
+        product_name: str,
+    ) -> str:
+        if "캐리어" in product_name:
+            return "여행 전에 후기와 수납 구성을 꼭 비교해 보세요"
+
+        if "슬리퍼" in product_name:
+            return "욕실 정리가 고민이라면 한번 확인해 보세요"
+
+        if "텀블러" in product_name:
+            return "보냉력과 사용 후기를 함께 확인해 보세요"
+
+        return (
+            f"{self._with_object_particle(product_name)} "
+            f"찾고 있다면 후기부터 확인해 보세요"
+        )
 
     def _build_review_evidence_script(
         self,
@@ -588,6 +722,28 @@ class ReviewScriptGenerator:
 
             if text:
                 return text
+
+        return ""
+
+    def _extract_hook_type(
+        self,
+        review_hooks: Dict[str, Any],
+    ) -> str:
+        hooks = review_hooks.get("hooks")
+
+        if not isinstance(hooks, list):
+            return ""
+
+        for item in hooks:
+            if not isinstance(item, dict):
+                continue
+
+            hook_type = self._clean_text(
+                item.get("type")
+            )
+
+            if hook_type:
+                return hook_type
 
         return ""
 
