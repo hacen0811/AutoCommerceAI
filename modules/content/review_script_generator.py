@@ -15,7 +15,7 @@ class ReviewScriptGenerator:
     - 외부 AI API 없이 규칙 기반으로 동작
     """
 
-    VERSION = "review-script-generator-80-1"
+    VERSION = "review-script-generator-80-2a"
 
     def _build_analysis_bundle(
         self,
@@ -237,6 +237,7 @@ class ReviewScriptGenerator:
             "hook_psychology_type": hook_psychology_type,
             "strategy_bridge": strategy_bridge,
             "target_bridge": target_bridge,
+            "bridge_library_version": "bridge-library-80-2a",
         }
 
     def generate(
@@ -286,6 +287,10 @@ class ReviewScriptGenerator:
         hook_psychology_type = bundle["hook_psychology_type"]
         strategy_bridge = bundle["strategy_bridge"]
         target_bridge = bundle["target_bridge"]
+        psychology_type = self._first_text(
+            psychology_result.get("dominant_type"),
+            "empathy",
+        )
 
         best_hook = self._first_text(
             hooks.get("best_hook"),
@@ -335,6 +340,9 @@ class ReviewScriptGenerator:
             strategy_bridge=strategy_bridge,
             target_bridge=target_bridge,
             review_count=count,
+            product_type=product_type,
+            shorts_strategy=shorts_strategy,
+            psychology_type=psychology_type,
         )
 
         medium_script = self._build_medium_script(
@@ -352,6 +360,9 @@ class ReviewScriptGenerator:
             strategy_bridge=strategy_bridge,
             target_bridge=target_bridge,
             review_count=count,
+            product_type=product_type,
+            shorts_strategy=shorts_strategy,
+            psychology_type=psychology_type,
         )
 
         long_script = self._build_long_script(
@@ -368,6 +379,9 @@ class ReviewScriptGenerator:
             strategy_bridge=strategy_bridge,
             target_bridge=target_bridge,
             review_count=count,
+            product_type=product_type,
+            shorts_strategy=shorts_strategy,
+            psychology_type=psychology_type,
         )
 
         scripts = [
@@ -414,119 +428,129 @@ class ReviewScriptGenerator:
         }
 
         print(
-            "[Sprint80-1 Script] Version:",
+            "[Sprint80-2A Script] Version:",
             self.VERSION,
             flush=True,
         )
         print(
-            "[Sprint80-1 Script] Analysis Bundle:",
+            "[Sprint80-2A Script] Analysis Bundle:",
             "built_once",
             flush=True,
         )
         print(
-            "[Sprint80-1 Script] Bundle Keys:",
+            "[Sprint80-2A Script] Bundle Keys:",
             sorted(bundle.keys()),
             flush=True,
         )
         print(
-            "[Sprint80-1 Script] Product:",
+            "[Sprint80-2A Script] Bridge Library:",
+            "bridge-library-80-2a",
+            flush=True,
+        )
+        print(
+            "[Sprint80-2A Script] Bridge Psychology:",
+            psychology_type,
+            flush=True,
+        )
+        print(
+            "[Sprint80-2A Script] Product:",
             product_name,
             flush=True,
         )
         print(
-            "[Sprint80-1 Script] Product Type:",
+            "[Sprint80-2A Script] Product Type:",
             product_type,
             flush=True,
         )
         print(
-            "[Sprint80-1 Script] Shorts Strategy:",
+            "[Sprint80-2A Script] Shorts Strategy:",
             shorts_strategy,
             flush=True,
         )
         print(
-            "[Sprint80-1 Script] Strategy Reason:",
+            "[Sprint80-2A Script] Strategy Reason:",
             product_strategy.get("strategy_reason", ""),
             flush=True,
         )
         print(
-            "[Sprint80-1 Script] Strategy Bridge:",
+            "[Sprint80-2A Script] Strategy Bridge:",
             strategy_bridge,
             flush=True,
         )
         print(
-            "[Sprint80-1 Script] Target Customer:",
+            "[Sprint80-2A Script] Target Customer:",
             target_customer,
             flush=True,
         )
         print(
-            "[Sprint80-1 Script] Target Reason:",
+            "[Sprint80-2A Script] Target Reason:",
             target_reason,
             flush=True,
         )
         print(
-            "[Sprint80-1 Script] Target Confidence:",
+            "[Sprint80-2A Script] Target Confidence:",
             target_customer_result.get("confidence", 0),
             flush=True,
         )
         print(
-            "[Sprint80-1 Script] Target Bridge:",
+            "[Sprint80-2A Script] Target Bridge:",
             target_bridge,
             flush=True,
         )
         print(
-            "[Sprint80-1 Script] Hook Type:",
+            "[Sprint80-2A Script] Hook Type:",
             best_hook_type,
             flush=True,
         )
         print(
-            "[Sprint80-1 Script] Dominant Review Type:",
+            "[Sprint80-2A Script] Dominant Review Type:",
             review_type_result.get("dominant_type", ""),
             review_type_result.get("dominant_label", ""),
             flush=True,
         )
         print(
-            "[Sprint80-1 Script] Review Type Scores:",
+            "[Sprint80-2A Script] Review Type Scores:",
             review_type_result.get("scores", {}),
             flush=True,
         )
         print(
-            "[Sprint80-1 Script] Before:",
+            "[Sprint80-2A Script] Before:",
             before_after_story.get("before", ""),
             flush=True,
         )
         print(
-            "[Sprint80-1 Script] Choice:",
+            "[Sprint80-2A Script] Choice:",
             before_after_story.get("choice", ""),
             flush=True,
         )
         print(
-            "[Sprint80-1 Script] After:",
+            "[Sprint80-2A Script] After:",
             before_after_story.get("after", ""),
             flush=True,
         )
         print(
-            "[Sprint80-1 Script] Psychology Type:",
+            "[Sprint80-2A Script] Psychology Type:",
             psychology_result.get("dominant_type", ""),
             psychology_result.get("dominant_label", ""),
             flush=True,
         )
         print(
-            "[Sprint80-1 Script] Psychology Scores:",
+            "[Sprint80-2A Script] Psychology Scores:",
             psychology_result.get("scores", {}),
             flush=True,
         )
         print(
-            "[Sprint80-1 Script] Problem:",
+            "[Sprint80-2A Script] Problem:",
             psychology_story.get("problem", ""),
             flush=True,
         )
         print(
-            "[Sprint80-1 Script] Empathy:",
+            "[Sprint80-2A Script] Empathy:",
             psychology_story.get("empathy", ""),
             flush=True,
         )
         print(
-            "[Sprint80-1 Script] Short:",
+            "[Sprint80-2A Script] Short:",
             short_script.get("estimated_seconds", 0),
             "s",
             "error=",
@@ -540,7 +564,7 @@ class ReviewScriptGenerator:
             flush=True,
         )
         print(
-            "[Sprint80-1 Script] Medium:",
+            "[Sprint80-2A Script] Medium:",
             medium_script.get("estimated_seconds", 0),
             "s",
             "error=",
@@ -554,7 +578,7 @@ class ReviewScriptGenerator:
             flush=True,
         )
         print(
-            "[Sprint80-1 Script] Long:",
+            "[Sprint80-2A Script] Long:",
             long_script.get("estimated_seconds", 0),
             "s",
             "error=",
@@ -568,12 +592,12 @@ class ReviewScriptGenerator:
             flush=True,
         )
         print(
-            "[Sprint80-1 Script] Selected:",
+            "[Sprint80-2A Script] Selected:",
             "medium",
             flush=True,
         )
         print(
-            "[Sprint80-1 Script] Best Script:",
+            "[Sprint80-2A Script] Best Script:",
             best_script.get("text", ""),
             flush=True,
         )
@@ -588,6 +612,8 @@ class ReviewScriptGenerator:
             "shorts_strategy": shorts_strategy,
             "product_strategy": product_strategy,
             "analysis_bundle_version": "analysis-bundle-80-1",
+            "bridge_library_version": "bridge-library-80-2a",
+            "bridge_psychology_type": psychology_type,
             "analysis_bundle_keys": sorted(bundle.keys()),
             "target_customer": target_customer,
             "target_reason": target_reason,
@@ -640,6 +666,8 @@ class ReviewScriptGenerator:
                 "target_bridge": target_bridge,
                 "target_customer_result": target_customer_result,
                 "analysis_bundle_version": "analysis-bundle-80-1",
+                "bridge_library_version": "bridge-library-80-2a",
+                "bridge_psychology_type": psychology_type,
                 "analysis_bundle_reused_for": [
                     "short_script",
                     "medium_script",
@@ -668,6 +696,9 @@ class ReviewScriptGenerator:
         strategy_bridge: str,
         target_bridge: str,
         review_count: int,
+        product_type: str,
+        shorts_strategy: str,
+        psychology_type: str,
     ) -> Dict[str, Any]:
         sections = {
             "problem": self._sentence(
@@ -707,6 +738,14 @@ class ReviewScriptGenerator:
             ),
         }
 
+        sections = self._apply_bridge_library(
+            sections=sections,
+            script_length="short",
+            product_type=product_type,
+            shorts_strategy=shorts_strategy,
+            psychology_type=psychology_type,
+        )
+
         script = self._script(
             script_type="short_18s",
             sections=sections,
@@ -737,6 +776,9 @@ class ReviewScriptGenerator:
         strategy_bridge: str,
         target_bridge: str,
         review_count: int,
+        product_type: str,
+        shorts_strategy: str,
+        psychology_type: str,
     ) -> Dict[str, Any]:
         sections = {
             "hook": self._sentence(
@@ -788,6 +830,14 @@ class ReviewScriptGenerator:
             ),
         }
 
+        sections = self._apply_bridge_library(
+            sections=sections,
+            script_length="medium",
+            product_type=product_type,
+            shorts_strategy=shorts_strategy,
+            psychology_type=psychology_type,
+        )
+
         script = self._script(
             script_type="medium_47s",
             sections=sections,
@@ -817,6 +867,9 @@ class ReviewScriptGenerator:
         strategy_bridge: str,
         target_bridge: str,
         review_count: int,
+        product_type: str,
+        shorts_strategy: str,
+        psychology_type: str,
     ) -> Dict[str, Any]:
         sections = {
             "hook": self._sentence(
@@ -884,6 +937,14 @@ class ReviewScriptGenerator:
                 )
             ),
         }
+
+        sections = self._apply_bridge_library(
+            sections=sections,
+            script_length="long",
+            product_type=product_type,
+            shorts_strategy=shorts_strategy,
+            psychology_type=psychology_type,
+        )
 
         script = self._script(
             script_type="long_46s",
@@ -1951,16 +2012,43 @@ class ReviewScriptGenerator:
 
         compression_applied = False
 
-        priority_order = (
-            "result",
-            "transition",
-            "solution",
-            "support",
-            "detail",
-            "trust",
-            "common_pattern",
-            "risk",
-        )
+        script_type = self._clean_text(script.get("type", ""))
+
+        if script_type.startswith("short_"):
+            priority_order = (
+                "strategy",
+                "target",
+                "problem",
+                "recommendation",
+                "choice",
+                "support",
+                "detail",
+                "trust",
+                "common_pattern",
+                "risk",
+            )
+        elif script_type.startswith("long_"):
+            priority_order = (
+                "risk",
+                "common_pattern",
+                "target",
+                "strategy",
+                "recommendation",
+                "support",
+                "detail",
+                "trust",
+            )
+        else:
+            priority_order = (
+                "risk",
+                "common_pattern",
+                "recommendation",
+                "support",
+                "detail",
+                "trust",
+                "strategy",
+                "target",
+            )
 
         while (
             script.get("estimated_seconds", 0)
@@ -1995,9 +2083,9 @@ class ReviewScriptGenerator:
             > max_seconds
         ):
             sections = {
-                key: self._shorten(
+                key: self._shorten_natural(
                     value,
-                    46 if key == "hook" else 40,
+                    46 if key == "hook" else 42,
                 )
                 for key, value in sections.items()
             }
@@ -2696,6 +2784,324 @@ class ReviewScriptGenerator:
             28,
         )
 
+    def _apply_bridge_library(
+        self,
+        sections: Dict[str, str],
+        script_length: str,
+        product_type: str,
+        shorts_strategy: str,
+        psychology_type: str,
+    ) -> Dict[str, str]:
+        """
+        Sprint80-2 Bridge Library
+
+        기존 섹션의 의미와 키는 유지하면서 다음 문장 첫머리에
+        짧은 연결 표현을 붙여 대본 흐름을 자연스럽게 만듭니다.
+        """
+        cleaned_sections = {
+            key: self._sentence(value)
+            for key, value in sections.items()
+            if self._clean_text(value)
+        }
+
+        if len(cleaned_sections) <= 1:
+            return cleaned_sections
+
+        result: Dict[str, str] = {}
+        used_bridges: List[str] = []
+        previous_key = ""
+
+        for current_key, sentence in cleaned_sections.items():
+            text = self._clean_text(sentence)
+
+            if not result:
+                result[current_key] = self._sentence(text)
+                previous_key = current_key
+                continue
+
+            bridge = self._select_bridge(
+                previous_key=previous_key,
+                current_key=current_key,
+                script_length=script_length,
+                product_type=product_type,
+                shorts_strategy=shorts_strategy,
+                psychology_type=psychology_type,
+                sentence=text,
+                used_bridges=used_bridges,
+            )
+
+            if bridge:
+                text = self._join_bridge_sentence(
+                    bridge=bridge,
+                    sentence=text,
+                )
+                used_bridges.append(bridge)
+
+            result[current_key] = self._sentence(text)
+            previous_key = current_key
+
+        return result
+
+    def _select_bridge(
+        self,
+        previous_key: str,
+        current_key: str,
+        script_length: str,
+        product_type: str,
+        shorts_strategy: str,
+        psychology_type: str,
+        sentence: str,
+        used_bridges: List[str],
+    ) -> str:
+        text = self._clean_text(sentence)
+
+        if not text or self._starts_with_bridge(text):
+            return ""
+
+        semantic_starters = {
+            "strategy": ("선택 기준은", "핵심은", "실제 선택 기준은"),
+            "after": ("사용 후에는", "사용하고 나니", "써보니"),
+            "cta": ("여행 전에", "구매 전에", "선택 전에"),
+            "evidence": ("실제 구매 후기", "실제 후기를", "후기에서"),
+            "recommendation": ("짐이", "이동이", "한 번 구매", "예산 안에서", "실용성과"),
+        }
+
+        if text.startswith(semantic_starters.get(current_key, ())):
+            return ""
+
+        pair_library = {
+            ("hook", "problem"): ("실제로", "그런데"),
+            ("hook", "empathy"): ("막상 고르려면", "특히"),
+            ("problem", "empathy"): ("그래서", "실제로"),
+            ("empathy", "risk"): ("문제는", "더 중요한 건"),
+            ("problem", "target"): ("특히", "그래서"),
+            ("empathy", "target"): ("특히", "이럴 때"),
+            ("risk", "target"): ("그래서", "이럴수록"),
+            ("target", "strategy"): ("결국", "여기서 볼 건"),
+            ("strategy", "evidence"): ("실제 후기를 보면", "그리고"),
+            ("target", "evidence"): ("실제 후기를 보면", "무엇보다"),
+            ("evidence", "common_pattern"): ("여러 후기를 함께 보면", "공통적으로"),
+            ("evidence", "choice"): ("그래서", "이 기준으로"),
+            ("common_pattern", "choice"): ("그래서", "결국"),
+            ("choice", "after"): ("직접 써보니", "사용해 보니"),
+            ("evidence", "after"): ("실제로 사용해 보면", "그 결과"),
+            ("after", "recommendation"): ("그래서", "이런 이유로"),
+            ("recommendation", "cta"): ("구매 전에는", "마지막으로"),
+            ("after", "cta"): ("구매 전에는", "마지막으로"),
+            ("evidence", "cta"): ("구매 전에는", "결론적으로"),
+        }
+
+        current_library = {
+            "target": ("특히", "이럴 때"),
+            "strategy": ("핵심은", "결국"),
+            "evidence": ("실제 후기를 보면", "무엇보다"),
+            "choice": ("그래서", "이 기준으로"),
+            "after": ("직접 써보니", "그 결과"),
+            "recommendation": ("그래서", "이런 이유로"),
+            "cta": ("구매 전에는", "마지막으로"),
+        }
+
+        candidates = list(
+            pair_library.get(
+                (previous_key, current_key),
+                current_library.get(current_key, ()),
+            )
+        )
+
+        contextual = self._context_bridge_candidates(
+            current_key=current_key,
+            product_type=product_type,
+            shorts_strategy=shorts_strategy,
+            psychology_type=psychology_type,
+        )
+
+        candidates = contextual + candidates
+        candidates = [
+            item
+            for item in candidates
+            if item and item not in used_bridges[-2:]
+        ]
+
+        if not candidates:
+            return ""
+
+        if script_length == "short":
+            candidates = [
+                item
+                for item in candidates
+                if len(item) <= 8
+            ] or candidates
+
+        seed = sum(
+            ord(char)
+            for char in (
+                previous_key
+                + current_key
+                + product_type
+                + psychology_type
+                + text[:12]
+            )
+        )
+
+        return candidates[seed % len(candidates)]
+
+    def _context_bridge_candidates(
+        self,
+        current_key: str,
+        product_type: str,
+        shorts_strategy: str,
+        psychology_type: str,
+    ) -> List[str]:
+        candidates: List[str] = []
+
+        psychology_map = {
+            "comparison": {
+                "strategy": "비교해 보면",
+                "evidence": "기준을 잡고 보면",
+                "choice": "이 기준으로",
+            },
+            "mistake_prevention": {
+                "risk": "놓치기 쉬운 건",
+                "strategy": "실패를 줄이려면",
+                "evidence": "구매 전에 확인할 건",
+            },
+            "anxiety": {
+                "empathy": "그럴 수밖에 없는 게",
+                "target": "이럴수록",
+                "evidence": "안심하려면",
+            },
+            "empathy": {
+                "empathy": "비슷한 고민이 생기는 이유는",
+                "target": "특히",
+                "after": "직접 써보면",
+            },
+            "recommendation": {
+                "evidence": "실사용자 의견을 보면",
+                "recommendation": "그래서",
+                "cta": "선택 전에",
+            },
+        }
+
+        product_map = {
+            "travel": {
+                "strategy": "여행 기준으로 보면",
+                "choice": "짐의 양을 기준으로",
+            },
+            "household": {
+                "strategy": "매일 쓰는 만큼",
+                "after": "생활 속에서 써보면",
+            },
+            "kitchen": {
+                "strategy": "자주 쓰는 제품이라",
+                "after": "직접 사용해 보면",
+            },
+            "electronics": {
+                "evidence": "성능은 실제 사용에서",
+                "strategy": "스펙보다 중요한 건",
+            },
+            "seasonal": {
+                "target": "필요한 시기가 오기 전에",
+                "strategy": "계절 불편을 줄이려면",
+            },
+        }
+
+        strategy_map = {
+            "comparison": {
+                "strategy": "비교할 때는",
+                "choice": "이 기준으로",
+            },
+            "problem_solution": {
+                "strategy": "해결 기준은",
+                "after": "불편을 줄이고 나면",
+            },
+            "convenience_experience": {
+                "after": "직접 써보면",
+                "recommendation": "사용감까지 보면",
+            },
+            "performance_proof": {
+                "evidence": "실제 성능을 보면",
+                "choice": "검증된 기준으로",
+            },
+            "seasonal_empathy": {
+                "target": "특히 이 계절에는",
+                "strategy": "미리 준비하면",
+            },
+        }
+
+        for mapping, key in (
+            (psychology_map, psychology_type),
+            (product_map, product_type),
+            (strategy_map, shorts_strategy),
+        ):
+            bridge = mapping.get(key, {}).get(current_key, "")
+            if bridge:
+                candidates.append(bridge)
+
+        return candidates
+
+    def _starts_with_bridge(
+        self,
+        sentence: str,
+    ) -> bool:
+        text = self._clean_text(sentence)
+        starters = (
+            "그래서",
+            "그런데",
+            "그리고",
+            "특히",
+            "결국",
+            "실제로",
+            "무엇보다",
+            "문제는",
+            "핵심은",
+            "이럴 때",
+            "이럴수록",
+            "직접 써보",
+            "사용해 보",
+            "구매 전",
+            "마지막으로",
+            "공통적으로",
+            "여러 후기를",
+            "실제 후기를",
+            "실사용자",
+            "선택 전에",
+            "선택 기준은",
+            "사용 후에는",
+            "여행 전에",
+            "후기에서",
+            "실제 구매 후기",
+        )
+        return text.startswith(starters)
+
+    def _join_bridge_sentence(
+        self,
+        bridge: str,
+        sentence: str,
+    ) -> str:
+        bridge_text = self._clean_text(bridge).rstrip(" ,.!?")
+        sentence_text = self._clean_text(sentence).lstrip(" ,")
+
+        if not bridge_text or not sentence_text:
+            return sentence_text
+
+        if sentence_text.startswith(bridge_text):
+            return sentence_text
+
+        sentence_text = sentence_text[0].lower() + sentence_text[1:] if sentence_text[:1].isascii() else sentence_text
+
+        comma_bridges = (
+            "문제는",
+            "핵심은",
+            "여기서 볼 건",
+            "더 중요한 건",
+            "놓치기 쉬운 건",
+            "스펙보다 중요한 건",
+            "해결 기준은",
+        )
+
+        separator = ", " if bridge_text in comma_bridges else " "
+        return f"{bridge_text}{separator}{sentence_text}"
+
     def _script(
         self,
         script_type: str,
@@ -2922,6 +3328,37 @@ class ReviewScriptGenerator:
         text = re.sub(r"\s+", " ", text).strip()
 
         return text.strip(" -_/|")
+
+    def _shorten_natural(
+        self,
+        text: str,
+        limit: int,
+    ) -> str:
+        text = self._clean_text(text).rstrip(".!?… ")
+
+        if len(text) <= limit:
+            return self._sentence(text)
+
+        clipped = text[:limit].rstrip(" ,.;:!?\"'“”‘’")
+        last_space = clipped.rfind(" ")
+
+        if last_space >= max(12, int(limit * 0.62)):
+            clipped = clipped[:last_space].rstrip(" ,.;:!?\"'“”‘’")
+
+        endings = (
+            ("선택했", "선택했습니다"),
+            ("중요합", "중요합니다"),
+            ("맞습", "맞습니다"),
+            ("편해졌", "편해졌습니다"),
+            ("확인해", "확인해 보세요"),
+        )
+
+        for fragment, ending in endings:
+            if clipped.endswith(fragment):
+                clipped = clipped[: -len(fragment)] + ending
+                break
+
+        return self._sentence(clipped)
 
     def _shorten(
         self,
