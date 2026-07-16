@@ -15,7 +15,7 @@ class ReviewScriptGenerator:
     - 외부 AI API 없이 규칙 기반으로 동작
     """
 
-    VERSION = "review-script-generator-81-6"
+    VERSION = "review-script-generator-81-7"
 
     def _build_analysis_bundle(
         self,
@@ -644,6 +644,18 @@ class ReviewScriptGenerator:
         )
         platform_scripts = platform_adaptation.get("platform_scripts", {})
 
+        cta_optimization = self._optimize_platform_ctas(
+            platform_scripts=platform_scripts,
+            product_name=product_name,
+            product_type=product_type,
+            shorts_strategy=shorts_strategy,
+            review_count=count,
+        )
+        optimized_platform_scripts = cta_optimization.get(
+            "optimized_platform_scripts",
+            platform_scripts,
+        )
+
         platform_recommendations = {
             "tiktok": "short",
             "instagram_reels": "medium",
@@ -651,209 +663,209 @@ class ReviewScriptGenerator:
         }
 
         print(
-            "[Sprint81-6 Script] Version:",
+            "[Sprint81-7 Script] Version:",
             self.VERSION,
             flush=True,
         )
         print(
-            "[Sprint81-6 Script] Analysis Bundle:",
+            "[Sprint81-7 Script] Analysis Bundle:",
             "built_once",
             flush=True,
         )
         print(
-            "[Sprint81-6 Script] Bundle Keys:",
+            "[Sprint81-7 Script] Bundle Keys:",
             sorted(bundle.keys()),
             flush=True,
         )
         print(
-            "[Sprint81-6 Script] Bridge Library:",
+            "[Sprint81-7 Script] Bridge Library:",
             "bridge-library-80-2a",
             flush=True,
         )
         print(
-            "[Sprint81-6 Script] Bridge Psychology:",
+            "[Sprint81-7 Script] Bridge Psychology:",
             psychology_type,
             flush=True,
         )
         print(
-            "[Sprint81-6 Script] Product:",
+            "[Sprint81-7 Script] Product:",
             product_name,
             flush=True,
         )
         print(
-            "[Sprint81-6 Script] Product Type:",
+            "[Sprint81-7 Script] Product Type:",
             product_type,
             flush=True,
         )
         print(
-            "[Sprint81-6 Script] Shorts Strategy:",
+            "[Sprint81-7 Script] Shorts Strategy:",
             shorts_strategy,
             flush=True,
         )
         print(
-            "[Sprint81-6 Script] Strategy Reason:",
+            "[Sprint81-7 Script] Strategy Reason:",
             product_strategy.get("strategy_reason", ""),
             flush=True,
         )
         print(
-            "[Sprint81-6 Script] Strategy Bridge:",
+            "[Sprint81-7 Script] Strategy Bridge:",
             strategy_bridge,
             flush=True,
         )
         print(
-            "[Sprint81-6 Script] Target Customer:",
+            "[Sprint81-7 Script] Target Customer:",
             target_customer,
             flush=True,
         )
         print(
-            "[Sprint81-6 Script] Target Reason:",
+            "[Sprint81-7 Script] Target Reason:",
             target_reason,
             flush=True,
         )
         print(
-            "[Sprint81-6 Script] Target Confidence:",
+            "[Sprint81-7 Script] Target Confidence:",
             target_customer_result.get("confidence", 0),
             flush=True,
         )
         print(
-            "[Sprint81-6 Script] Target Bridge:",
+            "[Sprint81-7 Script] Target Bridge:",
             target_bridge,
             flush=True,
         )
         print(
-            "[Sprint81-6 Script] Hook Type:",
+            "[Sprint81-7 Script] Hook Type:",
             best_hook_type,
             flush=True,
         )
         print(
-            "[Sprint81-6 Script] Dominant Review Type:",
+            "[Sprint81-7 Script] Dominant Review Type:",
             review_type_result.get("dominant_type", ""),
             review_type_result.get("dominant_label", ""),
             flush=True,
         )
         print(
-            "[Sprint81-6 Script] Review Type Scores:",
+            "[Sprint81-7 Script] Review Type Scores:",
             review_type_result.get("scores", {}),
             flush=True,
         )
         print(
-            "[Sprint81-6 Script] Before:",
+            "[Sprint81-7 Script] Before:",
             before_after_story.get("before", ""),
             flush=True,
         )
         print(
-            "[Sprint81-6 Script] Choice:",
+            "[Sprint81-7 Script] Choice:",
             before_after_story.get("choice", ""),
             flush=True,
         )
         print(
-            "[Sprint81-6 Script] After:",
+            "[Sprint81-7 Script] After:",
             before_after_story.get("after", ""),
             flush=True,
         )
         print(
-            "[Sprint81-6 Script] Psychology Type:",
+            "[Sprint81-7 Script] Psychology Type:",
             psychology_result.get("dominant_type", ""),
             psychology_result.get("dominant_label", ""),
             flush=True,
         )
         print(
-            "[Sprint81-6 Script] Psychology Scores:",
+            "[Sprint81-7 Script] Psychology Scores:",
             psychology_result.get("scores", {}),
             flush=True,
         )
         print(
-            "[Sprint81-6 Script] Problem:",
+            "[Sprint81-7 Script] Problem:",
             psychology_story.get("problem", ""),
             flush=True,
         )
         print(
-            "[Sprint81-6 Script] Empathy:",
+            "[Sprint81-7 Script] Empathy:",
             psychology_story.get("empathy", ""),
             flush=True,
         )
         print(
-            "[Sprint81-6 Story] Version:",
+            "[Sprint81-7 Story] Version:",
             story_context.get("version", ""),
             flush=True,
         )
         print(
-            "[Sprint81-6 Story] Built:",
+            "[Sprint81-7 Story] Built:",
             bool(story_context),
             flush=True,
         )
         print(
-            "[Sprint81-6 Story] Arc:",
+            "[Sprint81-7 Story] Arc:",
             story_context.get("arc_type", ""),
             flush=True,
         )
         print(
-            "[Sprint81-6 Story] Problem:",
+            "[Sprint81-7 Story] Problem:",
             story_context.get("problem", ""),
             flush=True,
         )
         print(
-            "[Sprint81-6 Story] Emotion:",
+            "[Sprint81-7 Story] Emotion:",
             story_context.get("emotion", ""),
             flush=True,
         )
         print(
-            "[Sprint81-6 Story] Decision:",
+            "[Sprint81-7 Story] Decision:",
             story_context.get("decision", ""),
             flush=True,
         )
         print(
-            "[Sprint81-6 Story] Change:",
+            "[Sprint81-7 Story] Change:",
             story_context.get("change", ""),
             flush=True,
         )
         print(
-            "[Sprint81-6 Story] Result:",
+            "[Sprint81-7 Story] Result:",
             story_context.get("result", ""),
             flush=True,
         )
         print(
-            "[Sprint81-6 Emotion] Version:",
+            "[Sprint81-7 Emotion] Version:",
             emotion_curve.get("version", ""),
             flush=True,
         )
         print(
-            "[Sprint81-6 Emotion] Built:",
+            "[Sprint81-7 Emotion] Built:",
             bool(emotion_curve),
             flush=True,
         )
         print(
-            "[Sprint81-6 Emotion] Curve:",
+            "[Sprint81-7 Emotion] Curve:",
             emotion_curve.get("curve_type", ""),
             flush=True,
         )
         print(
-            "[Sprint81-6 Emotion] Hook:",
+            "[Sprint81-7 Emotion] Hook:",
             emotion_curve.get("hook", ""),
             flush=True,
         )
         print(
-            "[Sprint81-6 Emotion] Empathy:",
+            "[Sprint81-7 Emotion] Empathy:",
             emotion_curve.get("empathy", ""),
             flush=True,
         )
         print(
-            "[Sprint81-6 Emotion] Tension:",
+            "[Sprint81-7 Emotion] Tension:",
             emotion_curve.get("tension", ""),
             flush=True,
         )
         print(
-            "[Sprint81-6 Emotion] Relief:",
+            "[Sprint81-7 Emotion] Relief:",
             emotion_curve.get("relief", ""),
             flush=True,
         )
         print(
-            "[Sprint81-6 Emotion] Satisfaction:",
+            "[Sprint81-7 Emotion] Satisfaction:",
             emotion_curve.get("satisfaction", ""),
             flush=True,
         )
         print(
-            "[Sprint81-6 Script] Short:",
+            "[Sprint81-7 Script] Short:",
             short_script.get("estimated_seconds", 0),
             "s",
             "error=",
@@ -867,7 +879,7 @@ class ReviewScriptGenerator:
             flush=True,
         )
         print(
-            "[Sprint81-6 Script] Medium:",
+            "[Sprint81-7 Script] Medium:",
             medium_script.get("estimated_seconds", 0),
             "s",
             "error=",
@@ -881,7 +893,7 @@ class ReviewScriptGenerator:
             flush=True,
         )
         print(
-            "[Sprint81-6 Script] Long:",
+            "[Sprint81-7 Script] Long:",
             long_script.get("estimated_seconds", 0),
             "s",
             "error=",
@@ -900,7 +912,7 @@ class ReviewScriptGenerator:
             ("Long", long_script),
         ):
             print(
-                f"[Sprint81-6 Score] {label}:",
+                f"[Sprint81-7 Score] {label}:",
                 {
                     "story": script.get("story_score", 0),
                     "emotion": script.get("emotion_score", 0),
@@ -912,77 +924,77 @@ class ReviewScriptGenerator:
                 flush=True,
             )
         print(
-            "[Sprint81-6 Score] Version:",
+            "[Sprint81-7 Score] Version:",
             "story-score-engine-81-3",
             flush=True,
         )
         print(
-            "[Sprint81-6 Score] Selected Quality:",
+            "[Sprint81-7 Score] Selected Quality:",
             best_script.get("quality_score", 0),
             flush=True,
         )
         print(
-            "[Sprint81-6 Gate] Version:",
+            "[Sprint81-7 Gate] Version:",
             "story-quality-gate-81-4",
             flush=True,
         )
         print(
-            "[Sprint81-6 Gate] Selected Passed:",
+            "[Sprint81-7 Gate] Selected Passed:",
             best_script.get("quality_gate_passed", False),
             flush=True,
         )
         print(
-            "[Sprint81-6 Gate] Selected Status:",
+            "[Sprint81-7 Gate] Selected Status:",
             best_script.get("quality_gate_status", ""),
             flush=True,
         )
         print(
-            "[Sprint81-6 Gate] Weak Dimensions:",
+            "[Sprint81-7 Gate] Weak Dimensions:",
             best_script.get("quality_gate_weak_dimensions", []),
             flush=True,
         )
         print(
-            "[Sprint81-6 Gate] Improvement Priority:",
+            "[Sprint81-7 Gate] Improvement Priority:",
             best_script.get("quality_gate_improvement_priority", []),
             flush=True,
         )
         print(
-            "[Sprint81-6 Optimizer] Version:",
+            "[Sprint81-7 Optimizer] Version:",
             narrative_optimization.get("version", ""),
             flush=True,
         )
         print(
-            "[Sprint81-6 Optimizer] Applied:",
+            "[Sprint81-7 Optimizer] Applied:",
             narrative_optimization.get("applied", False),
             flush=True,
         )
         print(
-            "[Sprint81-6 Optimizer] Changes:",
+            "[Sprint81-7 Optimizer] Changes:",
             narrative_optimization.get("changes", []),
             flush=True,
         )
         print(
-            "[Sprint81-6 Optimizer] Score:",
+            "[Sprint81-7 Optimizer] Score:",
             narrative_optimization.get("optimization_score", 0),
             flush=True,
         )
         print(
-            "[Sprint81-6 Optimizer] Script:",
+            "[Sprint81-7 Optimizer] Script:",
             optimized_script,
             flush=True,
         )
         print(
-            "[Sprint81-6 Platform] Version:",
+            "[Sprint81-7 Platform] Version:",
             platform_adaptation.get("version", ""),
             flush=True,
         )
         print(
-            "[Sprint81-6 Platform] Built:",
+            "[Sprint81-7 Platform] Built:",
             bool(platform_scripts),
             flush=True,
         )
         print(
-            "[Sprint81-6 Platform] Score:",
+            "[Sprint81-7 Platform] Score:",
             platform_adaptation.get("adaptation_score", 0),
             flush=True,
         )
@@ -993,17 +1005,43 @@ class ReviewScriptGenerator:
         ):
             platform_data = platform_scripts.get(platform_name, {})
             print(
-                f"[Sprint81-6 Platform] {platform_name}:",
+                f"[Sprint81-7 Platform] {platform_name}:",
                 platform_data.get("script", ""),
                 flush=True,
             )
         print(
-            "[Sprint81-6 Script] Selected:",
+            "[Sprint81-7 CTA] Version:",
+            cta_optimization.get("version", ""),
+            flush=True,
+        )
+        print(
+            "[Sprint81-7 CTA] Built:",
+            cta_optimization.get("built", False),
+            flush=True,
+        )
+        print(
+            "[Sprint81-7 CTA] Score:",
+            cta_optimization.get("cta_score", 0),
+            flush=True,
+        )
+        for platform_name in (
+            "tiktok",
+            "instagram_reels",
+            "youtube_shorts",
+        ):
+            cta_data = cta_optimization.get("platform_cta", {}).get(platform_name, {})
+            print(
+                f"[Sprint81-7 CTA] {platform_name}:",
+                cta_data.get("selected_cta", ""),
+                flush=True,
+            )
+        print(
+            "[Sprint81-7 Script] Selected:",
             best_script.get("type", ""),
             flush=True,
         )
         print(
-            "[Sprint81-6 Script] Best Script:",
+            "[Sprint81-7 Script] Best Script:",
             best_script.get("text", ""),
             flush=True,
         )
@@ -1041,6 +1079,16 @@ class ReviewScriptGenerator:
             "tiktok_script": platform_scripts.get("tiktok", {}).get("script", ""),
             "instagram_script": platform_scripts.get("instagram_reels", {}).get("script", ""),
             "youtube_script": platform_scripts.get("youtube_shorts", {}).get("script", ""),
+            "cta_optimizer_version": "cta-optimization-engine-81-7",
+            "cta_library": cta_optimization.get("cta_library", {}),
+            "platform_cta": cta_optimization.get("platform_cta", {}),
+            "selected_cta": cta_optimization.get("selected_cta", {}),
+            "cta_score": cta_optimization.get("cta_score", 0),
+            "cta_optimization": cta_optimization,
+            "optimized_platform_scripts": optimized_platform_scripts,
+            "optimized_tiktok_script": optimized_platform_scripts.get("tiktok", {}).get("script", ""),
+            "optimized_instagram_script": optimized_platform_scripts.get("instagram_reels", {}).get("script", ""),
+            "optimized_youtube_script": optimized_platform_scripts.get("youtube_shorts", {}).get("script", ""),
             "quality_gate_passed": best_script.get("quality_gate_passed", False),
             "quality_gate_status": best_script.get("quality_gate_status", ""),
             "quality_gate_weak_dimensions": best_script.get(
@@ -3826,6 +3874,145 @@ class ReviewScriptGenerator:
             "shorts_strategy": self._clean_text(shorts_strategy),
             "platform_scripts": platform_scripts,
         }
+
+
+    def _optimize_platform_ctas(
+        self,
+        platform_scripts: Dict[str, Any],
+        product_name: str,
+        product_type: str,
+        shorts_strategy: str,
+        review_count: int,
+    ) -> Dict[str, Any]:
+        """Select and apply platform-appropriate CTAs without changing the narrative body."""
+        product = self._clean_text(product_name)
+        product_type_text = self._clean_text(product_type)
+        strategy = self._clean_text(shorts_strategy)
+        count = self._safe_int(review_count)
+
+        cta_library = {
+            "profile_link": "프로필 링크에서 제품 정보와 후기를 확인해 보세요",
+            "save_profile": "나중에 비교할 수 있도록 저장해 두고 프로필 링크도 확인해 보세요",
+            "description_link": "제품 정보와 실제 후기는 설명란 링크에서 확인해 보세요",
+            "comment_question": "어떤 기준이 가장 궁금한지 댓글로 남겨주세요",
+            "follow_more": "비슷한 제품 비교가 필요하다면 팔로우해 두세요",
+            "review_check": "구매 전에는 실제 후기와 구성을 꼭 확인해 보세요",
+        }
+
+        platform_preferences = {
+            "tiktok": ("profile_link", "comment_question", "follow_more"),
+            "instagram_reels": ("save_profile", "profile_link", "comment_question"),
+            "youtube_shorts": ("description_link", "comment_question", "follow_more"),
+        }
+
+        selected_cta: Dict[str, str] = {}
+        platform_cta: Dict[str, Any] = {}
+        optimized: Dict[str, Any] = {}
+
+        for platform_name, source_data in platform_scripts.items():
+            preferences = platform_preferences.get(
+                platform_name,
+                ("review_check",),
+            )
+            cta_key = preferences[0]
+            if count <= 0 and "review_check" in cta_library:
+                cta_key = "review_check"
+            elif product_type_text == "travel" and platform_name == "instagram_reels":
+                cta_key = "save_profile"
+            elif strategy == "performance_proof" and platform_name == "youtube_shorts":
+                cta_key = "description_link"
+
+            cta_text = cta_library[cta_key]
+            selected_cta[platform_name] = cta_text
+            original_script = self._clean_text(source_data.get("script", ""))
+            final_script = self._replace_or_append_cta(original_script, cta_text)
+
+            natural_score = 100 if final_script else 0
+            conversion_score = {
+                "profile_link": 96,
+                "save_profile": 94,
+                "description_link": 96,
+                "comment_question": 88,
+                "follow_more": 84,
+                "review_check": 86,
+            }.get(cta_key, 80)
+            platform_fit_score = 100 if cta_key == preferences[0] else 92
+            total_score = round(
+                natural_score * 0.35
+                + conversion_score * 0.35
+                + platform_fit_score * 0.30
+            )
+
+            platform_cta[platform_name] = {
+                "cta_key": cta_key,
+                "selected_cta": cta_text,
+                "natural_score": natural_score,
+                "conversion_score": conversion_score,
+                "platform_fit_score": platform_fit_score,
+                "cta_score": total_score,
+            }
+            optimized[platform_name] = {
+                **dict(source_data),
+                "script": final_script,
+                "selected_cta": cta_text,
+                "cta_key": cta_key,
+                "cta_score": total_score,
+                "cta_optimizer_version": "cta-optimization-engine-81-7",
+                "estimated_seconds": self._estimate_seconds(final_script),
+            }
+
+        scores = [
+            item.get("cta_score", 0)
+            for item in platform_cta.values()
+        ]
+        cta_score = round(sum(scores) / len(scores)) if scores else 0
+
+        return {
+            "version": "cta-optimization-engine-81-7",
+            "built": len(optimized) == 3,
+            "product_name": product,
+            "product_type": product_type_text,
+            "shorts_strategy": strategy,
+            "review_count": count,
+            "cta_library": cta_library,
+            "platform_cta": platform_cta,
+            "selected_cta": selected_cta,
+            "cta_score": cta_score,
+            "optimized_platform_scripts": optimized,
+        }
+
+    def _replace_or_append_cta(
+        self,
+        script_text: str,
+        cta_text: str,
+    ) -> str:
+        text = self._clean_text(script_text)
+        cta = self._sentence(cta_text)
+        if not text:
+            return cta
+
+        parts = [
+            self._clean_text(item)
+            for item in re.split(r"(?<=[.!?])\s+", text)
+            if self._clean_text(item)
+        ]
+        if not parts:
+            return cta
+
+        cta_markers = (
+            "확인해 보세요",
+            "비교해 보세요",
+            "저장해",
+            "프로필 링크",
+            "설명란 링크",
+            "댓글로",
+            "팔로우",
+        )
+        if any(marker in parts[-1] for marker in cta_markers):
+            parts[-1] = cta
+        else:
+            parts.append(cta)
+        return self._clean_text(" ".join(parts))
 
     def _optimize_selected_narrative(
         self,
