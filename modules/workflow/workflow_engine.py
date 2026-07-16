@@ -25,6 +25,7 @@ from modules.content.review_hook_generator import ReviewHookGenerator
 from modules.content.review_script_generator import ReviewScriptGenerator
 from modules.publisher.publisher_engine import PublisherEngine
 from modules.publisher.publisher_orchestrator import PublisherOrchestrator
+from modules.publisher.publisher_result_store import PublisherResultStore
 try:
     from modules.review.review_image_ocr import ReviewImageOCR
 except ImportError:
@@ -41,7 +42,7 @@ from modules.video.download_utils import (
 )
 
 
-print("######## WORKFLOW_ENGINE SPRINT82-6 LOADED ########", flush=True)
+print("######## WORKFLOW_ENGINE SPRINT82-8 LOADED ########", flush=True)
 
 
 class WorkflowEngine:
@@ -66,7 +67,7 @@ class WorkflowEngine:
     → CapCutExport
     """
 
-    WORKFLOW_VERSION = "workflow-engine-82-6"
+    WORKFLOW_VERSION = "workflow-engine-82-8"
 
     STEP_NAMES = [
         "product_plan",
@@ -2097,7 +2098,7 @@ class WorkflowEngine:
                 error=exc,
             )
 
-        # 13. Sprint82-6 Publisher Workflow Integration
+        # 13. Sprint82-8 Publisher Workflow + Result Store Integration
         publisher_result = {
             "ok": False,
             "version": "publisher-engine-82-1",
@@ -2112,6 +2113,15 @@ class WorkflowEngine:
             "orchestrator_ready": False,
             "platforms": {},
         }
+        publisher_store_result = {
+            "ok": False,
+            "version": "publisher-result-store-82-7",
+            "status": "not_run",
+            "stored": False,
+            "manifest_path": "",
+            "platform_paths": {},
+        }
+        outputs["publisher_store"] = publisher_store_result
 
         try:
             review_scripts = (
@@ -2166,17 +2176,17 @@ class WorkflowEngine:
             )
 
             print(
-                "[Sprint82-6 Publisher] Export Ready:",
+                "[Sprint82-8 Publisher] Export Ready:",
                 bool(export_pack.get("ready")),
                 flush=True,
             )
             print(
-                "[Sprint82-6 Publisher] Engine Ready:",
+                "[Sprint82-8 Publisher] Engine Ready:",
                 bool(publisher_result.get("publisher_ready")),
                 flush=True,
             )
             print(
-                "[Sprint82-6 Publisher] Orchestrator Ready:",
+                "[Sprint82-8 Publisher] Orchestrator Ready:",
                 bool(
                     publisher_orchestrator_result.get(
                         "orchestrator_ready"
@@ -2185,7 +2195,7 @@ class WorkflowEngine:
                 flush=True,
             )
             print(
-                "[Sprint82-6 Publisher] Ready Platforms:",
+                "[Sprint82-8 Publisher] Ready Platforms:",
                 publisher_orchestrator_result.get(
                     "ready_platforms",
                     [],
@@ -2193,8 +2203,36 @@ class WorkflowEngine:
                 flush=True,
             )
             print(
-                "[Sprint82-6 Publisher] Video:",
+                "[Sprint82-8 Publisher] Video:",
                 final_video_path,
+                flush=True,
+            )
+
+            publisher_store_result = PublisherResultStore().save(
+                orchestrator_result=publisher_orchestrator_result,
+                project_id=getattr(project, "id", ""),
+                project_name=(
+                    getattr(project, "product_name", "")
+                    or getattr(project, "title", "")
+                    or "project"
+                ),
+                run_id=job_id,
+            )
+            outputs["publisher_store"] = publisher_store_result
+
+            print(
+                "[Sprint82-8 Store] Stored:",
+                bool(publisher_store_result.get("stored")),
+                flush=True,
+            )
+            print(
+                "[Sprint82-8 Store] Manifest:",
+                publisher_store_result.get("manifest_path", ""),
+                flush=True,
+            )
+            print(
+                "[Sprint82-8 Store] Latest:",
+                publisher_store_result.get("latest_pointer_path", ""),
                 flush=True,
             )
 
@@ -2219,9 +2257,19 @@ class WorkflowEngine:
             outputs["publisher_orchestrator"] = (
                 publisher_orchestrator_result
             )
+            publisher_store_result = {
+                "ok": False,
+                "version": "publisher-result-store-82-7",
+                "status": "skipped",
+                "stored": False,
+                "manifest_path": "",
+                "platform_paths": {},
+                "error": str(exc),
+            }
+            outputs["publisher_store"] = publisher_store_result
 
             print(
-                "[Sprint82-6 Publisher] ERROR:",
+                "[Sprint82-8 Publisher] ERROR:",
                 repr(exc),
                 flush=True,
             )
@@ -2229,7 +2277,7 @@ class WorkflowEngine:
         final_state = state.load(job_id)
 
         print(
-            "######## RUN_PROJECT SPRINT82-6 END ########",
+            "######## RUN_PROJECT SPRINT82-8 END ########",
             flush=True,
         )
 
