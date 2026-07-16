@@ -15,7 +15,7 @@ class ReviewScriptGenerator:
     - 외부 AI API 없이 규칙 기반으로 동작
     """
 
-    VERSION = "review-script-generator-81-7"
+    VERSION = "review-script-generator-81-8"
 
     def _build_analysis_bundle(
         self,
@@ -656,6 +656,18 @@ class ReviewScriptGenerator:
             platform_scripts,
         )
 
+        hook_variation = self._build_hook_variations(
+            original_hook=best_hook,
+            product_name=product_name,
+            product_type=product_type,
+            shorts_strategy=shorts_strategy,
+            psychology_type=psychology_type,
+            target_customer=target_customer,
+            pain_summary=pain_summary,
+            evidence_summary=evidence_summary,
+            review_count=count,
+        )
+
         platform_recommendations = {
             "tiktok": "short",
             "instagram_reels": "medium",
@@ -663,209 +675,209 @@ class ReviewScriptGenerator:
         }
 
         print(
-            "[Sprint81-7 Script] Version:",
+            "[Sprint81-8 Script] Version:",
             self.VERSION,
             flush=True,
         )
         print(
-            "[Sprint81-7 Script] Analysis Bundle:",
+            "[Sprint81-8 Script] Analysis Bundle:",
             "built_once",
             flush=True,
         )
         print(
-            "[Sprint81-7 Script] Bundle Keys:",
+            "[Sprint81-8 Script] Bundle Keys:",
             sorted(bundle.keys()),
             flush=True,
         )
         print(
-            "[Sprint81-7 Script] Bridge Library:",
+            "[Sprint81-8 Script] Bridge Library:",
             "bridge-library-80-2a",
             flush=True,
         )
         print(
-            "[Sprint81-7 Script] Bridge Psychology:",
+            "[Sprint81-8 Script] Bridge Psychology:",
             psychology_type,
             flush=True,
         )
         print(
-            "[Sprint81-7 Script] Product:",
+            "[Sprint81-8 Script] Product:",
             product_name,
             flush=True,
         )
         print(
-            "[Sprint81-7 Script] Product Type:",
+            "[Sprint81-8 Script] Product Type:",
             product_type,
             flush=True,
         )
         print(
-            "[Sprint81-7 Script] Shorts Strategy:",
+            "[Sprint81-8 Script] Shorts Strategy:",
             shorts_strategy,
             flush=True,
         )
         print(
-            "[Sprint81-7 Script] Strategy Reason:",
+            "[Sprint81-8 Script] Strategy Reason:",
             product_strategy.get("strategy_reason", ""),
             flush=True,
         )
         print(
-            "[Sprint81-7 Script] Strategy Bridge:",
+            "[Sprint81-8 Script] Strategy Bridge:",
             strategy_bridge,
             flush=True,
         )
         print(
-            "[Sprint81-7 Script] Target Customer:",
+            "[Sprint81-8 Script] Target Customer:",
             target_customer,
             flush=True,
         )
         print(
-            "[Sprint81-7 Script] Target Reason:",
+            "[Sprint81-8 Script] Target Reason:",
             target_reason,
             flush=True,
         )
         print(
-            "[Sprint81-7 Script] Target Confidence:",
+            "[Sprint81-8 Script] Target Confidence:",
             target_customer_result.get("confidence", 0),
             flush=True,
         )
         print(
-            "[Sprint81-7 Script] Target Bridge:",
+            "[Sprint81-8 Script] Target Bridge:",
             target_bridge,
             flush=True,
         )
         print(
-            "[Sprint81-7 Script] Hook Type:",
+            "[Sprint81-8 Script] Hook Type:",
             best_hook_type,
             flush=True,
         )
         print(
-            "[Sprint81-7 Script] Dominant Review Type:",
+            "[Sprint81-8 Script] Dominant Review Type:",
             review_type_result.get("dominant_type", ""),
             review_type_result.get("dominant_label", ""),
             flush=True,
         )
         print(
-            "[Sprint81-7 Script] Review Type Scores:",
+            "[Sprint81-8 Script] Review Type Scores:",
             review_type_result.get("scores", {}),
             flush=True,
         )
         print(
-            "[Sprint81-7 Script] Before:",
+            "[Sprint81-8 Script] Before:",
             before_after_story.get("before", ""),
             flush=True,
         )
         print(
-            "[Sprint81-7 Script] Choice:",
+            "[Sprint81-8 Script] Choice:",
             before_after_story.get("choice", ""),
             flush=True,
         )
         print(
-            "[Sprint81-7 Script] After:",
+            "[Sprint81-8 Script] After:",
             before_after_story.get("after", ""),
             flush=True,
         )
         print(
-            "[Sprint81-7 Script] Psychology Type:",
+            "[Sprint81-8 Script] Psychology Type:",
             psychology_result.get("dominant_type", ""),
             psychology_result.get("dominant_label", ""),
             flush=True,
         )
         print(
-            "[Sprint81-7 Script] Psychology Scores:",
+            "[Sprint81-8 Script] Psychology Scores:",
             psychology_result.get("scores", {}),
             flush=True,
         )
         print(
-            "[Sprint81-7 Script] Problem:",
+            "[Sprint81-8 Script] Problem:",
             psychology_story.get("problem", ""),
             flush=True,
         )
         print(
-            "[Sprint81-7 Script] Empathy:",
+            "[Sprint81-8 Script] Empathy:",
             psychology_story.get("empathy", ""),
             flush=True,
         )
         print(
-            "[Sprint81-7 Story] Version:",
+            "[Sprint81-8 Story] Version:",
             story_context.get("version", ""),
             flush=True,
         )
         print(
-            "[Sprint81-7 Story] Built:",
+            "[Sprint81-8 Story] Built:",
             bool(story_context),
             flush=True,
         )
         print(
-            "[Sprint81-7 Story] Arc:",
+            "[Sprint81-8 Story] Arc:",
             story_context.get("arc_type", ""),
             flush=True,
         )
         print(
-            "[Sprint81-7 Story] Problem:",
+            "[Sprint81-8 Story] Problem:",
             story_context.get("problem", ""),
             flush=True,
         )
         print(
-            "[Sprint81-7 Story] Emotion:",
+            "[Sprint81-8 Story] Emotion:",
             story_context.get("emotion", ""),
             flush=True,
         )
         print(
-            "[Sprint81-7 Story] Decision:",
+            "[Sprint81-8 Story] Decision:",
             story_context.get("decision", ""),
             flush=True,
         )
         print(
-            "[Sprint81-7 Story] Change:",
+            "[Sprint81-8 Story] Change:",
             story_context.get("change", ""),
             flush=True,
         )
         print(
-            "[Sprint81-7 Story] Result:",
+            "[Sprint81-8 Story] Result:",
             story_context.get("result", ""),
             flush=True,
         )
         print(
-            "[Sprint81-7 Emotion] Version:",
+            "[Sprint81-8 Emotion] Version:",
             emotion_curve.get("version", ""),
             flush=True,
         )
         print(
-            "[Sprint81-7 Emotion] Built:",
+            "[Sprint81-8 Emotion] Built:",
             bool(emotion_curve),
             flush=True,
         )
         print(
-            "[Sprint81-7 Emotion] Curve:",
+            "[Sprint81-8 Emotion] Curve:",
             emotion_curve.get("curve_type", ""),
             flush=True,
         )
         print(
-            "[Sprint81-7 Emotion] Hook:",
+            "[Sprint81-8 Emotion] Hook:",
             emotion_curve.get("hook", ""),
             flush=True,
         )
         print(
-            "[Sprint81-7 Emotion] Empathy:",
+            "[Sprint81-8 Emotion] Empathy:",
             emotion_curve.get("empathy", ""),
             flush=True,
         )
         print(
-            "[Sprint81-7 Emotion] Tension:",
+            "[Sprint81-8 Emotion] Tension:",
             emotion_curve.get("tension", ""),
             flush=True,
         )
         print(
-            "[Sprint81-7 Emotion] Relief:",
+            "[Sprint81-8 Emotion] Relief:",
             emotion_curve.get("relief", ""),
             flush=True,
         )
         print(
-            "[Sprint81-7 Emotion] Satisfaction:",
+            "[Sprint81-8 Emotion] Satisfaction:",
             emotion_curve.get("satisfaction", ""),
             flush=True,
         )
         print(
-            "[Sprint81-7 Script] Short:",
+            "[Sprint81-8 Script] Short:",
             short_script.get("estimated_seconds", 0),
             "s",
             "error=",
@@ -879,7 +891,7 @@ class ReviewScriptGenerator:
             flush=True,
         )
         print(
-            "[Sprint81-7 Script] Medium:",
+            "[Sprint81-8 Script] Medium:",
             medium_script.get("estimated_seconds", 0),
             "s",
             "error=",
@@ -893,7 +905,7 @@ class ReviewScriptGenerator:
             flush=True,
         )
         print(
-            "[Sprint81-7 Script] Long:",
+            "[Sprint81-8 Script] Long:",
             long_script.get("estimated_seconds", 0),
             "s",
             "error=",
@@ -912,7 +924,7 @@ class ReviewScriptGenerator:
             ("Long", long_script),
         ):
             print(
-                f"[Sprint81-7 Score] {label}:",
+                f"[Sprint81-8 Score] {label}:",
                 {
                     "story": script.get("story_score", 0),
                     "emotion": script.get("emotion_score", 0),
@@ -924,77 +936,77 @@ class ReviewScriptGenerator:
                 flush=True,
             )
         print(
-            "[Sprint81-7 Score] Version:",
+            "[Sprint81-8 Score] Version:",
             "story-score-engine-81-3",
             flush=True,
         )
         print(
-            "[Sprint81-7 Score] Selected Quality:",
+            "[Sprint81-8 Score] Selected Quality:",
             best_script.get("quality_score", 0),
             flush=True,
         )
         print(
-            "[Sprint81-7 Gate] Version:",
+            "[Sprint81-8 Gate] Version:",
             "story-quality-gate-81-4",
             flush=True,
         )
         print(
-            "[Sprint81-7 Gate] Selected Passed:",
+            "[Sprint81-8 Gate] Selected Passed:",
             best_script.get("quality_gate_passed", False),
             flush=True,
         )
         print(
-            "[Sprint81-7 Gate] Selected Status:",
+            "[Sprint81-8 Gate] Selected Status:",
             best_script.get("quality_gate_status", ""),
             flush=True,
         )
         print(
-            "[Sprint81-7 Gate] Weak Dimensions:",
+            "[Sprint81-8 Gate] Weak Dimensions:",
             best_script.get("quality_gate_weak_dimensions", []),
             flush=True,
         )
         print(
-            "[Sprint81-7 Gate] Improvement Priority:",
+            "[Sprint81-8 Gate] Improvement Priority:",
             best_script.get("quality_gate_improvement_priority", []),
             flush=True,
         )
         print(
-            "[Sprint81-7 Optimizer] Version:",
+            "[Sprint81-8 Optimizer] Version:",
             narrative_optimization.get("version", ""),
             flush=True,
         )
         print(
-            "[Sprint81-7 Optimizer] Applied:",
+            "[Sprint81-8 Optimizer] Applied:",
             narrative_optimization.get("applied", False),
             flush=True,
         )
         print(
-            "[Sprint81-7 Optimizer] Changes:",
+            "[Sprint81-8 Optimizer] Changes:",
             narrative_optimization.get("changes", []),
             flush=True,
         )
         print(
-            "[Sprint81-7 Optimizer] Score:",
+            "[Sprint81-8 Optimizer] Score:",
             narrative_optimization.get("optimization_score", 0),
             flush=True,
         )
         print(
-            "[Sprint81-7 Optimizer] Script:",
+            "[Sprint81-8 Optimizer] Script:",
             optimized_script,
             flush=True,
         )
         print(
-            "[Sprint81-7 Platform] Version:",
+            "[Sprint81-8 Platform] Version:",
             platform_adaptation.get("version", ""),
             flush=True,
         )
         print(
-            "[Sprint81-7 Platform] Built:",
+            "[Sprint81-8 Platform] Built:",
             bool(platform_scripts),
             flush=True,
         )
         print(
-            "[Sprint81-7 Platform] Score:",
+            "[Sprint81-8 Platform] Score:",
             platform_adaptation.get("adaptation_score", 0),
             flush=True,
         )
@@ -1005,22 +1017,22 @@ class ReviewScriptGenerator:
         ):
             platform_data = platform_scripts.get(platform_name, {})
             print(
-                f"[Sprint81-7 Platform] {platform_name}:",
+                f"[Sprint81-8 Platform] {platform_name}:",
                 platform_data.get("script", ""),
                 flush=True,
             )
         print(
-            "[Sprint81-7 CTA] Version:",
+            "[Sprint81-8 CTA] Version:",
             cta_optimization.get("version", ""),
             flush=True,
         )
         print(
-            "[Sprint81-7 CTA] Built:",
+            "[Sprint81-8 CTA] Built:",
             cta_optimization.get("built", False),
             flush=True,
         )
         print(
-            "[Sprint81-7 CTA] Score:",
+            "[Sprint81-8 CTA] Score:",
             cta_optimization.get("cta_score", 0),
             flush=True,
         )
@@ -1031,17 +1043,47 @@ class ReviewScriptGenerator:
         ):
             cta_data = cta_optimization.get("platform_cta", {}).get(platform_name, {})
             print(
-                f"[Sprint81-7 CTA] {platform_name}:",
+                f"[Sprint81-8 CTA] {platform_name}:",
                 cta_data.get("selected_cta", ""),
                 flush=True,
             )
         print(
-            "[Sprint81-7 Script] Selected:",
+            "[Sprint81-8 Hook] Version:",
+            hook_variation.get("version", ""),
+            flush=True,
+        )
+        print(
+            "[Sprint81-8 Hook] Built:",
+            hook_variation.get("built", False),
+            flush=True,
+        )
+        print(
+            "[Sprint81-8 Hook] Count:",
+            hook_variation.get("hook_count", 0),
+            flush=True,
+        )
+        print(
+            "[Sprint81-8 Hook] Selected Type:",
+            hook_variation.get("selected_hook_type", ""),
+            flush=True,
+        )
+        print(
+            "[Sprint81-8 Hook] Selected Score:",
+            hook_variation.get("selected_hook_score", 0),
+            flush=True,
+        )
+        print(
+            "[Sprint81-8 Hook] Selected:",
+            hook_variation.get("selected_hook", ""),
+            flush=True,
+        )
+        print(
+            "[Sprint81-8 Script] Selected:",
             best_script.get("type", ""),
             flush=True,
         )
         print(
-            "[Sprint81-7 Script] Best Script:",
+            "[Sprint81-8 Script] Best Script:",
             best_script.get("text", ""),
             flush=True,
         )
@@ -1089,6 +1131,13 @@ class ReviewScriptGenerator:
             "optimized_tiktok_script": optimized_platform_scripts.get("tiktok", {}).get("script", ""),
             "optimized_instagram_script": optimized_platform_scripts.get("instagram_reels", {}).get("script", ""),
             "optimized_youtube_script": optimized_platform_scripts.get("youtube_shorts", {}).get("script", ""),
+            "hook_variation_version": "hook-variation-engine-81-8",
+            "hook_variations": hook_variation.get("hook_variations", []),
+            "hook_count": hook_variation.get("hook_count", 0),
+            "selected_hook": hook_variation.get("selected_hook", best_hook),
+            "selected_hook_type": hook_variation.get("selected_hook_type", best_hook_type),
+            "selected_hook_score": hook_variation.get("selected_hook_score", 0),
+            "hook_variation": hook_variation,
             "quality_gate_passed": best_script.get("quality_gate_passed", False),
             "quality_gate_status": best_script.get("quality_gate_status", ""),
             "quality_gate_weak_dimensions": best_script.get(
@@ -3771,6 +3820,132 @@ class ReviewScriptGenerator:
             "quality_grade": self._quality_grade(quality_score),
         })
         return result
+
+    def _build_hook_variations(
+        self,
+        original_hook: str,
+        product_name: str,
+        product_type: str,
+        shorts_strategy: str,
+        psychology_type: str,
+        target_customer: str,
+        pain_summary: str,
+        evidence_summary: str,
+        review_count: int,
+    ) -> Dict[str, Any]:
+        """Create and score reusable hook variations without changing the base script."""
+        original = self._clean_text(original_hook)
+        product = self._clean_text(product_name)
+        product_type_text = self._clean_text(product_type)
+        strategy = self._clean_text(shorts_strategy)
+        psychology = self._clean_text(psychology_type)
+        target = self._clean_text(target_customer)
+        pain = self._clean_text(pain_summary)
+        evidence = self._clean_text(evidence_summary)
+        count = self._safe_int(review_count)
+
+        if product_type_text == "travel" and "24인치" in evidence:
+            comparison = "20인치와 24인치, 어떤 걸 골라야 할까요?"
+            mistake = "3박 4일 여행에 캐리어 크기를 잘못 고르면 짐 정리가 더 힘들어집니다"
+            empathy = "3박 4일 여행인데 캐리어 크기 때문에 고민하고 계신가요?"
+            curiosity = "3박 4일 여행에는 왜 24인치가 많이 선택될까요?"
+        else:
+            comparison = f"비슷해 보이는 {product}, 무엇을 기준으로 골라야 할까요?"
+            mistake = f"{product}를 기준 없이 고르면 구매 후 아쉬움이 남을 수 있습니다"
+            empathy = f"{pain} 때문에 제품 선택을 미루고 계신가요?"
+            curiosity = f"{product} 후기에서 가장 많이 나온 선택 기준은 무엇일까요?"
+
+        review_hook = (
+            f"구매 후기 {count}개에서 가장 많이 언급된 기준을 확인했습니다"
+            if count > 0
+            else f"실제 후기에서 반복된 {product} 선택 기준을 확인했습니다"
+        )
+        target_hook = (
+            f"{target}이라면 이 선택 기준부터 확인해야 합니다"
+            if target
+            else f"{product}를 찾는 분이라면 이 기준부터 확인해 보세요"
+        )
+
+        candidates = [
+            ("original", original),
+            ("curiosity", curiosity),
+            ("comparison", comparison),
+            ("mistake_prevention", mistake),
+            ("empathy", empathy),
+            ("review_evidence", review_hook),
+            ("target_specific", target_hook),
+        ]
+
+        type_bonus = {
+            "comparison": 8 if strategy == "comparison" or psychology == "comparison" else 3,
+            "mistake_prevention": 8 if psychology == "mistake_prevention" else 4,
+            "empathy": 8 if psychology == "empathy" else 4,
+            "review_evidence": 7 if count > 0 else 3,
+            "target_specific": 6 if target else 2,
+            "curiosity": 6,
+            "original": 5,
+        }
+
+        hook_variations: List[Dict[str, Any]] = []
+        seen = set()
+        for hook_type, hook_text in candidates:
+            cleaned = self._clean_text(hook_text)
+            if not cleaned or cleaned in seen:
+                continue
+            seen.add(cleaned)
+
+            length = len(cleaned)
+            length_score = 24 if 18 <= length <= 52 else 18 if length <= 70 else 10
+            question_score = 12 if cleaned.endswith("?") or "까요" in cleaned else 7
+            specificity_score = 0
+            if product and product in cleaned:
+                specificity_score += 8
+            if any(token in cleaned for token in ("3박 4일", "24인치", "후기", str(count) if count else "__none__")):
+                specificity_score += 8
+            relevance_score = 30
+            score = min(
+                100,
+                20 + length_score + question_score + specificity_score + type_bonus.get(hook_type, 0),
+            )
+            hook_variations.append(
+                {
+                    "type": hook_type,
+                    "text": cleaned,
+                    "score": score,
+                    "length": length,
+                    "source": "hook_variation_engine",
+                }
+            )
+
+        hook_variations.sort(
+            key=lambda item: (
+                item.get("score", 0),
+                item.get("type") == psychology,
+                -item.get("length", 0),
+            ),
+            reverse=True,
+        )
+        selected = hook_variations[0] if hook_variations else {
+            "type": "original",
+            "text": original,
+            "score": 0,
+        }
+
+        return {
+            "version": "hook-variation-engine-81-8",
+            "built": bool(hook_variations),
+            "hook_count": len(hook_variations),
+            "hook_variations": hook_variations,
+            "selected_hook": selected.get("text", original),
+            "selected_hook_type": selected.get("type", "original"),
+            "selected_hook_score": selected.get("score", 0),
+            "selection_basis": {
+                "product_type": product_type_text,
+                "shorts_strategy": strategy,
+                "psychology_type": psychology,
+                "review_count": count,
+            },
+        }
 
     def _adapt_script_for_platforms(
         self,
