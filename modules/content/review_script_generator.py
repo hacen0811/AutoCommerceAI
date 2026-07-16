@@ -15,7 +15,7 @@ class ReviewScriptGenerator:
     - 외부 AI API 없이 규칙 기반으로 동작
     """
 
-    VERSION = "review-script-generator-81-2"
+    VERSION = "review-script-generator-81-3"
 
     def _build_analysis_bundle(
         self,
@@ -576,25 +576,48 @@ class ReviewScriptGenerator:
             scripts
         )
 
+        scripts = [
+            self._score_script_quality(
+                script=script,
+                story_context=story_context,
+                emotion_curve=emotion_curve,
+                review_count=count,
+            )
+            for script in scripts
+        ]
+
+        script_by_type = {
+            script.get("type", ""): script
+            for script in scripts
+        }
+        short_script = script_by_type.get(
+            short_script.get("type", ""),
+            short_script,
+        )
+        medium_script = script_by_type.get(
+            medium_script.get("type", ""),
+            medium_script,
+        )
+        long_script = script_by_type.get(
+            long_script.get("type", ""),
+            long_script,
+        )
+
         scripts.sort(
             key=lambda item: (
+                item.get("quality_score", 0),
+                item.get("retention_score", 0),
+                item.get("natural_score", 0),
                 item.get("score", 0),
-                -abs(
-                    item.get("target_seconds", 20)
-                    - 20
-                ),
+                -abs(item.get("duration_error", 0)),
             ),
             reverse=True,
         )
 
         best_script = (
-            medium_script
-            if medium_script.get("text")
-            else (
-                scripts[0]
-                if scripts
-                else {}
-            )
+            scripts[0]
+            if scripts
+            else {}
         )
 
         platform_recommendations = {
@@ -604,209 +627,209 @@ class ReviewScriptGenerator:
         }
 
         print(
-            "[Sprint81-2 Script] Version:",
+            "[Sprint81-3 Script] Version:",
             self.VERSION,
             flush=True,
         )
         print(
-            "[Sprint81-2 Script] Analysis Bundle:",
+            "[Sprint81-3 Script] Analysis Bundle:",
             "built_once",
             flush=True,
         )
         print(
-            "[Sprint81-2 Script] Bundle Keys:",
+            "[Sprint81-3 Script] Bundle Keys:",
             sorted(bundle.keys()),
             flush=True,
         )
         print(
-            "[Sprint81-2 Script] Bridge Library:",
+            "[Sprint81-3 Script] Bridge Library:",
             "bridge-library-80-2a",
             flush=True,
         )
         print(
-            "[Sprint81-2 Script] Bridge Psychology:",
+            "[Sprint81-3 Script] Bridge Psychology:",
             psychology_type,
             flush=True,
         )
         print(
-            "[Sprint81-2 Script] Product:",
+            "[Sprint81-3 Script] Product:",
             product_name,
             flush=True,
         )
         print(
-            "[Sprint81-2 Script] Product Type:",
+            "[Sprint81-3 Script] Product Type:",
             product_type,
             flush=True,
         )
         print(
-            "[Sprint81-2 Script] Shorts Strategy:",
+            "[Sprint81-3 Script] Shorts Strategy:",
             shorts_strategy,
             flush=True,
         )
         print(
-            "[Sprint81-2 Script] Strategy Reason:",
+            "[Sprint81-3 Script] Strategy Reason:",
             product_strategy.get("strategy_reason", ""),
             flush=True,
         )
         print(
-            "[Sprint81-2 Script] Strategy Bridge:",
+            "[Sprint81-3 Script] Strategy Bridge:",
             strategy_bridge,
             flush=True,
         )
         print(
-            "[Sprint81-2 Script] Target Customer:",
+            "[Sprint81-3 Script] Target Customer:",
             target_customer,
             flush=True,
         )
         print(
-            "[Sprint81-2 Script] Target Reason:",
+            "[Sprint81-3 Script] Target Reason:",
             target_reason,
             flush=True,
         )
         print(
-            "[Sprint81-2 Script] Target Confidence:",
+            "[Sprint81-3 Script] Target Confidence:",
             target_customer_result.get("confidence", 0),
             flush=True,
         )
         print(
-            "[Sprint81-2 Script] Target Bridge:",
+            "[Sprint81-3 Script] Target Bridge:",
             target_bridge,
             flush=True,
         )
         print(
-            "[Sprint81-2 Script] Hook Type:",
+            "[Sprint81-3 Script] Hook Type:",
             best_hook_type,
             flush=True,
         )
         print(
-            "[Sprint81-2 Script] Dominant Review Type:",
+            "[Sprint81-3 Script] Dominant Review Type:",
             review_type_result.get("dominant_type", ""),
             review_type_result.get("dominant_label", ""),
             flush=True,
         )
         print(
-            "[Sprint81-2 Script] Review Type Scores:",
+            "[Sprint81-3 Script] Review Type Scores:",
             review_type_result.get("scores", {}),
             flush=True,
         )
         print(
-            "[Sprint81-2 Script] Before:",
+            "[Sprint81-3 Script] Before:",
             before_after_story.get("before", ""),
             flush=True,
         )
         print(
-            "[Sprint81-2 Script] Choice:",
+            "[Sprint81-3 Script] Choice:",
             before_after_story.get("choice", ""),
             flush=True,
         )
         print(
-            "[Sprint81-2 Script] After:",
+            "[Sprint81-3 Script] After:",
             before_after_story.get("after", ""),
             flush=True,
         )
         print(
-            "[Sprint81-2 Script] Psychology Type:",
+            "[Sprint81-3 Script] Psychology Type:",
             psychology_result.get("dominant_type", ""),
             psychology_result.get("dominant_label", ""),
             flush=True,
         )
         print(
-            "[Sprint81-2 Script] Psychology Scores:",
+            "[Sprint81-3 Script] Psychology Scores:",
             psychology_result.get("scores", {}),
             flush=True,
         )
         print(
-            "[Sprint81-2 Script] Problem:",
+            "[Sprint81-3 Script] Problem:",
             psychology_story.get("problem", ""),
             flush=True,
         )
         print(
-            "[Sprint81-2 Script] Empathy:",
+            "[Sprint81-3 Script] Empathy:",
             psychology_story.get("empathy", ""),
             flush=True,
         )
         print(
-            "[Sprint81-2 Story] Version:",
+            "[Sprint81-3 Story] Version:",
             story_context.get("version", ""),
             flush=True,
         )
         print(
-            "[Sprint81-2 Story] Built:",
+            "[Sprint81-3 Story] Built:",
             bool(story_context),
             flush=True,
         )
         print(
-            "[Sprint81-2 Story] Arc:",
+            "[Sprint81-3 Story] Arc:",
             story_context.get("arc_type", ""),
             flush=True,
         )
         print(
-            "[Sprint81-2 Story] Problem:",
+            "[Sprint81-3 Story] Problem:",
             story_context.get("problem", ""),
             flush=True,
         )
         print(
-            "[Sprint81-2 Story] Emotion:",
+            "[Sprint81-3 Story] Emotion:",
             story_context.get("emotion", ""),
             flush=True,
         )
         print(
-            "[Sprint81-2 Story] Decision:",
+            "[Sprint81-3 Story] Decision:",
             story_context.get("decision", ""),
             flush=True,
         )
         print(
-            "[Sprint81-2 Story] Change:",
+            "[Sprint81-3 Story] Change:",
             story_context.get("change", ""),
             flush=True,
         )
         print(
-            "[Sprint81-2 Story] Result:",
+            "[Sprint81-3 Story] Result:",
             story_context.get("result", ""),
             flush=True,
         )
         print(
-            "[Sprint81-2 Emotion] Version:",
+            "[Sprint81-3 Emotion] Version:",
             emotion_curve.get("version", ""),
             flush=True,
         )
         print(
-            "[Sprint81-2 Emotion] Built:",
+            "[Sprint81-3 Emotion] Built:",
             bool(emotion_curve),
             flush=True,
         )
         print(
-            "[Sprint81-2 Emotion] Curve:",
+            "[Sprint81-3 Emotion] Curve:",
             emotion_curve.get("curve_type", ""),
             flush=True,
         )
         print(
-            "[Sprint81-2 Emotion] Hook:",
+            "[Sprint81-3 Emotion] Hook:",
             emotion_curve.get("hook", ""),
             flush=True,
         )
         print(
-            "[Sprint81-2 Emotion] Empathy:",
+            "[Sprint81-3 Emotion] Empathy:",
             emotion_curve.get("empathy", ""),
             flush=True,
         )
         print(
-            "[Sprint81-2 Emotion] Tension:",
+            "[Sprint81-3 Emotion] Tension:",
             emotion_curve.get("tension", ""),
             flush=True,
         )
         print(
-            "[Sprint81-2 Emotion] Relief:",
+            "[Sprint81-3 Emotion] Relief:",
             emotion_curve.get("relief", ""),
             flush=True,
         )
         print(
-            "[Sprint81-2 Emotion] Satisfaction:",
+            "[Sprint81-3 Emotion] Satisfaction:",
             emotion_curve.get("satisfaction", ""),
             flush=True,
         )
         print(
-            "[Sprint81-2 Script] Short:",
+            "[Sprint81-3 Script] Short:",
             short_script.get("estimated_seconds", 0),
             "s",
             "error=",
@@ -820,7 +843,7 @@ class ReviewScriptGenerator:
             flush=True,
         )
         print(
-            "[Sprint81-2 Script] Medium:",
+            "[Sprint81-3 Script] Medium:",
             medium_script.get("estimated_seconds", 0),
             "s",
             "error=",
@@ -834,7 +857,7 @@ class ReviewScriptGenerator:
             flush=True,
         )
         print(
-            "[Sprint81-2 Script] Long:",
+            "[Sprint81-3 Script] Long:",
             long_script.get("estimated_seconds", 0),
             "s",
             "error=",
@@ -847,13 +870,40 @@ class ReviewScriptGenerator:
             long_script.get("expansion_applied", False),
             flush=True,
         )
+        for label, script in (
+            ("Short", short_script),
+            ("Medium", medium_script),
+            ("Long", long_script),
+        ):
+            print(
+                f"[Sprint81-3 Score] {label}:",
+                {
+                    "story": script.get("story_score", 0),
+                    "emotion": script.get("emotion_score", 0),
+                    "natural": script.get("natural_score", 0),
+                    "evidence": script.get("evidence_score", 0),
+                    "retention": script.get("retention_score", 0),
+                    "quality": script.get("quality_score", 0),
+                },
+                flush=True,
+            )
         print(
-            "[Sprint81-2 Script] Selected:",
-            "medium",
+            "[Sprint81-3 Score] Version:",
+            "story-score-engine-81-3",
             flush=True,
         )
         print(
-            "[Sprint81-2 Script] Best Script:",
+            "[Sprint81-3 Score] Selected Quality:",
+            best_script.get("quality_score", 0),
+            flush=True,
+        )
+        print(
+            "[Sprint81-3 Script] Selected:",
+            best_script.get("type", ""),
+            flush=True,
+        )
+        print(
+            "[Sprint81-3 Script] Best Script:",
             best_script.get("text", ""),
             flush=True,
         )
@@ -873,6 +923,24 @@ class ReviewScriptGenerator:
             "story_context": story_context,
             "emotion_curve_version": "emotion-curve-81-2",
             "emotion_curve": emotion_curve,
+            "score_engine_version": "story-score-engine-81-3",
+            "best_quality_score": best_script.get("quality_score", 0),
+            "best_story_score": best_script.get("story_score", 0),
+            "best_emotion_score": best_script.get("emotion_score", 0),
+            "best_natural_score": best_script.get("natural_score", 0),
+            "best_evidence_score": best_script.get("evidence_score", 0),
+            "best_retention_score": best_script.get("retention_score", 0),
+            "script_quality_scores": {
+                script.get("type", ""): {
+                    "story_score": script.get("story_score", 0),
+                    "emotion_score": script.get("emotion_score", 0),
+                    "natural_score": script.get("natural_score", 0),
+                    "evidence_score": script.get("evidence_score", 0),
+                    "retention_score": script.get("retention_score", 0),
+                    "quality_score": script.get("quality_score", 0),
+                }
+                for script in scripts
+            },
             "bridge_psychology_type": psychology_type,
             "analysis_bundle_keys": sorted(bundle.keys()),
             "target_customer": target_customer,
@@ -3428,6 +3496,141 @@ class ReviewScriptGenerator:
 
         separator = ", " if bridge_text in comma_bridges else " "
         return f"{bridge_text}{separator}{sentence_text}"
+
+    def _score_script_quality(
+        self,
+        script: Dict[str, Any],
+        story_context: Dict[str, Any],
+        emotion_curve: Dict[str, Any],
+        review_count: int,
+    ) -> Dict[str, Any]:
+        result = dict(script)
+        text = self._clean_text(result.get("text", ""))
+        sections = result.get("sections", {})
+        if not isinstance(sections, dict):
+            sections = {}
+
+        story_keys = ("problem", "emotion", "decision", "change", "result")
+        story_values = [
+            self._clean_text(story_context.get(key, ""))
+            for key in story_keys
+        ]
+        story_present = sum(
+            1 for value in story_values
+            if value and self._meaning_overlap(text, value)
+        )
+        story_score = min(100, 55 + story_present * 9)
+        if any(key in sections for key in ("choice", "after", "recommendation")):
+            story_score = min(100, story_score + 6)
+
+        emotion_keys = ("empathy", "tension", "relief", "satisfaction")
+        emotion_present = sum(
+            1
+            for key in emotion_keys
+            if self._meaning_overlap(
+                text,
+                self._clean_text(emotion_curve.get(key, "")),
+            )
+        )
+        emotion_score = min(100, 58 + emotion_present * 9)
+        if "?" in text:
+            emotion_score = min(100, emotion_score + 6)
+
+        sentence_count = max(1, len(result.get("lines", [])))
+        duplicate_penalty = self._repetition_penalty(text)
+        fragment_penalty = 18 if "…" in text else 0
+        natural_score = max(0, min(100, 96 - duplicate_penalty - fragment_penalty))
+        if sentence_count >= 6:
+            natural_score = min(100, natural_score + 2)
+
+        evidence_markers = (
+            "후기", "구매자", "리뷰", "실제", "가장 많이 나온 말",
+        )
+        evidence_hits = sum(1 for marker in evidence_markers if marker in text)
+        evidence_score = min(100, 62 + evidence_hits * 7)
+        if review_count > 0 and str(review_count) in text:
+            evidence_score = min(100, evidence_score + 10)
+
+        duration_status = result.get("duration_status", "")
+        duration_error = abs(self._safe_int(result.get("duration_error", 0)))
+        duration_score = 100 if duration_status == "ok" else max(40, 100 - duration_error * 5)
+        hook_score = 100 if result.get("lines") and ("?" in result["lines"][0] or len(result["lines"][0]) <= 42) else 84
+        retention_score = round(
+            hook_score * 0.35
+            + emotion_score * 0.25
+            + natural_score * 0.20
+            + duration_score * 0.20
+        )
+
+        quality_score = round(
+            story_score * 0.24
+            + emotion_score * 0.20
+            + natural_score * 0.22
+            + evidence_score * 0.16
+            + retention_score * 0.18
+        )
+
+        result.update({
+            "score_engine_version": "story-score-engine-81-3",
+            "story_score": int(story_score),
+            "emotion_score": int(emotion_score),
+            "natural_score": int(natural_score),
+            "evidence_score": int(evidence_score),
+            "retention_score": int(retention_score),
+            "quality_score": int(quality_score),
+            "quality_grade": self._quality_grade(quality_score),
+        })
+        return result
+
+    def _meaning_overlap(self, text: str, sentence: str) -> bool:
+        source = self._clean_text(text)
+        target = self._clean_text(sentence)
+        if not source or not target:
+            return False
+        tokens = [
+            token
+            for token in re.findall(r"[가-힣A-Za-z0-9]+", target)
+            if len(token) >= 2
+        ]
+        if not tokens:
+            return False
+        matched = sum(1 for token in set(tokens) if token in source)
+        return matched >= max(1, min(3, len(set(tokens)) // 3))
+
+    def _repetition_penalty(self, text: str) -> int:
+        normalized = self._clean_text(text)
+        connectors = (
+            "특히", "그래서", "실제로", "사용 후에는",
+            "선택 기준은", "확인해 보세요",
+        )
+        penalty = 0
+        for connector in connectors:
+            count = normalized.count(connector)
+            if count > 1:
+                penalty += (count - 1) * 7
+        sentences = [
+            self._clean_text(item)
+            for item in re.split(r"[.!?]+", normalized)
+            if self._clean_text(item)
+        ]
+        seen = set()
+        for sentence in sentences:
+            key = sentence[:24]
+            if key in seen:
+                penalty += 12
+            seen.add(key)
+        return min(45, penalty)
+
+    def _quality_grade(self, score: int) -> str:
+        if score >= 92:
+            return "S"
+        if score >= 85:
+            return "A"
+        if score >= 75:
+            return "B"
+        if score >= 65:
+            return "C"
+        return "D"
 
     def _script(
         self,
