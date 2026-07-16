@@ -27,6 +27,8 @@ from modules.publisher.publisher_engine import PublisherEngine
 from modules.publisher.publisher_orchestrator import PublisherOrchestrator
 from modules.publisher.publisher_result_store import PublisherResultStore
 from modules.publisher.upload_queue_engine import UploadQueueEngine
+from modules.publisher.upload_dispatcher import UploadDispatcher
+from modules.publisher.youtube_upload_executor import YouTubeUploadExecutor
 try:
     from modules.review.review_image_ocr import ReviewImageOCR
 except ImportError:
@@ -43,7 +45,7 @@ from modules.video.download_utils import (
 )
 
 
-print("######## WORKFLOW_ENGINE SPRINT82-10 LOADED ########", flush=True)
+print("######## WORKFLOW_ENGINE SPRINT83-3 LOADED ########", flush=True)
 
 
 class WorkflowEngine:
@@ -68,7 +70,7 @@ class WorkflowEngine:
     → CapCutExport
     """
 
-    WORKFLOW_VERSION = "workflow-engine-82-10"
+    WORKFLOW_VERSION = "workflow-engine-83-3"
 
     STEP_NAMES = [
         "product_plan",
@@ -2099,7 +2101,7 @@ class WorkflowEngine:
                 error=exc,
             )
 
-        # 13. Sprint82-10 Publisher Workflow + Result Store + Upload Queue Integration
+        # 13. Sprint83-3 Publisher + Queue + Dispatcher + YouTube Dry Run Integration
         publisher_result = {
             "ok": False,
             "version": "publisher-engine-82-1",
@@ -2134,6 +2136,25 @@ class WorkflowEngine:
             "jobs": {},
         }
         outputs["upload_queue"] = upload_queue_result
+        upload_dispatcher_result = {
+            "ok": False,
+            "version": "upload-dispatcher-83-1",
+            "status": "not_run",
+            "dispatch_ready": False,
+            "dispatch_count": 0,
+            "dispatch_jobs": {},
+        }
+        outputs["upload_dispatcher"] = upload_dispatcher_result
+        youtube_upload_result = {
+            "ok": False,
+            "version": "youtube-upload-executor-83-2",
+            "status": "not_run",
+            "platform": "youtube_shorts",
+            "dry_run": True,
+            "upload_ready": False,
+            "actual_upload_performed": False,
+        }
+        outputs["youtube_upload"] = youtube_upload_result
 
         try:
             review_scripts = (
@@ -2188,17 +2209,17 @@ class WorkflowEngine:
             )
 
             print(
-                "[Sprint82-10 Publisher] Export Ready:",
+                "[Sprint83-3 Publisher] Export Ready:",
                 bool(export_pack.get("ready")),
                 flush=True,
             )
             print(
-                "[Sprint82-10 Publisher] Engine Ready:",
+                "[Sprint83-3 Publisher] Engine Ready:",
                 bool(publisher_result.get("publisher_ready")),
                 flush=True,
             )
             print(
-                "[Sprint82-10 Publisher] Orchestrator Ready:",
+                "[Sprint83-3 Publisher] Orchestrator Ready:",
                 bool(
                     publisher_orchestrator_result.get(
                         "orchestrator_ready"
@@ -2207,7 +2228,7 @@ class WorkflowEngine:
                 flush=True,
             )
             print(
-                "[Sprint82-10 Publisher] Ready Platforms:",
+                "[Sprint83-3 Publisher] Ready Platforms:",
                 publisher_orchestrator_result.get(
                     "ready_platforms",
                     [],
@@ -2215,7 +2236,7 @@ class WorkflowEngine:
                 flush=True,
             )
             print(
-                "[Sprint82-10 Publisher] Video:",
+                "[Sprint83-3 Publisher] Video:",
                 final_video_path,
                 flush=True,
             )
@@ -2233,17 +2254,17 @@ class WorkflowEngine:
             outputs["publisher_store"] = publisher_store_result
 
             print(
-                "[Sprint82-10 Store] Stored:",
+                "[Sprint83-3 Store] Stored:",
                 bool(publisher_store_result.get("stored")),
                 flush=True,
             )
             print(
-                "[Sprint82-10 Store] Manifest:",
+                "[Sprint83-3 Store] Manifest:",
                 publisher_store_result.get("manifest_path", ""),
                 flush=True,
             )
             print(
-                "[Sprint82-10 Store] Latest:",
+                "[Sprint83-3 Store] Latest:",
                 publisher_store_result.get("latest_pointer_path", ""),
                 flush=True,
             )
@@ -2255,23 +2276,110 @@ class WorkflowEngine:
             outputs["upload_queue"] = upload_queue_result
 
             print(
-                "[Sprint82-10 Queue] Ready:",
+                "[Sprint83-3 Queue] Ready:",
                 bool(upload_queue_result.get("queue_ready")),
                 flush=True,
             )
             print(
-                "[Sprint82-10 Queue] Jobs:",
+                "[Sprint83-3 Queue] Jobs:",
                 upload_queue_result.get("ready_jobs", []),
                 flush=True,
             )
             print(
-                "[Sprint82-10 Queue] Queue:",
+                "[Sprint83-3 Queue] Queue:",
                 upload_queue_result.get("queue_path", ""),
                 flush=True,
             )
             print(
-                "[Sprint82-10 Queue] Latest:",
+                "[Sprint83-3 Queue] Latest:",
                 upload_queue_result.get("latest_pointer_path", ""),
+                flush=True,
+            )
+
+            upload_dispatcher_result = UploadDispatcher().dispatch(
+                queue_result=upload_queue_result,
+                platforms=["youtube_shorts"],
+                max_jobs=1,
+                persist=False,
+            )
+            outputs["upload_dispatcher"] = upload_dispatcher_result
+
+            youtube_dispatch_job = (
+                upload_dispatcher_result.get("dispatch_jobs", {})
+                if isinstance(
+                    upload_dispatcher_result.get("dispatch_jobs"),
+                    dict,
+                )
+                else {}
+            ).get("youtube_shorts", {})
+
+            if youtube_dispatch_job:
+                youtube_upload_result = (
+                    YouTubeUploadExecutor().execute(
+                        dispatch_job=youtube_dispatch_job,
+                        dry_run=True,
+                    )
+                )
+            else:
+                youtube_upload_result = {
+                    "ok": False,
+                    "version": "youtube-upload-executor-83-2",
+                    "status": "dispatch_job_missing",
+                    "platform": "youtube_shorts",
+                    "dry_run": True,
+                    "upload_ready": False,
+                    "actual_upload_performed": False,
+                    "errors": [
+                        "youtube_shorts dispatch job이 없습니다"
+                    ],
+                    "warnings": [],
+                }
+
+            outputs["youtube_upload"] = youtube_upload_result
+
+            print(
+                "[Sprint83-3 Dispatcher] Ready:",
+                bool(
+                    upload_dispatcher_result.get(
+                        "dispatch_ready"
+                    )
+                ),
+                flush=True,
+            )
+            print(
+                "[Sprint83-3 Dispatcher] Jobs:",
+                upload_dispatcher_result.get(
+                    "dispatch_platforms",
+                    [],
+                ),
+                flush=True,
+            )
+            print(
+                "[Sprint83-3 YouTube] Status:",
+                youtube_upload_result.get("status", ""),
+                flush=True,
+            )
+            print(
+                "[Sprint83-3 YouTube] Dry Run:",
+                bool(youtube_upload_result.get("dry_run")),
+                flush=True,
+            )
+            print(
+                "[Sprint83-3 YouTube] Ready:",
+                bool(
+                    youtube_upload_result.get(
+                        "upload_ready"
+                    )
+                ),
+                flush=True,
+            )
+            print(
+                "[Sprint83-3 YouTube] Actual Upload:",
+                bool(
+                    youtube_upload_result.get(
+                        "actual_upload_performed"
+                    )
+                ),
                 flush=True,
             )
 
@@ -2318,9 +2426,32 @@ class WorkflowEngine:
                 "error": str(exc),
             }
             outputs["upload_queue"] = upload_queue_result
+            upload_dispatcher_result = {
+                "ok": False,
+                "version": "upload-dispatcher-83-1",
+                "status": "skipped",
+                "dispatch_ready": False,
+                "dispatch_count": 0,
+                "dispatch_jobs": {},
+                "error": str(exc),
+            }
+            outputs["upload_dispatcher"] = (
+                upload_dispatcher_result
+            )
+            youtube_upload_result = {
+                "ok": False,
+                "version": "youtube-upload-executor-83-2",
+                "status": "skipped",
+                "platform": "youtube_shorts",
+                "dry_run": True,
+                "upload_ready": False,
+                "actual_upload_performed": False,
+                "error": str(exc),
+            }
+            outputs["youtube_upload"] = youtube_upload_result
 
             print(
-                "[Sprint82-10 Publisher] ERROR:",
+                "[Sprint83-3 Publisher] ERROR:",
                 repr(exc),
                 flush=True,
             )
@@ -2328,7 +2459,7 @@ class WorkflowEngine:
         final_state = state.load(job_id)
 
         print(
-            "######## RUN_PROJECT SPRINT82-10 END ########",
+            "######## RUN_PROJECT SPRINT83-3 END ########",
             flush=True,
         )
 
