@@ -19,6 +19,12 @@ from modules.video.video_candidate_ranker import VideoCandidateRanker
 from modules.video.viral_pattern_engine import ViralPatternEngine
 from modules.content.content_factory import ContentFactory
 from modules.content.review_insight_engine import ReviewInsightEngine
+from modules.content.review_cleaner import ReviewCleaner
+from modules.content.review_quote_selector import ReviewQuoteSelector
+from modules.content.review_hook_generator import ReviewHookGenerator
+from modules.content.review_script_generator import ReviewScriptGenerator
+from modules.publisher.publisher_engine import PublisherEngine
+from modules.publisher.publisher_orchestrator import PublisherOrchestrator
 try:
     from modules.review.review_image_ocr import ReviewImageOCR
 except ImportError:
@@ -35,7 +41,7 @@ from modules.video.download_utils import (
 )
 
 
-print("######## WORKFLOW_ENGINE SPRINT71-2 LOADED ########", flush=True)
+print("######## WORKFLOW_ENGINE SPRINT82-6 LOADED ########", flush=True)
 
 
 class WorkflowEngine:
@@ -60,7 +66,7 @@ class WorkflowEngine:
     → CapCutExport
     """
 
-    WORKFLOW_VERSION = "workflow-engine-71-2"
+    WORKFLOW_VERSION = "workflow-engine-82-6"
 
     STEP_NAMES = [
         "product_plan",
@@ -1383,6 +1389,34 @@ class WorkflowEngine:
             "reviews": [],
         }
         review_insight_result = {}
+        review_quote_result = {
+            "ok": False,
+            "version": "review-quote-selector-73-2",
+            "status": "not_run",
+            "review_count": 0,
+            "best_pain": "",
+            "best_benefit": "",
+            "best_emotion": "",
+            "best_recommendation": "",
+            "best_quote": "",
+            "top_quotes": [],
+            "keyword_summary": [],
+        }
+        review_clean_result = {
+            "ok": False,
+            "version": "review-cleaner-73-1",
+            "status": "not_run",
+            "input_count": 0,
+            "review_count": 0,
+            "reviews": [],
+            "texts": [],
+            "stats": {
+                "input_count": 0,
+                "output_count": 0,
+                "removed_count": 0,
+            },
+            "warnings": [],
+        }
         merged_reviews = []
 
         print(
@@ -1454,15 +1488,85 @@ class WorkflowEngine:
                 review_ocr_result.get("reviews", []),
                 source="review_image_ocr",
             )
+            print(
+                "[DEBUG73-4] OCR Raw First:",
+                repr(
+                    (
+                        review_ocr_result.get("reviews", [])
+                        or [{}]
+                    )[0]
+                ),
+                flush=True,
+            )
 
+            print(
+                "[DEBUG73-4] OCR Normalized First:",
+                repr(
+                    ocr_reviews[0]
+                    if ocr_reviews
+                    else {}
+                ),
+                flush=True,
+            )
             merged_reviews = self._merge_reviews(
                 coupang_reviews,
                 ocr_reviews,
             )
 
+            raw_merged_reviews = list(merged_reviews)
+
+            review_clean_result = ReviewCleaner().clean(
+                reviews=raw_merged_reviews,
+                source="coupang+review_image_ocr",
+            )
+
+            clean_reviews = review_clean_result.get(
+                "reviews",
+                [],
+            )
+
+            if clean_reviews:
+                merged_reviews = clean_reviews
+
+            outputs["review_clean"] = review_clean_result
+
             coupang_count = len(coupang_reviews)
             ocr_count = len(ocr_reviews)
+            raw_merged_count = len(raw_merged_reviews)
             merged_count = len(merged_reviews)
+
+            print(
+                "[Sprint73-1] OCR/Merged Reviews:",
+                raw_merged_count,
+                flush=True,
+            )
+            print(
+                "[Sprint73-1] Clean Reviews:",
+                review_clean_result.get(
+                    "review_count",
+                    merged_count,
+                ),
+                flush=True,
+            )
+            print(
+                "[Sprint73-1] Removed:",
+                (
+                    review_clean_result.get("stats", {})
+                    or {}
+                ).get(
+                    "removed_count",
+                    0,
+                ),
+                flush=True,
+            )
+            print(
+                "[Sprint73-1] Cleaner Version:",
+                review_clean_result.get(
+                    "version",
+                    "",
+                ),
+                flush=True,
+            )
 
             if coupang_count and ocr_count:
                 merged_source = "coupang+review_image_ocr"
@@ -1497,9 +1601,13 @@ class WorkflowEngine:
             product_plan["review_source"] = merged_source
             product_plan["review_collect_status"] = merged_status
             product_plan["review_ocr"] = review_ocr_result
+            product_plan["review_clean"] = review_clean_result
+            product_plan["raw_merged_review_count"] = raw_merged_count
+            product_plan["clean_review_count"] = merged_count
 
             outputs["product_plan"] = product_plan
             outputs["review_ocr"] = review_ocr_result
+            outputs["review_clean"] = review_clean_result
             outputs["merged_reviews"] = merged_reviews
             outputs["review_image_paths"] = resolved_review_image_paths
 
@@ -1516,9 +1624,67 @@ class WorkflowEngine:
             )
         except Exception as exc:
             outputs["review_ocr"] = review_ocr_result
+            outputs["review_clean"] = review_clean_result
             outputs["merged_reviews"] = merged_reviews
             print(
                 "[Sprint71-2] OCR Review Merge ERROR:",
+                repr(exc),
+                flush=True,
+            )
+
+        try:
+            review_quote_result = ReviewQuoteSelector().select(
+                reviews=merged_reviews,
+                product_name=(
+                    getattr(project, "product_name", "")
+                    or getattr(project, "title", "")
+                    or "선택 상품"
+                ),
+                top_n=5,
+            )
+
+            print(
+                "[DEBUG73-4] Quote Pain:",
+                repr(review_quote_result.get("best_pain", "")),
+                flush=True,
+            )
+            print(
+                "[DEBUG73-4] Quote Benefit:",
+                repr(review_quote_result.get("best_benefit", "")),
+                flush=True,
+            )
+            print(
+                "[DEBUG73-4] Quote Best:",
+                repr(review_quote_result.get("best_quote", "")),
+                flush=True,
+            )
+
+            outputs["review_quotes"] = review_quote_result
+
+            print(
+                "[Sprint73-2] Quote Selector:",
+                bool(review_quote_result.get("ok")),
+                flush=True,
+            )
+            print(
+                "[Sprint73-2] Best Pain:",
+                review_quote_result.get("best_pain", ""),
+                flush=True,
+            )
+            print(
+                "[Sprint73-2] Best Benefit:",
+                review_quote_result.get("best_benefit", ""),
+                flush=True,
+            )
+            print(
+                "[Sprint73-2] Best Quote:",
+                review_quote_result.get("best_quote", ""),
+                flush=True,
+            )
+        except Exception as exc:
+            outputs["review_quotes"] = review_quote_result
+            print(
+                "[Sprint73-2] Quote Selector ERROR:",
                 repr(exc),
                 flush=True,
             )
@@ -1560,6 +1726,125 @@ class WorkflowEngine:
                 repr(exc),
                 flush=True,
             )
+        # 10-2. Sprint73-3 Review Hook Generator
+        try:
+            review_hook_result = ReviewHookGenerator().generate(
+                review_quotes=outputs.get(
+                    "review_quotes",
+                    {},
+                ),
+                review_insight=outputs.get(
+                    "review_insight",
+                    {},
+                ),
+                product_name=(
+                    getattr(project, "product_name", "")
+                    or getattr(project, "title", "")
+                    or "선택 상품"
+                ),
+                review_count=len(merged_reviews),
+            )
+
+            outputs["review_hooks"] = review_hook_result
+
+            print(
+                "[Sprint73-3] Hook Generator:",
+                bool(review_hook_result.get("ok")),
+                flush=True,
+            )
+            print(
+                "[Sprint73-3] Best Hook:",
+                review_hook_result.get("best_hook", ""),
+                flush=True,
+            )
+            print(
+                "[Sprint73-3] Hook Type:",
+                review_hook_result.get("best_hook_type", ""),
+                flush=True,
+            )
+            print(
+                "[Sprint73-3] Hook Count:",
+                len(review_hook_result.get("hooks", [])),
+                flush=True,
+            )
+
+        except Exception as exc:
+            outputs["review_hooks"] = {
+                "ok": False,
+                "version": "review-hook-generator-73-3",
+                "best_hook": "",
+                "hooks": [],
+                "error": str(exc),
+            }
+
+            print(
+                "[Sprint73-3] Hook Generator ERROR:",
+                repr(exc),
+                flush=True,
+            )
+
+        # =====================================
+        # 10-3. Sprint73-4 Review Script Generator
+        # =====================================
+        try:
+            review_script_result = ReviewScriptGenerator().generate(
+                review_hooks=outputs.get(
+                    "review_hooks",
+                    {},
+                ),
+                review_quotes=outputs.get(
+                    "review_quotes",
+                    {},
+                ),
+                review_insight=outputs.get(
+                    "review_insight",
+                    {},
+                ),
+                product_name=(
+                    getattr(project, "product_name", "")
+                    or getattr(project, "title", "")
+                    or "선택 상품"
+                ),
+                review_count=len(merged_reviews),
+            )
+
+            outputs["review_scripts"] = review_script_result
+
+            print(
+                "[Sprint73-4] Script Generator:",
+                bool(review_script_result.get("ok")),
+                flush=True,
+            )
+            print(
+                "[Sprint73-4] Script Count:",
+                review_script_result.get("script_count"),
+                flush=True,
+            )
+            print(
+                "[Sprint73-4] Best Script:",
+                review_script_result.get("best_script"),
+                flush=True,
+            )
+            print(
+                "[Sprint73-4] Script Type:",
+                review_script_result.get("best_script_type"),
+                flush=True,
+            )
+
+        except Exception as exc:
+            outputs["review_scripts"] = {
+                "ok": False,
+                "version": "review-script-generator-73-4",
+                "best_script": "",
+                "scripts": [],
+                "error": str(exc),
+            }
+
+            print(
+                "[Sprint73-4] Script Generator ERROR:",
+                repr(exc),
+                flush=True,
+            )
 
         # 11. Content Factory
         try:
@@ -1587,6 +1872,25 @@ class WorkflowEngine:
                     )
                 ),
                 "review_ocr": outputs.get("review_ocr", {}),
+                "review_clean": outputs.get("review_clean", {}),
+                "review_quotes": outputs.get(
+                    "review_quotes",
+                    {},
+                ),
+                "review_hooks": outputs.get(
+                    "review_hooks",
+                    {},
+                ),
+                "review_hook": (
+                    outputs.get(
+                        "review_hooks",
+                        {},
+                    )
+                    or {}
+                ).get(
+                    "best_hook",
+                    "",
+                ),
                 "review_count": len(merged_reviews),
                 "review_source": (
                     outputs.get("product_plan", {}).get(
@@ -1656,6 +1960,14 @@ class WorkflowEngine:
             content_factory_result["review_count"] = len(merged_reviews)
             content_factory_result["review_ocr"] = outputs.get(
                 "review_ocr",
+                {},
+            )
+            content_factory_result["review_clean"] = outputs.get(
+                "review_clean",
+                {},
+            )
+            content_factory_result["review_quotes"] = outputs.get(
+                "review_quotes",
                 {},
             )
             content_factory_result["review_insight"] = outputs.get(
@@ -1785,10 +2097,139 @@ class WorkflowEngine:
                 error=exc,
             )
 
+        # 13. Sprint82-6 Publisher Workflow Integration
+        publisher_result = {
+            "ok": False,
+            "version": "publisher-engine-82-1",
+            "status": "not_run",
+            "publisher_ready": False,
+            "platforms": {},
+        }
+        publisher_orchestrator_result = {
+            "ok": False,
+            "version": "publisher-orchestrator-82-5",
+            "status": "not_run",
+            "orchestrator_ready": False,
+            "platforms": {},
+        }
+
+        try:
+            review_scripts = (
+                outputs.get("review_scripts")
+                if isinstance(outputs.get("review_scripts"), dict)
+                else {}
+            )
+            export_pack = (
+                review_scripts.get("export_pack")
+                if isinstance(review_scripts.get("export_pack"), dict)
+                else {}
+            )
+
+            if not export_pack:
+                raise ValueError(
+                    "Sprint81-10 export_pack이 없습니다"
+                )
+
+            publisher_result = PublisherEngine().build(
+                export_pack=export_pack,
+            )
+            outputs["publisher"] = publisher_result
+
+            final_video_path = str(
+                (
+                    outputs.get("video_pipeline")
+                    if isinstance(outputs.get("video_pipeline"), dict)
+                    else {}
+                ).get("output_path", "")
+                or resolver.resolve_path(project)
+                or ""
+            )
+            affiliate_link = str(
+                getattr(project, "partner_url", "")
+                or (
+                    outputs.get("product_plan")
+                    if isinstance(outputs.get("product_plan"), dict)
+                    else {}
+                ).get("partner_url", "")
+                or ""
+            )
+
+            publisher_orchestrator_result = (
+                PublisherOrchestrator().build(
+                    publisher_result=publisher_result,
+                    video_path=final_video_path,
+                    affiliate_link=affiliate_link,
+                )
+            )
+            outputs["publisher_orchestrator"] = (
+                publisher_orchestrator_result
+            )
+
+            print(
+                "[Sprint82-6 Publisher] Export Ready:",
+                bool(export_pack.get("ready")),
+                flush=True,
+            )
+            print(
+                "[Sprint82-6 Publisher] Engine Ready:",
+                bool(publisher_result.get("publisher_ready")),
+                flush=True,
+            )
+            print(
+                "[Sprint82-6 Publisher] Orchestrator Ready:",
+                bool(
+                    publisher_orchestrator_result.get(
+                        "orchestrator_ready"
+                    )
+                ),
+                flush=True,
+            )
+            print(
+                "[Sprint82-6 Publisher] Ready Platforms:",
+                publisher_orchestrator_result.get(
+                    "ready_platforms",
+                    [],
+                ),
+                flush=True,
+            )
+            print(
+                "[Sprint82-6 Publisher] Video:",
+                final_video_path,
+                flush=True,
+            )
+
+        except Exception as exc:
+            publisher_result = {
+                "ok": False,
+                "version": "publisher-engine-82-1",
+                "status": "failed",
+                "publisher_ready": False,
+                "platforms": {},
+                "error": str(exc),
+            }
+            publisher_orchestrator_result = {
+                "ok": False,
+                "version": "publisher-orchestrator-82-5",
+                "status": "failed",
+                "orchestrator_ready": False,
+                "platforms": {},
+                "error": str(exc),
+            }
+            outputs["publisher"] = publisher_result
+            outputs["publisher_orchestrator"] = (
+                publisher_orchestrator_result
+            )
+
+            print(
+                "[Sprint82-6 Publisher] ERROR:",
+                repr(exc),
+                flush=True,
+            )
+
         final_state = state.load(job_id)
 
         print(
-            "######## RUN_PROJECT SPRINT71-2 END ########",
+            "######## RUN_PROJECT SPRINT82-6 END ########",
             flush=True,
         )
 
