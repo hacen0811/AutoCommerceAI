@@ -15,7 +15,7 @@ class ReviewScriptGenerator:
     - 외부 AI API 없이 규칙 기반으로 동작
     """
 
-    VERSION = "review-script-generator-81-1"
+    VERSION = "review-script-generator-81-2"
 
     def _build_analysis_bundle(
         self,
@@ -327,6 +327,69 @@ class ReviewScriptGenerator:
             "result": self._clean_text(result),
         }
 
+    def _build_emotion_curve(
+        self,
+        story_context: Dict[str, str],
+        psychology_type: str,
+        product_type: str,
+        shorts_strategy: str,
+    ) -> Dict[str, str]:
+        """Build one reusable emotion curve from the existing story context."""
+        psychology = self._clean_text(psychology_type)
+        product_type_text = self._clean_text(product_type)
+        strategy = self._clean_text(shorts_strategy)
+
+        hook = {
+            "comparison": "궁금증",
+            "anxiety": "불안",
+            "mistake_prevention": "경계",
+            "empathy": "공감",
+            "recommendation": "기대",
+        }.get(psychology, "궁금증")
+
+        empathy = self._first_text(
+            story_context.get("emotion"),
+            "비슷한 고민을 하는 분들이 많습니다",
+        )
+        tension = self._first_text(
+            story_context.get("problem"),
+            "기준 없이 고르면 구매 후 아쉬움이 남을 수 있습니다",
+        )
+        relief = self._first_text(
+            story_context.get("change"),
+            "직접 사용해 보니 고민했던 불편이 줄었습니다",
+        )
+        satisfaction = self._first_text(
+            story_context.get("result"),
+            "실제 사용 목적에 잘 맞는 선택이었습니다",
+        )
+
+        if psychology == "comparison":
+            tension = "비슷해 보여도 기준 없이 고르면 실제 사용에서 차이가 크게 느껴질 수 있습니다"
+        elif psychology == "mistake_prevention":
+            tension = "한 번 잘못 고르면 다시 사야 하는 불편과 비용이 생길 수 있습니다"
+        elif psychology == "anxiety":
+            tension = "구매 전에는 내 사용 목적에 맞을지 쉽게 확신하기 어렵습니다"
+        elif psychology == "recommendation":
+            satisfaction = self._first_text(
+                story_context.get("result"),
+                "실사용자들이 추천하는 이유를 충분히 확인할 수 있습니다",
+            )
+
+        if product_type_text == "seasonal" or strategy == "seasonal_empathy":
+            tension = "필요한 시기를 놓치면 같은 불편을 다시 겪기 쉽습니다"
+
+        return {
+            "version": "emotion-curve-81-2",
+            "curve_type": f"{hook}_공감_긴장_해결_안도_만족",
+            "hook": hook,
+            "empathy": self._clean_text(empathy),
+            "tension": self._clean_text(tension),
+            "decision": self._clean_text(story_context.get("decision", "")),
+            "relief": self._clean_text(relief),
+            "satisfaction": self._clean_text(satisfaction),
+        }
+
     def generate(
         self,
         review_hooks: Any = None,
@@ -427,6 +490,13 @@ class ReviewScriptGenerator:
             psychology_story=psychology_story,
         )
 
+        emotion_curve = self._build_emotion_curve(
+            story_context=story_context,
+            psychology_type=psychology_type,
+            product_type=product_type,
+            shorts_strategy=shorts_strategy,
+        )
+
         short_script = self._build_short_script(
             product_name=product_name,
             best_hook=best_hook,
@@ -444,6 +514,7 @@ class ReviewScriptGenerator:
             shorts_strategy=shorts_strategy,
             psychology_type=psychology_type,
             story_context=story_context,
+            emotion_curve=emotion_curve,
         )
 
         medium_script = self._build_medium_script(
@@ -465,6 +536,7 @@ class ReviewScriptGenerator:
             shorts_strategy=shorts_strategy,
             psychology_type=psychology_type,
             story_context=story_context,
+            emotion_curve=emotion_curve,
         )
 
         long_script = self._build_long_script(
@@ -485,6 +557,7 @@ class ReviewScriptGenerator:
             shorts_strategy=shorts_strategy,
             psychology_type=psychology_type,
             story_context=story_context,
+            emotion_curve=emotion_curve,
         )
 
         scripts = [
@@ -531,169 +604,209 @@ class ReviewScriptGenerator:
         }
 
         print(
-            "[Sprint81-1 Script] Version:",
+            "[Sprint81-2 Script] Version:",
             self.VERSION,
             flush=True,
         )
         print(
-            "[Sprint81-1 Script] Analysis Bundle:",
+            "[Sprint81-2 Script] Analysis Bundle:",
             "built_once",
             flush=True,
         )
         print(
-            "[Sprint81-1 Script] Bundle Keys:",
+            "[Sprint81-2 Script] Bundle Keys:",
             sorted(bundle.keys()),
             flush=True,
         )
         print(
-            "[Sprint81-1 Script] Bridge Library:",
+            "[Sprint81-2 Script] Bridge Library:",
             "bridge-library-80-2a",
             flush=True,
         )
         print(
-            "[Sprint81-1 Script] Bridge Psychology:",
+            "[Sprint81-2 Script] Bridge Psychology:",
             psychology_type,
             flush=True,
         )
         print(
-            "[Sprint81-1 Script] Product:",
+            "[Sprint81-2 Script] Product:",
             product_name,
             flush=True,
         )
         print(
-            "[Sprint81-1 Script] Product Type:",
+            "[Sprint81-2 Script] Product Type:",
             product_type,
             flush=True,
         )
         print(
-            "[Sprint81-1 Script] Shorts Strategy:",
+            "[Sprint81-2 Script] Shorts Strategy:",
             shorts_strategy,
             flush=True,
         )
         print(
-            "[Sprint81-1 Script] Strategy Reason:",
+            "[Sprint81-2 Script] Strategy Reason:",
             product_strategy.get("strategy_reason", ""),
             flush=True,
         )
         print(
-            "[Sprint81-1 Script] Strategy Bridge:",
+            "[Sprint81-2 Script] Strategy Bridge:",
             strategy_bridge,
             flush=True,
         )
         print(
-            "[Sprint81-1 Script] Target Customer:",
+            "[Sprint81-2 Script] Target Customer:",
             target_customer,
             flush=True,
         )
         print(
-            "[Sprint81-1 Script] Target Reason:",
+            "[Sprint81-2 Script] Target Reason:",
             target_reason,
             flush=True,
         )
         print(
-            "[Sprint81-1 Script] Target Confidence:",
+            "[Sprint81-2 Script] Target Confidence:",
             target_customer_result.get("confidence", 0),
             flush=True,
         )
         print(
-            "[Sprint81-1 Script] Target Bridge:",
+            "[Sprint81-2 Script] Target Bridge:",
             target_bridge,
             flush=True,
         )
         print(
-            "[Sprint81-1 Script] Hook Type:",
+            "[Sprint81-2 Script] Hook Type:",
             best_hook_type,
             flush=True,
         )
         print(
-            "[Sprint81-1 Script] Dominant Review Type:",
+            "[Sprint81-2 Script] Dominant Review Type:",
             review_type_result.get("dominant_type", ""),
             review_type_result.get("dominant_label", ""),
             flush=True,
         )
         print(
-            "[Sprint81-1 Script] Review Type Scores:",
+            "[Sprint81-2 Script] Review Type Scores:",
             review_type_result.get("scores", {}),
             flush=True,
         )
         print(
-            "[Sprint81-1 Script] Before:",
+            "[Sprint81-2 Script] Before:",
             before_after_story.get("before", ""),
             flush=True,
         )
         print(
-            "[Sprint81-1 Script] Choice:",
+            "[Sprint81-2 Script] Choice:",
             before_after_story.get("choice", ""),
             flush=True,
         )
         print(
-            "[Sprint81-1 Script] After:",
+            "[Sprint81-2 Script] After:",
             before_after_story.get("after", ""),
             flush=True,
         )
         print(
-            "[Sprint81-1 Script] Psychology Type:",
+            "[Sprint81-2 Script] Psychology Type:",
             psychology_result.get("dominant_type", ""),
             psychology_result.get("dominant_label", ""),
             flush=True,
         )
         print(
-            "[Sprint81-1 Script] Psychology Scores:",
+            "[Sprint81-2 Script] Psychology Scores:",
             psychology_result.get("scores", {}),
             flush=True,
         )
         print(
-            "[Sprint81-1 Script] Problem:",
+            "[Sprint81-2 Script] Problem:",
             psychology_story.get("problem", ""),
             flush=True,
         )
         print(
-            "[Sprint81-1 Script] Empathy:",
+            "[Sprint81-2 Script] Empathy:",
             psychology_story.get("empathy", ""),
             flush=True,
         )
         print(
-            "[Sprint81-1 Story] Version:",
+            "[Sprint81-2 Story] Version:",
             story_context.get("version", ""),
             flush=True,
         )
         print(
-            "[Sprint81-1 Story] Built:",
+            "[Sprint81-2 Story] Built:",
             bool(story_context),
             flush=True,
         )
         print(
-            "[Sprint81-1 Story] Arc:",
+            "[Sprint81-2 Story] Arc:",
             story_context.get("arc_type", ""),
             flush=True,
         )
         print(
-            "[Sprint81-1 Story] Problem:",
+            "[Sprint81-2 Story] Problem:",
             story_context.get("problem", ""),
             flush=True,
         )
         print(
-            "[Sprint81-1 Story] Emotion:",
+            "[Sprint81-2 Story] Emotion:",
             story_context.get("emotion", ""),
             flush=True,
         )
         print(
-            "[Sprint81-1 Story] Decision:",
+            "[Sprint81-2 Story] Decision:",
             story_context.get("decision", ""),
             flush=True,
         )
         print(
-            "[Sprint81-1 Story] Change:",
+            "[Sprint81-2 Story] Change:",
             story_context.get("change", ""),
             flush=True,
         )
         print(
-            "[Sprint81-1 Story] Result:",
+            "[Sprint81-2 Story] Result:",
             story_context.get("result", ""),
             flush=True,
         )
         print(
-            "[Sprint81-1 Script] Short:",
+            "[Sprint81-2 Emotion] Version:",
+            emotion_curve.get("version", ""),
+            flush=True,
+        )
+        print(
+            "[Sprint81-2 Emotion] Built:",
+            bool(emotion_curve),
+            flush=True,
+        )
+        print(
+            "[Sprint81-2 Emotion] Curve:",
+            emotion_curve.get("curve_type", ""),
+            flush=True,
+        )
+        print(
+            "[Sprint81-2 Emotion] Hook:",
+            emotion_curve.get("hook", ""),
+            flush=True,
+        )
+        print(
+            "[Sprint81-2 Emotion] Empathy:",
+            emotion_curve.get("empathy", ""),
+            flush=True,
+        )
+        print(
+            "[Sprint81-2 Emotion] Tension:",
+            emotion_curve.get("tension", ""),
+            flush=True,
+        )
+        print(
+            "[Sprint81-2 Emotion] Relief:",
+            emotion_curve.get("relief", ""),
+            flush=True,
+        )
+        print(
+            "[Sprint81-2 Emotion] Satisfaction:",
+            emotion_curve.get("satisfaction", ""),
+            flush=True,
+        )
+        print(
+            "[Sprint81-2 Script] Short:",
             short_script.get("estimated_seconds", 0),
             "s",
             "error=",
@@ -707,7 +820,7 @@ class ReviewScriptGenerator:
             flush=True,
         )
         print(
-            "[Sprint81-1 Script] Medium:",
+            "[Sprint81-2 Script] Medium:",
             medium_script.get("estimated_seconds", 0),
             "s",
             "error=",
@@ -721,7 +834,7 @@ class ReviewScriptGenerator:
             flush=True,
         )
         print(
-            "[Sprint81-1 Script] Long:",
+            "[Sprint81-2 Script] Long:",
             long_script.get("estimated_seconds", 0),
             "s",
             "error=",
@@ -735,12 +848,12 @@ class ReviewScriptGenerator:
             flush=True,
         )
         print(
-            "[Sprint81-1 Script] Selected:",
+            "[Sprint81-2 Script] Selected:",
             "medium",
             flush=True,
         )
         print(
-            "[Sprint81-1 Script] Best Script:",
+            "[Sprint81-2 Script] Best Script:",
             best_script.get("text", ""),
             flush=True,
         )
@@ -758,6 +871,8 @@ class ReviewScriptGenerator:
             "bridge_library_version": "bridge-library-80-2a",
             "story_library_version": "story-library-81-1",
             "story_context": story_context,
+            "emotion_curve_version": "emotion-curve-81-2",
+            "emotion_curve": emotion_curve,
             "bridge_psychology_type": psychology_type,
             "analysis_bundle_keys": sorted(bundle.keys()),
             "target_customer": target_customer,
@@ -814,6 +929,8 @@ class ReviewScriptGenerator:
                 "bridge_library_version": "bridge-library-80-2a",
                 "story_library_version": "story-library-81-1",
                 "story_context": story_context,
+                "emotion_curve_version": "emotion-curve-81-2",
+                "emotion_curve": emotion_curve,
                 "bridge_psychology_type": psychology_type,
                 "analysis_bundle_reused_for": [
                     "short_script",
@@ -847,6 +964,7 @@ class ReviewScriptGenerator:
         shorts_strategy: str,
         psychology_type: str,
         story_context: Dict[str, str],
+        emotion_curve: Dict[str, str],
     ) -> Dict[str, Any]:
         sections = {
             "problem": self._sentence(
@@ -877,11 +995,14 @@ class ReviewScriptGenerator:
                 )
             ),
             "after": self._sentence(
-                story_context.get(
-                    "change",
-                    before_after_story.get(
-                        "after",
-                        benefit_summary,
+                emotion_curve.get(
+                    "relief",
+                    story_context.get(
+                        "change",
+                        before_after_story.get(
+                            "after",
+                            benefit_summary,
+                        ),
                     ),
                 )
             ),
@@ -934,6 +1055,7 @@ class ReviewScriptGenerator:
         shorts_strategy: str,
         psychology_type: str,
         story_context: Dict[str, str],
+        emotion_curve: Dict[str, str],
     ) -> Dict[str, Any]:
         sections = {
             "hook": self._sentence(
@@ -943,11 +1065,14 @@ class ReviewScriptGenerator:
                 )
             ),
             "empathy": self._sentence(
-                story_context.get(
-                    "emotion",
-                    psychology_story.get(
-                        "empathy",
-                        "한 번쯤 같은 고민을 하게 됩니다",
+                emotion_curve.get(
+                    "empathy",
+                    story_context.get(
+                        "emotion",
+                        psychology_story.get(
+                            "empathy",
+                            "한 번쯤 같은 고민을 하게 됩니다",
+                        ),
                     ),
                 )
             ),
@@ -973,20 +1098,26 @@ class ReviewScriptGenerator:
                 )
             ),
             "after": self._sentence(
-                story_context.get(
-                    "change",
-                    before_after_story.get(
-                        "after",
-                        benefit_summary,
+                emotion_curve.get(
+                    "relief",
+                    story_context.get(
+                        "change",
+                        before_after_story.get(
+                            "after",
+                            benefit_summary,
+                        ),
                     ),
                 )
             ),
             "recommendation": self._sentence(
-                story_context.get(
-                    "result",
-                    before_after_story.get(
-                        "recommendation",
-                        "",
+                emotion_curve.get(
+                    "satisfaction",
+                    story_context.get(
+                        "result",
+                        before_after_story.get(
+                            "recommendation",
+                            "",
+                        ),
                     ),
                 )
             ),
@@ -1038,6 +1169,7 @@ class ReviewScriptGenerator:
         shorts_strategy: str,
         psychology_type: str,
         story_context: Dict[str, str],
+        emotion_curve: Dict[str, str],
     ) -> Dict[str, Any]:
         sections = {
             "hook": self._sentence(
@@ -1056,18 +1188,24 @@ class ReviewScriptGenerator:
                 )
             ),
             "empathy": self._sentence(
-                story_context.get(
-                    "emotion",
-                    psychology_story.get(
-                        "empathy",
-                        "비슷한 고민을 하는 분들이 많습니다",
+                emotion_curve.get(
+                    "empathy",
+                    story_context.get(
+                        "emotion",
+                        psychology_story.get(
+                            "empathy",
+                            "비슷한 고민을 하는 분들이 많습니다",
+                        ),
                     ),
                 )
             ),
             "risk": self._sentence(
-                psychology_story.get(
-                    "risk",
-                    "",
+                emotion_curve.get(
+                    "tension",
+                    psychology_story.get(
+                        "risk",
+                        "",
+                    ),
                 )
             ),
             "target": self._sentence(
@@ -1097,20 +1235,26 @@ class ReviewScriptGenerator:
                 )
             ),
             "after": self._sentence(
-                story_context.get(
-                    "change",
-                    before_after_story.get(
-                        "after",
-                        benefit_summary,
+                emotion_curve.get(
+                    "relief",
+                    story_context.get(
+                        "change",
+                        before_after_story.get(
+                            "after",
+                            benefit_summary,
+                        ),
                     ),
                 )
             ),
             "recommendation": self._sentence(
-                story_context.get(
-                    "result",
-                    before_after_story.get(
-                        "recommendation",
-                        "",
+                emotion_curve.get(
+                    "satisfaction",
+                    story_context.get(
+                        "result",
+                        before_after_story.get(
+                            "recommendation",
+                            "",
+                        ),
                     ),
                 )
             ),
