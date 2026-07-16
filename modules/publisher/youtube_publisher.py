@@ -1,0 +1,288 @@
+from __future__ import annotations
+
+import re
+from typing import Any, Dict, List
+
+
+class YouTubePublisher:
+    """
+    Sprint82-2 YouTube Shorts Publisher
+
+    역할:
+    - Sprint82-1 PublisherEngine의 youtube_shorts 게시 준비 데이터를 입력으로 받음
+    - 실제 YouTube API 호출 없이 업로드 직전 페이로드를 생성
+    - 제목, 설명, 해시태그, 공개 상태, 예약 시간, 제휴 고지 문구를 검증
+    - 원본 입력을 변경하지 않고 독립적으로 동작
+    """
+
+    VERSION = "youtube-publisher-82-2"
+    SOURCE_VERSION = "publisher-engine-82-1"
+    PLATFORM = "youtube_shorts"
+
+    def build(
+        self,
+        publisher_result: Any = None,
+        video_path: Any = "",
+        visibility: str = "private",
+        schedule_at: Any = "",
+        affiliate_link: Any = "",
+        disclosure_text: Any = "",
+    ) -> Dict[str, Any]:
+        source = publisher_result if isinstance(publisher_result, dict) else {}
+        platform_payload = self._extract_platform_payload(source)
+
+        validation = self._validate_source(source, platform_payload)
+        if not validation["valid"]:
+            return {
+                "ok": False,
+                "version": self.VERSION,
+                "status": "invalid_publisher_payload",
+                "upload_ready": False,
+                "platform": self.PLATFORM,
+                "source_version": self._clean_text(source.get("version")),
+                "payload": {},
+                "checks": {},
+                "errors": validation["errors"],
+                "warnings": validation["warnings"],
+                "validation": validation,
+            }
+
+        title = self._shorten(platform_payload.get("title"), 100)
+        script = self._clean_text(platform_payload.get("script"))
+        cta = self._clean_text(platform_payload.get("cta"))
+        hashtags = self._normalize_hashtags(platform_payload.get("hashtags"))
+        hashtag_text = self._build_hashtag_text(hashtags)
+
+        resolved_disclosure = self._clean_text(disclosure_text)
+        if not resolved_disclosure and self._clean_text(affiliate_link):
+            resolved_disclosure = (
+                "이 게시물은 쿠팡 파트너스 활동의 일환으로, "
+                "이에 따른 일정액의 수수료를 제공받습니다."
+            )
+
+        description = self._build_description(
+            base_description=platform_payload.get("description"),
+            cta=cta,
+            affiliate_link=affiliate_link,
+            disclosure_text=resolved_disclosure,
+            hashtag_text=hashtag_text,
+        )
+
+        resolved_visibility = self._normalize_visibility(visibility)
+        resolved_schedule = self._clean_text(schedule_at)
+        resolved_video_path = self._clean_text(video_path)
+
+        checks = {
+            "source_ready": bool(platform_payload.get("ready")),
+            "has_title": bool(title),
+            "has_description": bool(description),
+            "has_script": bool(script),
+            "has_video_path": bool(resolved_video_path),
+            "title_within_limit": len(title) <= 100,
+            "description_within_limit": len(description) <= 5000,
+            "visibility_valid": resolved_visibility in {
+                "private",
+                "unlisted",
+                "public",
+            },
+            "schedule_valid": not resolved_schedule
+            or resolved_visibility == "private",
+        }
+
+        upload_ready = all(checks.values())
+        errors = [key for key, passed in checks.items() if not passed]
+
+        payload = {
+            "platform": self.PLATFORM,
+            "video_path": resolved_video_path,
+            "snippet": {
+                "title": title,
+                "description": description,
+                "tags": hashtags,
+                "category_id": "22",
+                "default_language": "ko",
+                "default_audio_language": "ko",
+            },
+            "status": {
+                "privacy_status": resolved_visibility,
+                "publish_at": resolved_schedule,
+                "self_declared_made_for_kids": False,
+                "contains_synthetic_media": False,
+            },
+            "content": {
+                "script": script,
+                "cta": cta,
+                "affiliate_link": self._clean_text(affiliate_link),
+                "disclosure_text": resolved_disclosure,
+                "thumbnail_prompt": self._clean_text(
+                    platform_payload.get("thumbnail_prompt")
+                ),
+            },
+            "metadata": {
+                "publisher_version": self.VERSION,
+                "source_engine_version": self._clean_text(source.get("version")),
+                "source_export_version": self._clean_text(
+                    source.get("source_export_version")
+                ),
+                "prepared_only": True,
+                "actual_upload_performed": False,
+            },
+        }
+
+        result = {
+            "ok": upload_ready,
+            "version": self.VERSION,
+            "status": "ready" if upload_ready else "incomplete",
+            "upload_ready": upload_ready,
+            "platform": self.PLATFORM,
+            "source_version": self._clean_text(source.get("version")),
+            "payload": payload,
+            "checks": checks,
+            "errors": errors,
+            "warnings": validation["warnings"],
+            "validation": validation,
+        }
+
+        print("[Sprint82-2 YouTube] Version:", self.VERSION, flush=True)
+        print(
+            "[Sprint82-2 YouTube] Source:",
+            result["source_version"],
+            flush=True,
+        )
+        print(
+            "[Sprint82-2 YouTube] Ready:",
+            result["upload_ready"],
+            flush=True,
+        )
+        print(
+            "[Sprint82-2 YouTube] Title:",
+            payload["snippet"]["title"],
+            flush=True,
+        )
+        print(
+            "[Sprint82-2 YouTube] Video:",
+            payload["video_path"],
+            flush=True,
+        )
+
+        return result
+
+    def generate(self, *args: Any, **kwargs: Any) -> Dict[str, Any]:
+        """Compatibility alias for callers that use generate()."""
+        return self.build(*args, **kwargs)
+
+    def _extract_platform_payload(self, source: Dict[str, Any]) -> Dict[str, Any]:
+        direct = source.get(self.PLATFORM)
+        if isinstance(direct, dict):
+            return direct
+
+        platforms = source.get("platforms")
+        if isinstance(platforms, dict):
+            nested = platforms.get(self.PLATFORM)
+            if isinstance(nested, dict):
+                return nested
+
+        return {}
+
+    def _validate_source(
+        self,
+        source: Dict[str, Any],
+        platform_payload: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        errors: List[str] = []
+        warnings: List[str] = []
+
+        if not source:
+            errors.append("Publisher 결과가 비어 있습니다")
+            return {"valid": False, "errors": errors, "warnings": warnings}
+
+        source_version = self._clean_text(source.get("version"))
+        if source_version != self.SOURCE_VERSION:
+            warnings.append("Sprint82-1 PublisherEngine 버전이 아닙니다")
+
+        if not bool(source.get("publisher_ready")):
+            errors.append("Publisher 결과가 준비 상태가 아닙니다")
+
+        if not platform_payload:
+            errors.append("youtube_shorts 게시 데이터가 없습니다")
+            return {"valid": False, "errors": errors, "warnings": warnings}
+
+        if not bool(platform_payload.get("ready")):
+            errors.append("youtube_shorts 게시 데이터가 준비 상태가 아닙니다")
+
+        required = {
+            "title": platform_payload.get("title"),
+            "description": platform_payload.get("description"),
+            "script": platform_payload.get("script"),
+            "cta": platform_payload.get("cta"),
+        }
+        for key, value in required.items():
+            if not self._clean_text(value):
+                errors.append(f"필수 값이 없습니다: {key}")
+
+        if not self._normalize_hashtags(platform_payload.get("hashtags")):
+            warnings.append("YouTube 해시태그가 비어 있습니다")
+
+        return {
+            "valid": not errors,
+            "errors": errors,
+            "warnings": warnings,
+        }
+
+    def _build_description(
+        self,
+        base_description: Any,
+        cta: Any,
+        affiliate_link: Any,
+        disclosure_text: Any,
+        hashtag_text: Any,
+    ) -> str:
+        parts: List[str] = []
+
+        for value in (
+            base_description,
+            cta,
+            affiliate_link,
+            disclosure_text,
+            hashtag_text,
+        ):
+            cleaned = self._clean_text(value)
+            if cleaned and cleaned not in parts:
+                parts.append(cleaned)
+
+        return self._shorten("\n\n".join(parts), 5000)
+
+    def _normalize_visibility(self, value: Any) -> str:
+        cleaned = self._clean_text(value).lower()
+        if cleaned in {"private", "unlisted", "public"}:
+            return cleaned
+        return "private"
+
+    def _normalize_hashtags(self, value: Any) -> List[str]:
+        values = value if isinstance(value, list) else []
+        result: List[str] = []
+        for item in values:
+            cleaned = re.sub(
+                r"[^0-9A-Za-z가-힣_]",
+                "",
+                self._clean_text(item).lstrip("#"),
+            )
+            if cleaned and cleaned not in result:
+                result.append(cleaned)
+        return result
+
+    def _build_hashtag_text(self, hashtags: List[str]) -> str:
+        return " ".join(f"#{tag}" for tag in hashtags)
+
+    def _shorten(self, value: Any, max_length: int) -> str:
+        cleaned = self._clean_text(value)
+        if len(cleaned) <= max_length:
+            return cleaned
+        return cleaned[: max(1, max_length - 1)].rstrip() + "…"
+
+    def _clean_text(self, value: Any) -> str:
+        if value is None:
+            return ""
+        text = str(value)
+        text = re.sub(r"\s+", " ", text)
+        return text.strip()
