@@ -29,6 +29,9 @@ from modules.publisher.publisher_result_store import PublisherResultStore
 from modules.publisher.upload_queue_engine import UploadQueueEngine
 from modules.publisher.upload_dispatcher import UploadDispatcher
 from modules.publisher.youtube_upload_executor import YouTubeUploadExecutor
+from modules.publisher.instagram_upload_executor import InstagramUploadExecutor
+from modules.video.ai_video_engine import AIVideoEngine
+from modules.video.gemini_veo_provider import GeminiVeoProvider
 try:
     from modules.review.review_image_ocr import ReviewImageOCR
 except ImportError:
@@ -45,7 +48,7 @@ from modules.video.download_utils import (
 )
 
 
-print("######## WORKFLOW_ENGINE SPRINT89-1 LOADED ########", flush=True)
+print("######## WORKFLOW_ENGINE SPRINT92-1 LOADED ########", flush=True)
 
 
 class WorkflowEngine:
@@ -70,7 +73,7 @@ class WorkflowEngine:
     → CapCutExport
     """
 
-    WORKFLOW_VERSION = "workflow-engine-89-1"
+    WORKFLOW_VERSION = "workflow-engine-92-1"
 
     STEP_NAMES = [
         "product_plan",
@@ -524,6 +527,100 @@ class WorkflowEngine:
             "warnings": list(source.get("warnings") or []),
         }
 
+    def _build_instagram_upload_summary(self, upload_result):
+        """Instagram 업로드 결과를 저장과 UI에 필요한 핵심 정보로 정리합니다."""
+        source = upload_result if isinstance(upload_result, dict) else {}
+        return {
+            "ok": bool(source.get("ok")),
+            "version": str(
+                source.get("version")
+                or "instagram-playwright-upload-executor-90-2"
+            ),
+            "status": str(source.get("status") or "unknown"),
+            "platform": str(source.get("platform") or "instagram_reels"),
+            "post_url": str(source.get("post_url") or "").strip(),
+            "final_url": str(source.get("final_url") or "").strip(),
+            "uploaded_at": str(source.get("uploaded_at") or ""),
+            "actual_upload_performed": bool(
+                source.get("actual_upload_performed")
+            ),
+            "upload_ready": bool(source.get("upload_ready")),
+            "dry_run": bool(source.get("dry_run")),
+            "errors": list(source.get("errors") or []),
+            "warnings": list(source.get("warnings") or []),
+        }
+
+    def _persist_instagram_upload_metadata(
+        self,
+        publisher_store_result,
+        instagram_summary,
+    ):
+        """Publisher manifest.json에 Instagram 업로드 메타데이터를 저장합니다."""
+        store = publisher_store_result if isinstance(publisher_store_result, dict) else {}
+        summary = instagram_summary if isinstance(instagram_summary, dict) else {}
+        manifest_path = str(store.get("manifest_path") or "").strip()
+        result = {
+            "ok": False,
+            "version": "instagram-manifest-store-90-2",
+            "status": "not_saved",
+            "manifest_path": manifest_path,
+            "post_url": str(summary.get("post_url") or ""),
+            "uploaded_at": str(summary.get("uploaded_at") or ""),
+        }
+        if not manifest_path:
+            result["status"] = "manifest_path_missing"
+            result["error"] = "publisher manifest_path가 없습니다"
+            return result
+        path = Path(manifest_path)
+        if not path.is_file():
+            result["status"] = "manifest_missing"
+            result["error"] = f"manifest 파일이 없습니다: {path}"
+            return result
+        try:
+            manifest = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(manifest, dict):
+                manifest = {"original_manifest": manifest}
+            manifest["instagram"] = dict(summary)
+            path.write_text(
+                json.dumps(manifest, ensure_ascii=False, indent=2, default=str),
+                encoding="utf-8",
+            )
+            result.update({"ok": True, "status": "saved", "manifest_path": str(path)})
+        except Exception as exc:
+            result["status"] = "save_failed"
+            result["error"] = str(exc)
+        return result
+
+    def _update_instagram_project(self, project, summary, manifest_result):
+        """Repository 지원 시 Instagram 결과를 Project DB에 저장합니다."""
+        repository = ProjectRepository()
+        method = getattr(repository, "update_instagram_upload", None)
+        if not callable(method):
+            return {
+                "ok": False,
+                "version": "project-repository-90-2",
+                "status": "method_missing",
+                "project_id": getattr(project, "id", ""),
+                "post_url": str(summary.get("post_url") or ""),
+                "uploaded_at": str(summary.get("uploaded_at") or ""),
+                "manifest_path": str(manifest_result.get("manifest_path") or ""),
+                "warning": "ProjectRepository.update_instagram_upload 메서드가 없습니다",
+            }
+        try:
+            return method(
+                project_id=getattr(project, "id", ""),
+                upload_result=summary,
+                manifest_result=manifest_result,
+            )
+        except Exception as exc:
+            return {
+                "ok": False,
+                "version": "project-repository-90-2",
+                "status": "save_failed",
+                "project_id": getattr(project, "id", ""),
+                "error": str(exc),
+            }
+
     def _persist_youtube_upload_metadata(
         self,
         publisher_store_result,
@@ -598,11 +695,157 @@ class WorkflowEngine:
             result["error"] = str(exc)
             return result
 
+    def _resolve_product_image_path(
+        self,
+        project,
+        project_data,
+        supplied_path="",
+    ):
+        """UI 입력과 프로젝트 데이터에서 실제 상품 대표 이미지를 찾습니다."""
+        candidates = [supplied_path]
+
+        if isinstance(project_data, dict):
+            for key in (
+                "product_image_path",
+                "reference_image_path",
+                "image_path",
+                "main_image_path",
+            ):
+                candidates.append(project_data.get(key))
+
+        for key in (
+            "product_image_path",
+            "reference_image_path",
+            "image_path",
+            "main_image_path",
+        ):
+            candidates.append(getattr(project, key, None))
+
+        project_id = getattr(project, "id", "")
+        folder = Path("assets") / "products" / f"project_{project_id}"
+        if folder.exists():
+            candidates.extend([
+                folder / "main.jpg",
+                folder / "main.jpeg",
+                folder / "main.png",
+                folder / "main.webp",
+            ])
+
+        supported = {".jpg", ".jpeg", ".png", ".webp"}
+        for value in candidates:
+            if not value:
+                continue
+            path = Path(str(value)).expanduser()
+            if path.is_file() and path.suffix.lower() in supported:
+                return str(path)
+        return ""
+
+    def _generate_ai_product_video(
+        self,
+        project,
+        product_image_path,
+    ):
+        """대표 이미지 한 장으로 6개의 세로 상품 장면을 순차 생성합니다."""
+        base_result = {
+            "ok": False,
+            "ready": False,
+            "status": "not_run",
+            "engine_version": AIVideoEngine.VERSION,
+            "provider_version": GeminiVeoProvider.VERSION,
+            "product_image_path": str(product_image_path or ""),
+            "scene_plan": [],
+            "scene_count": 0,
+            "generated_count": 0,
+            "generated_files": [],
+            "selected_video_path": "",
+            "errors": [],
+        }
+
+        if not product_image_path:
+            base_result["status"] = "product_image_missing"
+            return base_result
+
+        product_name = (
+            getattr(project, "product_name", "")
+            or getattr(project, "title", "")
+            or "선택 상품"
+        )
+        category = str(getattr(project, "category", "") or "").strip()
+        keyword = str(getattr(project, "keyword", "") or "").strip()
+        product_context = ", ".join(
+            value for value in (category, keyword) if value
+        )
+        project_id = getattr(project, "id", "")
+
+        provider = GeminiVeoProvider()
+        engine = AIVideoEngine(providers={"gemini_veo": provider})
+        scene_plan = engine.plan_multi_scenes(
+            product_name=product_name,
+            reference_image_path=str(product_image_path),
+            scene_count=6,
+            duration_seconds=6,
+            aspect_ratio="9:16",
+            product_context=product_context,
+        )
+
+        request = engine.build_request(
+            project_id=project_id,
+            product_name=product_name,
+            provider="gemini_veo",
+            aspect_ratio="9:16",
+            scenes=scene_plan,
+            reference_images=[str(product_image_path)],
+            metadata={
+                "sprint": "92-1",
+                "source": "one_click_product_image",
+                "mode": "multi_scene_image_to_video",
+                "scene_count": len(scene_plan),
+            },
+        )
+        save_result = engine.save_request(request)
+
+        print(
+            "[Sprint92-1 AI Director] Scene Count:",
+            len(scene_plan),
+            flush=True,
+        )
+        print(
+            "[Sprint92-1 AI Director] Scene IDs:",
+            [item.get("scene_id") for item in scene_plan],
+            flush=True,
+        )
+
+        result = engine.generate(request, dry_run=False)
+        result["request_saved"] = save_result
+        result["product_image_path"] = str(product_image_path)
+        result["scene_plan"] = scene_plan
+        generated_files = list(result.get("generated_files") or [])
+        result["generated_count"] = len(generated_files)
+        selected_video_path = generated_files[0] if generated_files else ""
+        result["selected_video_path"] = selected_video_path
+
+        if selected_video_path:
+            try:
+                ProjectRepository().update_links_and_media(
+                    getattr(project, "id"),
+                    video_path=selected_video_path,
+                )
+                project.video_path = selected_video_path
+                result["project_video_updated"] = True
+            except Exception as exc:
+                result["project_video_updated"] = False
+                result.setdefault("warnings", []).append(
+                    f"Project video_path update failed: {type(exc).__name__}: {exc}"
+                )
+
+        return result
+
     def run_project(
         self,
         project,
         sample_count=6,
         review_image_paths=None,
+        product_image_path="",
         youtube_privacy_status="private",
     ):
         review_image_paths = review_image_paths or []
@@ -612,7 +855,7 @@ class WorkflowEngine:
             )
         )
         print(
-            "######## RUN_PROJECT SPRINT89-1 START ########",
+            "######## RUN_PROJECT SPRINT92-1 START ########",
             flush=True,
         )
         print(
@@ -714,6 +957,75 @@ class WorkflowEngine:
                 "failed",
                 error=exc,
             )
+
+        # 1-1. Sprint92-1 One Click Product Image -> Gemini Veo Multi Scene
+        resolved_product_image_path = self._resolve_product_image_path(
+            project,
+            project_data,
+            supplied_path=product_image_path,
+        )
+        outputs["product_image_path"] = resolved_product_image_path
+
+        print(
+            "[Sprint92-1 AI Video] Product Image:",
+            resolved_product_image_path,
+            flush=True,
+        )
+
+        try:
+            ai_video_result = self._generate_ai_product_video(
+                project,
+                resolved_product_image_path,
+            )
+        except Exception as exc:
+            ai_video_result = {
+                "ok": False,
+                "ready": False,
+                "status": "workflow_error",
+                "generated_files": [],
+                "selected_video_path": "",
+                "errors": [f"{type(exc).__name__}: {exc}"],
+            }
+
+        outputs["ai_video"] = ai_video_result
+        outputs["ai_video_path"] = str(
+            ai_video_result.get("selected_video_path") or ""
+        )
+
+        print(
+            "[Sprint92-1 AI Video] Status:",
+            ai_video_result.get("status"),
+            flush=True,
+        )
+        print(
+            "[Sprint92-1 AI Video] Ready:",
+            bool(ai_video_result.get("ready")),
+            flush=True,
+        )
+        print(
+            "[Sprint92-1 AI Video] Generated Files:",
+            ai_video_result.get("generated_files", []),
+            flush=True,
+        )
+        print(
+            "[Sprint92-1 AI Video] Generated Count:",
+            ai_video_result.get("generated_count", 0),
+            "/",
+            ai_video_result.get("scene_count", 0),
+            flush=True,
+        )
+        print(
+            "[Sprint92-1 AI Video] Errors:",
+            ai_video_result.get("errors", []),
+            flush=True,
+        )
+
+        if outputs["ai_video_path"]:
+            project = resolver.resolve_project(project)
+            try:
+                project.video_path = outputs["ai_video_path"]
+            except Exception:
+                pass
 
         # 2. Source Plan
         try:
@@ -2306,6 +2618,36 @@ class WorkflowEngine:
             "uploaded_at": "",
             "manifest_path": "",
         }
+        instagram_upload_result = {
+            "ok": False,
+            "version": "instagram-playwright-upload-executor-90-2",
+            "status": "not_run",
+            "platform": "instagram_reels",
+            "dry_run": False,
+            "upload_ready": False,
+            "actual_upload_performed": False,
+        }
+        outputs["instagram_upload"] = instagram_upload_result
+        outputs["instagram"] = self._build_instagram_upload_summary(
+            instagram_upload_result
+        )
+        outputs["instagram_manifest"] = {
+            "ok": False,
+            "version": "instagram-manifest-store-90-2",
+            "status": "not_run",
+            "manifest_path": "",
+            "post_url": "",
+            "uploaded_at": "",
+        }
+        outputs["instagram_project"] = {
+            "ok": False,
+            "version": "project-repository-90-2",
+            "status": "not_run",
+            "project_id": getattr(project, "id", ""),
+            "post_url": "",
+            "uploaded_at": "",
+            "manifest_path": "",
+        }
 
         try:
             review_scripts = (
@@ -2449,8 +2791,8 @@ class WorkflowEngine:
 
             upload_dispatcher_result = UploadDispatcher().dispatch(
                 queue_result=upload_queue_result,
-                platforms=["youtube_shorts"],
-                max_jobs=1,
+                platforms=["youtube_shorts", "instagram_reels"],
+                max_jobs=2,
                 persist=False,
             )
             outputs["upload_dispatcher"] = upload_dispatcher_result
@@ -2515,6 +2857,81 @@ class WorkflowEngine:
                     ],
                     "warnings": [],
                 }
+
+            instagram_dispatch_job = (
+                upload_dispatcher_result.get("dispatch_jobs", {})
+                if isinstance(upload_dispatcher_result.get("dispatch_jobs"), dict)
+                else {}
+            ).get("instagram_reels", {})
+
+            if instagram_dispatch_job:
+                print(
+                    "[Sprint90-2 Instagram] Playwright Upload Start",
+                    flush=True,
+                )
+                instagram_upload_result = InstagramUploadExecutor().execute(
+                    dispatch_job=instagram_dispatch_job,
+                    dry_run=False,
+                    user_data_dir="secrets/instagram_playwright_profile",
+                    headless=False,
+                    allow_manual_login=True,
+                    keep_browser_open=False,
+                )
+            else:
+                instagram_upload_result = {
+                    "ok": False,
+                    "version": "instagram-playwright-upload-executor-90-2",
+                    "status": "dispatch_job_missing",
+                    "platform": "instagram_reels",
+                    "dry_run": False,
+                    "upload_ready": False,
+                    "actual_upload_performed": False,
+                    "errors": ["instagram_reels dispatch job이 없습니다"],
+                    "warnings": [],
+                }
+
+            outputs["instagram_upload"] = instagram_upload_result
+            instagram_summary = self._build_instagram_upload_summary(
+                instagram_upload_result
+            )
+            outputs["instagram"] = instagram_summary
+            instagram_manifest_result = self._persist_instagram_upload_metadata(
+                publisher_store_result,
+                instagram_summary,
+            )
+            outputs["instagram_manifest"] = instagram_manifest_result
+            instagram_project_result = self._update_instagram_project(
+                project,
+                instagram_summary,
+                instagram_manifest_result,
+            )
+            outputs["instagram_project"] = instagram_project_result
+
+            print(
+                "[Sprint90-2 Instagram] Status:",
+                instagram_summary.get("status", ""),
+                flush=True,
+            )
+            print(
+                "[Sprint90-2 Instagram] Post URL:",
+                instagram_summary.get("post_url", ""),
+                flush=True,
+            )
+            print(
+                "[Sprint90-2 Instagram] Actual Upload:",
+                bool(instagram_summary.get("actual_upload_performed")),
+                flush=True,
+            )
+            print(
+                "[Sprint90-2 Instagram Manifest] Saved:",
+                bool(instagram_manifest_result.get("ok")),
+                flush=True,
+            )
+            print(
+                "[Sprint90-2 Instagram Project DB] Status:",
+                instagram_project_result.get("status", ""),
+                flush=True,
+            )
 
             outputs["youtube_upload"] = youtube_upload_result
 
@@ -2764,7 +3181,7 @@ class WorkflowEngine:
         final_state = state.load(job_id)
 
         print(
-            "######## RUN_PROJECT SPRINT89-1 END ########",
+            "######## RUN_PROJECT SPRINT92-1 END ########",
             flush=True,
         )
 
