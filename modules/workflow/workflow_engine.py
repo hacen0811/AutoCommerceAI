@@ -45,7 +45,7 @@ from modules.video.download_utils import (
 )
 
 
-print("######## WORKFLOW_ENGINE SPRINT86-2 LOADED ########", flush=True)
+print("######## WORKFLOW_ENGINE SPRINT89-1 LOADED ########", flush=True)
 
 
 class WorkflowEngine:
@@ -70,7 +70,7 @@ class WorkflowEngine:
     → CapCutExport
     """
 
-    WORKFLOW_VERSION = "workflow-engine-86-2"
+    WORKFLOW_VERSION = "workflow-engine-89-1"
 
     STEP_NAMES = [
         "product_plan",
@@ -109,6 +109,13 @@ class WorkflowEngine:
             )
         except Exception:
             return {}
+
+    def _normalize_youtube_privacy_status(self, value):
+        """YouTube 공개 설정을 API 허용값으로 통일합니다."""
+        normalized = str(value or "private").strip().lower()
+        if normalized not in {"private", "unlisted", "public"}:
+            return "private"
+        return normalized
 
     def auto_connect_latest_download(self, project):
         resolver = VideoPathResolver()
@@ -596,10 +603,16 @@ class WorkflowEngine:
         project,
         sample_count=6,
         review_image_paths=None,
+        youtube_privacy_status="private",
     ):
         review_image_paths = review_image_paths or []
+        youtube_privacy_status = (
+            self._normalize_youtube_privacy_status(
+                youtube_privacy_status
+            )
+        )
         print(
-            "######## RUN_PROJECT SPRINT62 START ########",
+            "######## RUN_PROJECT SPRINT89-1 START ########",
             flush=True,
         )
         print(
@@ -615,6 +628,11 @@ class WorkflowEngine:
         print(
             "[TRACE] sample_count:",
             sample_count,
+            flush=True,
+        )
+        print(
+            "[Sprint89-1 YouTube] Privacy Status:",
+            youtube_privacy_status,
             flush=True,
         )
 
@@ -647,6 +665,7 @@ class WorkflowEngine:
         outputs = {
             "workflow_version": self.WORKFLOW_VERSION,
             "auto_connected": auto_connected,
+            "youtube_privacy_status": youtube_privacy_status,
         }
 
         # 1. Product Plan
@@ -2446,6 +2465,34 @@ class WorkflowEngine:
             ).get("youtube_shorts", {})
 
             if youtube_dispatch_job:
+                youtube_dispatch_job = dict(youtube_dispatch_job)
+                youtube_payload = youtube_dispatch_job.get("payload")
+                youtube_payload = (
+                    dict(youtube_payload)
+                    if isinstance(youtube_payload, dict)
+                    else {}
+                )
+                youtube_status = youtube_payload.get("status")
+                youtube_status = (
+                    dict(youtube_status)
+                    if isinstance(youtube_status, dict)
+                    else {}
+                )
+                youtube_status["privacyStatus"] = (
+                    youtube_privacy_status
+                )
+                youtube_status["privacy_status"] = (
+                    youtube_privacy_status
+                )
+                youtube_payload["status"] = youtube_status
+                youtube_dispatch_job["payload"] = youtube_payload
+
+                print(
+                    "[Sprint89-1 YouTube] Dispatch Privacy:",
+                    youtube_privacy_status,
+                    flush=True,
+                )
+
                 youtube_upload_result = (
                     YouTubeUploadExecutor().execute(
                         dispatch_job=youtube_dispatch_job,
@@ -2717,7 +2764,7 @@ class WorkflowEngine:
         final_state = state.load(job_id)
 
         print(
-            "######## RUN_PROJECT SPRINT86-2 END ########",
+            "######## RUN_PROJECT SPRINT89-1 END ########",
             flush=True,
         )
 

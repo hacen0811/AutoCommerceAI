@@ -35,7 +35,7 @@ except Exception:
     SearchKeywordEngine = None
 
 
-UI_VERSION = "sprint72-1-review-image-upload-001"
+UI_VERSION = "sprint89-1-youtube-privacy-ui"
 RESULT_DIR = Path("exports/one_click_results")
 REVIEW_IMAGE_ROOT = Path("assets/review_images")
 SUPPORTED_REVIEW_IMAGE_SUFFIXES = {
@@ -276,34 +276,115 @@ def create_project_from_payload(product_payload, keywords):
     )
 
 
-def rebuild_project_from_coupang(coupang_url, product_name):
+def rebuild_project_from_coupang(
+    coupang_url,
+    product_name,
+):
     if ProductEngine is None:
         raise RuntimeError(
             "ProductEngine import 실패: "
             "modules.product.product_engine 확인 필요"
         )
 
-    built = ProductEngine().build_from_coupang(
-        coupang_url,
-        product_name=product_name,
-        manual_product_name=product_name,
+    print(
+        "[PROJECT CREATE] 1. ProductEngine START",
+        flush=True,
     )
 
-    product_payload = extract_product_payload(
-        built,
-        coupang_url,
-        product_name,
+    try:
+        built = ProductEngine().build_from_coupang(
+            coupang_url,
+            product_name=product_name,
+            manual_product_name=product_name,
+        )
+    except Exception as exc:
+        raise RuntimeError(
+            "ProductEngine 단계 실패: "
+            f"{type(exc).__name__}: {exc}"
+        ) from exc
+
+    print(
+        "[PROJECT CREATE] 1. ProductEngine DONE",
+        flush=True,
     )
-    keywords = build_keywords(product_payload, product_name)
 
-    project = create_project_from_payload(product_payload, keywords)
+    print(
+        "[PROJECT CREATE] 2. Product Payload START",
+        flush=True,
+    )
 
-    project_id = getattr(project, "id", None)
+    try:
+        product_payload = extract_product_payload(
+            built,
+            coupang_url,
+            product_name,
+        )
+    except Exception as exc:
+        raise RuntimeError(
+            "Product Payload 단계 실패: "
+            f"{type(exc).__name__}: {exc}"
+        ) from exc
+
+    print(
+        "[PROJECT CREATE] 2. Product Payload DONE",
+        flush=True,
+    )
+
+    print(
+        "[PROJECT CREATE] 3. Keyword Build START",
+        flush=True,
+    )
+
+    try:
+        keywords = build_keywords(
+            product_payload,
+            product_name,
+        )
+    except Exception as exc:
+        raise RuntimeError(
+            "Keyword Build 단계 실패: "
+            f"{type(exc).__name__}: {exc}"
+        ) from exc
+
+    print(
+        "[PROJECT CREATE] 3. Keyword Build DONE",
+        flush=True,
+    )
+
+    print(
+        "[PROJECT CREATE] 4. Project Save START",
+        flush=True,
+    )
+
+    try:
+        project = create_project_from_payload(
+            product_payload,
+            keywords,
+        )
+    except Exception as exc:
+        raise RuntimeError(
+            "Project Save 단계 실패: "
+            f"{type(exc).__name__}: {exc}"
+        ) from exc
+
+    print(
+        "[PROJECT CREATE] 4. Project Save DONE",
+        flush=True,
+    )
+
+    project_id = getattr(
+        project,
+        "id",
+        None,
+    )
+
     if project_id:
-        project = ProjectRepository().get(project_id) or project
+        project = (
+            ProjectRepository().get(project_id)
+            or project
+        )
 
     return project, product_payload, keywords
-
 
 def show_search_links(keywords, key_prefix="main"):
     if not keywords:
@@ -377,6 +458,7 @@ def run_project_pipeline(
     project,
     sample_count,
     review_image_paths=None,
+    youtube_privacy_status="private",
 ):
     print(
         "[Sprint72-1] run_project_pipeline entered",
@@ -396,6 +478,7 @@ def run_project_pipeline(
         project,
         sample_count=sample_count,
         review_image_paths=review_image_paths,
+        youtube_privacy_status=youtube_privacy_status,
     )
 
     save_pipeline_result(project, result)
@@ -440,7 +523,11 @@ def show_review_upload_area(project, key_prefix):
     return uploaded_files
 
 
-def render_project_pipeline(project, sample_count):
+def render_project_pipeline(
+    project,
+    sample_count,
+    youtube_privacy_status="private",
+):
     init_selected_sources(project)
 
     project_safe_id = safe_project_id(project)
@@ -498,6 +585,7 @@ def render_project_pipeline(project, sample_count):
                     project,
                     sample_count,
                     review_image_paths=review_paths,
+                    youtube_privacy_status=youtube_privacy_status,
                 )
             except Exception as exc:
                 st.error(f"원클릭 실행 실패: {exc}")
@@ -534,6 +622,72 @@ def render_project_pipeline(project, sample_count):
             "리뷰 분석 성공:",
             bool(review_insight.get("ok")),
         )
+
+        project_latest = ProjectRepository().get(getattr(project, "id", "")) or project
+        try:
+            data = json.loads(getattr(project_latest, "data_json", "") or "{}")
+        except Exception:
+            data = {}
+
+        youtube = data.get("youtube", {})
+        youtube_history = data.get("youtube_history", [])
+
+        if youtube.get("watch_url"):
+            st.divider()
+            st.subheader("📺 YouTube 업로드")
+            st.success("YouTube 업로드 완료")
+            st.write("Video ID:", youtube.get("video_id", ""))
+            st.write("Watch URL:", youtube.get("watch_url", ""))
+            st.link_button(
+                "브라우저에서 열기",
+                youtube.get("watch_url"),
+                use_container_width=True,
+            )
+
+        if isinstance(youtube_history, list) and youtube_history:
+            st.divider()
+            st.subheader("📚 YouTube 업로드 이력")
+            st.caption(
+                f"총 {len(youtube_history)}개의 업로드 이력이 있습니다."
+            )
+
+            for index, item in enumerate(
+                youtube_history,
+                start=1,
+            ):
+                if not isinstance(item, dict):
+                    continue
+
+                video_id = item.get("video_id", "")
+                watch_url = item.get("watch_url", "")
+                uploaded_at = item.get("uploaded_at", "")
+                status = item.get("status", "")
+                manifest_path = item.get("manifest_path", "")
+
+                with st.expander(
+                    f"{index}. {video_id or 'Video ID 없음'}",
+                    expanded=index == 1,
+                ):
+                    st.write("상태:", status)
+                    st.write("업로드 시간:", uploaded_at)
+                    st.write("Video ID:", video_id)
+                    st.write("Watch URL:", watch_url)
+
+                    if manifest_path:
+                        st.caption(
+                            f"Manifest: {manifest_path}"
+                        )
+
+                    if watch_url:
+                        st.link_button(
+                            "영상 열기",
+                            watch_url,
+                            use_container_width=True,
+                            key=(
+                                f"youtube_history_link_"
+                                f"{project_safe_id}_{index}"
+                            ),
+                        )
 
     if c2.button("큐에 추가", use_container_width=True):
         job = JobQueue().add(
@@ -606,6 +760,31 @@ def show_one_click_pipeline():
         12,
         6,
         2,
+    )
+
+    youtube_privacy_label = st.selectbox(
+        "YouTube 공개 범위",
+        [
+            "🔒 비공개",
+            "🔗 일부 공개",
+            "🌍 공개",
+        ],
+        index=0,
+        help=(
+            "비공개: 본인만 시청 / "
+            "일부 공개: 링크를 아는 사람만 시청 / "
+            "공개: 누구나 검색과 시청 가능"
+        ),
+    )
+    youtube_privacy_status = {
+        "🔒 비공개": "private",
+        "🔗 일부 공개": "unlisted",
+        "🌍 공개": "public",
+    }[youtube_privacy_label]
+
+    st.caption(
+        "이번 원클릭 실행의 YouTube 공개 설정: "
+        f"{youtube_privacy_label}"
     )
 
     st.divider()
@@ -707,6 +886,7 @@ def show_one_click_pipeline():
                         project,
                         sample_count,
                         review_image_paths=review_paths,
+                        youtube_privacy_status=youtube_privacy_status,
                     )
                     st.success("원클릭 후보 수집까지 완료했습니다.")
 
@@ -782,7 +962,11 @@ def show_one_click_pipeline():
     project = labels[selected_label]
     project = ProjectRepository().get(project.id) or project
 
-    render_project_pipeline(project, sample_count)
+    render_project_pipeline(
+        project,
+        sample_count,
+        youtube_privacy_status=youtube_privacy_status,
+    )
 
     st.divider()
     st.subheader("작업 큐")
