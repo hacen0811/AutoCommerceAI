@@ -45,7 +45,7 @@ from modules.video.download_utils import (
 )
 
 
-print("######## WORKFLOW_ENGINE SPRINT85-1 LOADED ########", flush=True)
+print("######## WORKFLOW_ENGINE SPRINT86-2 LOADED ########", flush=True)
 
 
 class WorkflowEngine:
@@ -70,7 +70,7 @@ class WorkflowEngine:
     → CapCutExport
     """
 
-    WORKFLOW_VERSION = "workflow-engine-85-1"
+    WORKFLOW_VERSION = "workflow-engine-86-2"
 
     STEP_NAMES = [
         "product_plan",
@@ -2277,6 +2277,16 @@ class WorkflowEngine:
             "watch_url": "",
             "uploaded_at": "",
         }
+        outputs["youtube_project"] = {
+            "ok": False,
+            "version": "project-repository-86-1",
+            "status": "not_run",
+            "project_id": getattr(project, "id", ""),
+            "video_id": "",
+            "watch_url": "",
+            "uploaded_at": "",
+            "manifest_path": "",
+        }
 
         try:
             review_scripts = (
@@ -2474,6 +2484,36 @@ class WorkflowEngine:
             )
             outputs["youtube_manifest"] = youtube_manifest_result
 
+            youtube_project_result = (
+                ProjectRepository().update_youtube_upload(
+                    project_id=getattr(project, "id", ""),
+                    upload_result=youtube_summary,
+                    manifest_result=youtube_manifest_result,
+                )
+            )
+            outputs["youtube_project"] = youtube_project_result
+
+            print(
+                "[Sprint86-2 Project DB] Saved:",
+                bool(youtube_project_result.get("ok")),
+                flush=True,
+            )
+            print(
+                "[Sprint86-2 Project DB] Status:",
+                youtube_project_result.get("status", ""),
+                flush=True,
+            )
+            print(
+                "[Sprint86-2 Project DB] Video ID:",
+                youtube_project_result.get("video_id", ""),
+                flush=True,
+            )
+            print(
+                "[Sprint86-2 Project DB] Watch URL:",
+                youtube_project_result.get("watch_url", ""),
+                flush=True,
+            )
+
             print(
                 "[Sprint85-1 YouTube] Status:",
                 youtube_summary.get("status", ""),
@@ -2628,6 +2668,29 @@ class WorkflowEngine:
                     youtube_summary,
                 )
             )
+            outputs["youtube_project"] = (
+                ProjectRepository().update_youtube_upload(
+                    project_id=getattr(project, "id", ""),
+                    upload_result=youtube_summary,
+                    manifest_result=outputs["youtube_manifest"],
+                )
+            )
+
+            print(
+                "[Sprint86-2 Project DB] Saved:",
+                bool(
+                    outputs["youtube_project"].get("ok")
+                ),
+                flush=True,
+            )
+            print(
+                "[Sprint86-2 Project DB] Status:",
+                outputs["youtube_project"].get(
+                    "status",
+                    "",
+                ),
+                flush=True,
+            )
 
             print(
                 "[Sprint85-1 YouTube] Status:",
@@ -2654,7 +2717,7 @@ class WorkflowEngine:
         final_state = state.load(job_id)
 
         print(
-            "######## RUN_PROJECT SPRINT85-1 END ########",
+            "######## RUN_PROJECT SPRINT86-2 END ########",
             flush=True,
         )
 
