@@ -7,7 +7,7 @@ from modules.system.project_backup import ProjectBackup
 
 
 class ProjectRepository:
-    VERSION = "project-repository-86-1"
+    VERSION = "project-repository-88-1"
 
     def create(self, payload):
         with SessionLocal() as db:
@@ -227,11 +227,50 @@ class ProjectRepository:
                 ),
             }
 
+            history = project_data.get(
+                "youtube_history",
+                [],
+            )
+            if not isinstance(history, list):
+                history = []
+
+            history_item = {
+                "video_id": youtube_data["video_id"],
+                "watch_url": youtube_data["watch_url"],
+                "uploaded_at": youtube_data["uploaded_at"],
+                "status": youtube_data["status"],
+                "platform": youtube_data["platform"],
+                "actual_upload_performed": youtube_data[
+                    "actual_upload_performed"
+                ],
+                "manifest_path": youtube_data[
+                    "manifest_path"
+                ],
+                "history_count": len(history),
+            }
+
+            is_duplicate = any(
+                isinstance(entry, dict)
+                and entry.get("video_id")
+                == history_item["video_id"]
+                and history_item["video_id"]
+                for entry in history
+            )
+
+            history_item["history_added"] = bool(
+                history_item["video_id"]
+                and not is_duplicate
+            )
+
+            if history_item["history_added"]:
+                history.insert(0, history_item)
+
             project_data["youtube"] = youtube_data
             project_data["youtube_upload"] = dict(source)
             project_data["youtube_manifest"] = dict(
                 manifest
             )
+            project_data["youtube_history"] = history
 
             item.data_json = json.dumps(
                 project_data,
