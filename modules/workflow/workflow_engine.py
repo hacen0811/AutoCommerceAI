@@ -45,7 +45,7 @@ from modules.video.download_utils import (
 )
 
 
-print("######## WORKFLOW_ENGINE SPRINT83-3 LOADED ########", flush=True)
+print("######## WORKFLOW_ENGINE SPRINT85-1 LOADED ########", flush=True)
 
 
 class WorkflowEngine:
@@ -70,7 +70,7 @@ class WorkflowEngine:
     → CapCutExport
     """
 
-    WORKFLOW_VERSION = "workflow-engine-83-3"
+    WORKFLOW_VERSION = "workflow-engine-85-1"
 
     STEP_NAMES = [
         "product_plan",
@@ -480,6 +480,116 @@ class WorkflowEngine:
             ),
         )
         return result
+
+    def _build_youtube_upload_summary(self, upload_result):
+        """YouTube 업로드 결과를 저장과 UI에 필요한 핵심 정보로 정리합니다."""
+        source = upload_result if isinstance(upload_result, dict) else {}
+
+        video_id = str(source.get("video_id") or "").strip()
+        watch_url = str(source.get("watch_url") or "").strip()
+
+        if video_id and not watch_url:
+            watch_url = (
+                "https://www.youtube.com/watch?v="
+                f"{video_id}"
+            )
+
+        return {
+            "ok": bool(source.get("ok")),
+            "version": str(
+                source.get("version")
+                or "youtube-upload-executor-83-2"
+            ),
+            "status": str(source.get("status") or "unknown"),
+            "platform": str(
+                source.get("platform")
+                or "youtube_shorts"
+            ),
+            "video_id": video_id,
+            "watch_url": watch_url,
+            "uploaded_at": str(source.get("uploaded_at") or ""),
+            "actual_upload_performed": bool(
+                source.get("actual_upload_performed")
+            ),
+            "upload_ready": bool(source.get("upload_ready")),
+            "dry_run": bool(source.get("dry_run")),
+            "errors": list(source.get("errors") or []),
+            "warnings": list(source.get("warnings") or []),
+        }
+
+    def _persist_youtube_upload_metadata(
+        self,
+        publisher_store_result,
+        youtube_summary,
+    ):
+        """Publisher manifest.json에 YouTube 업로드 메타데이터를 저장합니다."""
+        store = (
+            publisher_store_result
+            if isinstance(publisher_store_result, dict)
+            else {}
+        )
+        summary = (
+            youtube_summary
+            if isinstance(youtube_summary, dict)
+            else {}
+        )
+
+        manifest_path = str(store.get("manifest_path") or "").strip()
+        result = {
+            "ok": False,
+            "version": "youtube-manifest-store-85-1",
+            "status": "not_saved",
+            "manifest_path": manifest_path,
+            "video_id": str(summary.get("video_id") or ""),
+            "watch_url": str(summary.get("watch_url") or ""),
+            "uploaded_at": str(summary.get("uploaded_at") or ""),
+        }
+
+        if not manifest_path:
+            result["status"] = "manifest_path_missing"
+            result["error"] = "publisher manifest_path가 없습니다"
+            return result
+
+        path = Path(manifest_path)
+
+        if not path.is_file():
+            result["status"] = "manifest_missing"
+            result["error"] = f"manifest 파일이 없습니다: {path}"
+            return result
+
+        try:
+            manifest = json.loads(path.read_text(encoding="utf-8"))
+
+            if not isinstance(manifest, dict):
+                manifest = {
+                    "original_manifest": manifest,
+                }
+
+            manifest["youtube"] = dict(summary)
+
+            path.write_text(
+                json.dumps(
+                    manifest,
+                    ensure_ascii=False,
+                    indent=2,
+                    default=str,
+                ),
+                encoding="utf-8",
+            )
+
+            result.update(
+                {
+                    "ok": True,
+                    "status": "saved",
+                    "manifest_path": str(path),
+                }
+            )
+            return result
+
+        except Exception as exc:
+            result["status"] = "save_failed"
+            result["error"] = str(exc)
+            return result
 
     def run_project(
         self,
@@ -2101,7 +2211,7 @@ class WorkflowEngine:
                 error=exc,
             )
 
-        # 13. Sprint83-3 Publisher + Queue + Dispatcher + YouTube Dry Run Integration
+        # 13. Sprint84-1 Publisher + Queue + Dispatcher + Real YouTube Upload Integration
         publisher_result = {
             "ok": False,
             "version": "publisher-engine-82-1",
@@ -2150,11 +2260,23 @@ class WorkflowEngine:
             "version": "youtube-upload-executor-83-2",
             "status": "not_run",
             "platform": "youtube_shorts",
-            "dry_run": True,
+            "dry_run": False,
             "upload_ready": False,
             "actual_upload_performed": False,
         }
         outputs["youtube_upload"] = youtube_upload_result
+        outputs["youtube"] = self._build_youtube_upload_summary(
+            youtube_upload_result
+        )
+        outputs["youtube_manifest"] = {
+            "ok": False,
+            "version": "youtube-manifest-store-85-1",
+            "status": "not_run",
+            "manifest_path": "",
+            "video_id": "",
+            "watch_url": "",
+            "uploaded_at": "",
+        }
 
         try:
             review_scripts = (
@@ -2317,7 +2439,9 @@ class WorkflowEngine:
                 youtube_upload_result = (
                     YouTubeUploadExecutor().execute(
                         dispatch_job=youtube_dispatch_job,
-                        dry_run=True,
+                        dry_run=False,
+                        credentials_file="secrets/youtube_client_secret.json",
+                        token_file="secrets/youtube_token.json",
                     )
                 )
             else:
@@ -2326,7 +2450,7 @@ class WorkflowEngine:
                     "version": "youtube-upload-executor-83-2",
                     "status": "dispatch_job_missing",
                     "platform": "youtube_shorts",
-                    "dry_run": True,
+                    "dry_run": False,
                     "upload_ready": False,
                     "actual_upload_performed": False,
                     "errors": [
@@ -2336,6 +2460,50 @@ class WorkflowEngine:
                 }
 
             outputs["youtube_upload"] = youtube_upload_result
+
+            youtube_summary = self._build_youtube_upload_summary(
+                youtube_upload_result
+            )
+            outputs["youtube"] = youtube_summary
+
+            youtube_manifest_result = (
+                self._persist_youtube_upload_metadata(
+                    publisher_store_result,
+                    youtube_summary,
+                )
+            )
+            outputs["youtube_manifest"] = youtube_manifest_result
+
+            print(
+                "[Sprint85-1 YouTube] Status:",
+                youtube_summary.get("status", ""),
+                flush=True,
+            )
+            print(
+                "[Sprint85-1 YouTube] Video ID:",
+                youtube_summary.get("video_id", ""),
+                flush=True,
+            )
+            print(
+                "[Sprint85-1 YouTube] Watch URL:",
+                youtube_summary.get("watch_url", ""),
+                flush=True,
+            )
+            print(
+                "[Sprint85-1 YouTube] Uploaded At:",
+                youtube_summary.get("uploaded_at", ""),
+                flush=True,
+            )
+            print(
+                "[Sprint85-1 YouTube Manifest] Saved:",
+                bool(youtube_manifest_result.get("ok")),
+                flush=True,
+            )
+            print(
+                "[Sprint85-1 YouTube Manifest] Path:",
+                youtube_manifest_result.get("manifest_path", ""),
+                flush=True,
+            )
 
             print(
                 "[Sprint83-3 Dispatcher] Ready:",
@@ -2443,12 +2611,39 @@ class WorkflowEngine:
                 "version": "youtube-upload-executor-83-2",
                 "status": "skipped",
                 "platform": "youtube_shorts",
-                "dry_run": True,
+                "dry_run": False,
                 "upload_ready": False,
                 "actual_upload_performed": False,
                 "error": str(exc),
             }
             outputs["youtube_upload"] = youtube_upload_result
+
+            youtube_summary = self._build_youtube_upload_summary(
+                youtube_upload_result
+            )
+            outputs["youtube"] = youtube_summary
+            outputs["youtube_manifest"] = (
+                self._persist_youtube_upload_metadata(
+                    publisher_store_result,
+                    youtube_summary,
+                )
+            )
+
+            print(
+                "[Sprint85-1 YouTube] Status:",
+                youtube_summary.get("status", ""),
+                flush=True,
+            )
+            print(
+                "[Sprint85-1 YouTube] Video ID:",
+                youtube_summary.get("video_id", ""),
+                flush=True,
+            )
+            print(
+                "[Sprint85-1 YouTube] Watch URL:",
+                youtube_summary.get("watch_url", ""),
+                flush=True,
+            )
 
             print(
                 "[Sprint83-3 Publisher] ERROR:",
@@ -2459,7 +2654,7 @@ class WorkflowEngine:
         final_state = state.load(job_id)
 
         print(
-            "######## RUN_PROJECT SPRINT83-3 END ########",
+            "######## RUN_PROJECT SPRINT85-1 END ########",
             flush=True,
         )
 
