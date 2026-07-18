@@ -10,10 +10,17 @@ from modules.video.gemini_veo_provider import GeminiVeoProvider
 
 
 class SceneVideoGenerator:
-    """Sprint97-1 Director Manifest -> Gemini Veo scene MP4 generator."""
+    """Sprint101-5 Director Manifest -> Gemini Veo scene MP4 generator."""
 
-    VERSION = "scene-video-generator-97-1"
+    VERSION = "scene-video-generator-101-5"
     REPORT_FILENAME = "scene_video_generation_report.json"
+    QUOTA_TOKENS = (
+        "resource_exhausted",
+        "quota",
+        "429",
+        "rate limit",
+        "rate-limit",
+    )
 
     def __init__(self, provider: Optional[GeminiVeoProvider] = None) -> None:
         self.provider = provider or GeminiVeoProvider()
@@ -56,6 +63,9 @@ class SceneVideoGenerator:
             "updated_manifest": {},
             "updated_manifest_path": "",
             "provider": {},
+            "quota_exhausted": False,
+            "quota_stop_scene_id": "",
+            "skipped_after_quota_count": 0,
             "warnings": [],
             "errors": [],
             "elapsed_seconds": 0.0,
@@ -95,8 +105,6 @@ class SceneVideoGenerator:
         result["report_path"] = str(report_path)
 
         normalized_scenes: List[Dict[str, Any]] = []
-        normalized_by_id: Dict[str, Dict[str, Any]] = {}
-
         for index, raw_scene in enumerate(scenes, start=1):
             if not isinstance(raw_scene, Mapping):
                 result["warnings"].append(
@@ -132,7 +140,6 @@ class SceneVideoGenerator:
                 normalized["reference_image_path"] = ""
 
             normalized_scenes.append(normalized)
-            normalized_by_id[scene_id] = normalized
 
         result["valid_scene_count"] = len(normalized_scenes)
 
@@ -156,7 +163,7 @@ class SceneVideoGenerator:
             )
 
             if reuse_existing and existing_path:
-                existing_result = {
+                scene_results_by_id[scene_id] = {
                     "ok": True,
                     "ready": True,
                     "scene_id": scene_id,
@@ -166,7 +173,6 @@ class SceneVideoGenerator:
                     "errors": [],
                     "warnings": [],
                 }
-                scene_results_by_id[scene_id] = existing_result
                 self._append_unique(generated_files, existing_path)
                 result["reused_scene_count"] += 1
             else:
@@ -192,112 +198,19 @@ class SceneVideoGenerator:
                         "warnings": [],
                     }
             else:
-                remaining = list(pending_scenes)
-
-                for attempt in range(1, max_attempts + 1):
-                    if not remaining:
-                        break
-
-                    result["attempt_count"] = attempt
-                    request = {
-                        "project_id": str(
-                            project_id or manifest.get("project_id") or ""
-                        ),
-                        "product_name": str(
-                            product_name or manifest.get("product_name") or ""
-                        ),
-                        "aspect_ratio": str(aspect_ratio or "9:16"),
-                        "output_dir": str(resolved_output_dir),
-                        "scenes": remaining,
-                    }
-
-                    provider_result = self._safe_provider_generate(request)
-                    provider_scene_results = (
-                        provider_result.get("scene_results") or []
-                    )
-                    provider_generated_files = list(
-                        provider_result.get("generated_files") or []
-                    )
-
-                    for path_text in provider_generated_files:
-                        path_text = str(path_text or "").strip()
-                        if path_text and Path(path_text).is_file():
-                            self._append_unique(generated_files, path_text)
-
-                    returned_by_id = {
-                        str(item.get("scene_id") or "").strip(): dict(item)
-                        for item in provider_scene_results
-                        if isinstance(item, dict)
-                        and str(item.get("scene_id") or "").strip()
-                    }
-
-                    next_remaining: List[Dict[str, Any]] = []
-
-                    for scene in remaining:
-                        scene_id = str(scene["scene_id"])
-                        scene_result = returned_by_id.get(scene_id, {})
-                        scene_result = dict(scene_result)
-                        scene_result.setdefault("scene_id", scene_id)
-                        scene_result["attempt"] = attempt
-
-                        output_path = self._valid_output_path(
-                            scene_result.get("output_path")
-                        )
-                        if not output_path:
-                            output_path = self._find_generated_scene_file(
-                                resolved_output_dir,
-                                scene_id,
-                            )
-
-                        if output_path:
-                            scene_result.update(
-                                {
-                                    "ok": True,
-                                    "ready": True,
-                                    "status": "generated",
-                                    "output_path": output_path,
-                                }
-                            )
-                            self._append_unique(generated_files, output_path)
-                        else:
-                            scene_result.setdefault("ok", False)
-                            scene_result.setdefault("ready", False)
-                            scene_result.setdefault(
-                                "status",
-                                str(
-                                    provider_result.get("status")
-                                    or "generation_failed"
-                                ),
-                            )
-                            scene_result.setdefault(
-                                "errors",
-                                list(provider_result.get("errors") or []),
-                            )
-                            next_remaining.append(scene)
-
-                        scene_results_by_id[scene_id] = scene_result
-
-                    if next_remaining and attempt < max_attempts:
-                        time.sleep(retry_delay_seconds)
-
-                    remaining = next_remaining
-
-                for scene in remaining:
-                    scene_id = str(scene["scene_id"])
-                    previous = dict(scene_results_by_id.get(scene_id, {}))
-                    previous.update(
-                        {
-                            "ok": False,
-                            "ready": False,
-                            "scene_id": scene_id,
-                            "status": str(
-                                previous.get("status") or "generation_failed"
-                            ),
-                            "output_path": "",
-                            "attempt": result["attempt_count"],
-                        }
-                    )
-                    scene_results_by_id[scene_id] = previous
+                self._generate_scenes_sequentially(
+                    pending_scenes=pending_scenes,
+                    scene_results_by_id=scene_results_by_id,
+                    generated_files=generated_files,
+                    result=result,
+                    manifest=manifest,
+                    resolved_output_dir=resolved_output_dir,
+                    project_id=project_id,
+                    product_name=product_name,
+                    aspect_ratio=aspect_ratio,
+                    max_attempts=max_attempts,
+                    retry_delay_seconds=retry_delay_seconds,
+                )
 
         updated_manifest = copy.deepcopy(manifest)
         updated_scenes: List[Dict[str, Any]] = []
@@ -346,6 +259,8 @@ class SceneVideoGenerator:
         updated_manifest["generated_scene_count"] = generated_count
         updated_manifest["reused_scene_count"] = result["reused_scene_count"]
         updated_manifest["failed_scene_count"] = failed_count
+        updated_manifest["quota_exhausted"] = result["quota_exhausted"]
+        updated_manifest["quota_stop_scene_id"] = result["quota_stop_scene_id"]
 
         updated_manifest_path = manifest_path or (
             resolved_output_dir / "director_manifest.json"
@@ -367,7 +282,9 @@ class SceneVideoGenerator:
         )
         result["ready"] = result["ok"]
 
-        if result["ok"]:
+        if result["quota_exhausted"]:
+            result["status"] = "stopped_quota_exhausted"
+        elif result["ok"]:
             result["status"] = (
                 "reused_existing"
                 if result["reused_scene_count"] == generated_count
@@ -387,6 +304,166 @@ class SceneVideoGenerator:
         result = self._finish(result, started_at)
         self._save_json(report_path, result)
         return result
+
+    def _generate_scenes_sequentially(
+        self,
+        pending_scenes: List[Dict[str, Any]],
+        scene_results_by_id: Dict[str, Dict[str, Any]],
+        generated_files: List[str],
+        result: Dict[str, Any],
+        manifest: Dict[str, Any],
+        resolved_output_dir: Path,
+        project_id: Any,
+        product_name: Any,
+        aspect_ratio: str,
+        max_attempts: int,
+        retry_delay_seconds: float,
+    ) -> None:
+        quota_stopped = False
+
+        for scene_index, scene in enumerate(pending_scenes):
+            scene_id = str(scene["scene_id"])
+
+            if quota_stopped:
+                scene_results_by_id[scene_id] = self._quota_skipped_result(
+                    scene_id
+                )
+                result["skipped_after_quota_count"] += 1
+                continue
+
+            final_scene_result: Dict[str, Any] = {}
+
+            for attempt in range(1, max_attempts + 1):
+                result["attempt_count"] += 1
+                request = {
+                    "project_id": str(
+                        project_id or manifest.get("project_id") or ""
+                    ),
+                    "product_name": str(
+                        product_name or manifest.get("product_name") or ""
+                    ),
+                    "aspect_ratio": str(aspect_ratio or "9:16"),
+                    "output_dir": str(resolved_output_dir),
+                    "scenes": [scene],
+                }
+
+                provider_result = self._safe_provider_generate(request)
+                provider_scene_results = provider_result.get("scene_results") or []
+                provider_generated_files = list(
+                    provider_result.get("generated_files") or []
+                )
+
+                for path_text in provider_generated_files:
+                    path_text = str(path_text or "").strip()
+                    if path_text and Path(path_text).is_file():
+                        self._append_unique(generated_files, path_text)
+
+                returned_scene = {}
+                for item in provider_scene_results:
+                    if not isinstance(item, dict):
+                        continue
+                    if str(item.get("scene_id") or "").strip() == scene_id:
+                        returned_scene = dict(item)
+                        break
+
+                scene_result = dict(returned_scene)
+                scene_result.setdefault("scene_id", scene_id)
+                scene_result["attempt"] = attempt
+
+                output_path = self._valid_output_path(
+                    scene_result.get("output_path")
+                )
+                if not output_path:
+                    output_path = self._find_generated_scene_file(
+                        resolved_output_dir,
+                        scene_id,
+                    )
+
+                if output_path:
+                    scene_result.update(
+                        {
+                            "ok": True,
+                            "ready": True,
+                            "status": "generated",
+                            "output_path": output_path,
+                            "errors": [],
+                        }
+                    )
+                    self._append_unique(generated_files, output_path)
+                    final_scene_result = scene_result
+                    break
+
+                provider_errors = list(provider_result.get("errors") or [])
+                scene_errors = list(scene_result.get("errors") or [])
+                combined_errors = scene_errors or provider_errors
+                scene_result.update(
+                    {
+                        "ok": False,
+                        "ready": False,
+                        "status": str(
+                            scene_result.get("status")
+                            or provider_result.get("status")
+                            or "generation_failed"
+                        ),
+                        "output_path": "",
+                        "errors": combined_errors,
+                    }
+                )
+                final_scene_result = scene_result
+
+                if self._is_quota_error(provider_result, scene_result):
+                    result["quota_exhausted"] = True
+                    result["quota_stop_scene_id"] = scene_id
+                    quota_stopped = True
+                    final_scene_result["status"] = "quota_exhausted"
+                    print(
+                        "[Sprint101-5 Quota Stop] Scene:",
+                        scene_id,
+                        "| Remaining blocked:",
+                        len(pending_scenes) - scene_index - 1,
+                        flush=True,
+                    )
+                    break
+
+                if attempt < max_attempts and retry_delay_seconds > 0:
+                    time.sleep(retry_delay_seconds)
+
+            scene_results_by_id[scene_id] = final_scene_result
+
+            if quota_stopped:
+                for remaining_scene in pending_scenes[scene_index + 1 :]:
+                    remaining_id = str(remaining_scene["scene_id"])
+                    scene_results_by_id[remaining_id] = self._quota_skipped_result(
+                        remaining_id
+                    )
+                    result["skipped_after_quota_count"] += 1
+                break
+
+    def _quota_skipped_result(self, scene_id: str) -> Dict[str, Any]:
+        return {
+            "ok": False,
+            "ready": False,
+            "scene_id": scene_id,
+            "status": "skipped_quota_exhausted",
+            "output_path": "",
+            "attempt": 0,
+            "errors": [],
+            "warnings": ["앞 장면에서 API 쿼터 초과가 발생해 호출하지 않았습니다"],
+        }
+
+    def _is_quota_error(
+        self,
+        provider_result: Dict[str, Any],
+        scene_result: Dict[str, Any],
+    ) -> bool:
+        parts: List[str] = [
+            str(provider_result.get("status") or ""),
+            str(scene_result.get("status") or ""),
+        ]
+        parts.extend(str(item) for item in provider_result.get("errors") or [])
+        parts.extend(str(item) for item in scene_result.get("errors") or [])
+        error_text = " ".join(parts).lower()
+        return any(token in error_text for token in self.QUOTA_TOKENS)
 
     def _safe_provider_generate(self, request: Dict[str, Any]) -> Dict[str, Any]:
         try:

@@ -64,7 +64,7 @@ from modules.video.download_utils import (
 )
 
 
-print("######## WORKFLOW_ENGINE SPRINT101-3 LOADED ########", flush=True)
+print("######## WORKFLOW_ENGINE SPRINT101-4 LOADED ########", flush=True)
 
 
 class WorkflowEngine:
@@ -89,7 +89,7 @@ class WorkflowEngine:
     → CapCutExport
     """
 
-    WORKFLOW_VERSION = "workflow-engine-101-3"
+    WORKFLOW_VERSION = "workflow-engine-101-4"
 
     STEP_NAMES = [
         "product_plan",
@@ -2545,8 +2545,8 @@ class WorkflowEngine:
                 product_name=product_name_for_director,
                 aspect_ratio="9:16",
                 update_manifest=True,
-                max_attempts=2,
-                retry_delay_seconds=2.0,
+                max_attempts=1,
+                retry_delay_seconds=0.0,
                 reuse_existing=True,
             )
         except Exception as exc:
@@ -2555,7 +2555,34 @@ class WorkflowEngine:
                 errors=[f"{type(exc).__name__}: {exc}"],
             )
 
+        scene_video_errors = list(scene_video_result.get("errors") or [])
+        scene_video_error_text = " ".join(
+            str(item) for item in scene_video_errors
+        ).lower()
+        quota_exhausted = any(
+            token in scene_video_error_text
+            for token in (
+                "resource_exhausted",
+                "quota",
+                "429",
+                "rate limit",
+                "rate-limit",
+            )
+        )
+        scene_video_result["quota_exhausted"] = quota_exhausted
+        scene_video_result["retry_blocked"] = quota_exhausted
+
         outputs["scene_video_generation"] = scene_video_result
+        print(
+            "[Sprint101-4 Quota Guard] Exhausted:",
+            quota_exhausted,
+            flush=True,
+        )
+        print(
+            "[Sprint101-4 Quota Guard] Retry Blocked:",
+            bool(quota_exhausted),
+            flush=True,
+        )
         print(
             "[Sprint97-1 Scene Video Generator] Version:",
             scene_video_result.get("version", ""),
@@ -2599,38 +2626,66 @@ class WorkflowEngine:
             flush=True,
         )
 
-        # 생성된 generated_video_path가 기록된 manifest를 최종 병합합니다.
-        try:
-            scene_merge_result = SceneMergeEngine().merge(
-                director_manifest=scene_video_result.get(
-                    "updated_manifest",
-                    {},
-                ),
-                director_manifest_path=(
-                    scene_video_result.get(
-                        "updated_manifest_path",
-                        "",
-                    )
-                    or director_manifest_result.get(
-                        "manifest_path",
-                        "",
-                    )
-                ),
-                scenes_dir=director_output_dir,
-                output_path=(
-                    Path("exports")
-                    / "videos"
-                    / f"{project_id_for_director}_ai_director_final.mp4"
-                ),
-                project_id=project_id_for_director,
-                execute=True,
-                overwrite=True,
-            )
-        except Exception as exc:
+        # Sprint101-4: quota 초과 또는 생성 파일 없음이면 병합을 실행하지 않습니다.
+        generated_scene_files = list(
+            scene_video_result.get("generated_files") or []
+        )
+        if quota_exhausted:
             scene_merge_result.update(
-                status="failed",
-                errors=[f"{type(exc).__name__}: {exc}"],
+                ok=False,
+                ready=False,
+                status="skipped_quota_exhausted",
+                errors=[],
+                skip_reason="Gemini/Veo quota exhausted",
             )
+            print(
+                "[Sprint101-4 Scene Merge Guard] Skipped: quota_exhausted",
+                flush=True,
+            )
+        elif not generated_scene_files:
+            scene_merge_result.update(
+                ok=False,
+                ready=False,
+                status="skipped_no_generated_scenes",
+                errors=[],
+                skip_reason="No generated scene video files",
+            )
+            print(
+                "[Sprint101-4 Scene Merge Guard] Skipped: no_generated_scenes",
+                flush=True,
+            )
+        else:
+            try:
+                scene_merge_result = SceneMergeEngine().merge(
+                    director_manifest=scene_video_result.get(
+                        "updated_manifest",
+                        {},
+                    ),
+                    director_manifest_path=(
+                        scene_video_result.get(
+                            "updated_manifest_path",
+                            "",
+                        )
+                        or director_manifest_result.get(
+                            "manifest_path",
+                            "",
+                        )
+                    ),
+                    scenes_dir=director_output_dir,
+                    output_path=(
+                        Path("exports")
+                        / "videos"
+                        / f"{project_id_for_director}_ai_director_final.mp4"
+                    ),
+                    project_id=project_id_for_director,
+                    execute=True,
+                    overwrite=True,
+                )
+            except Exception as exc:
+                scene_merge_result.update(
+                    status="failed",
+                    errors=[f"{type(exc).__name__}: {exc}"],
+                )
 
         outputs["scene_merge"] = scene_merge_result
         print(
