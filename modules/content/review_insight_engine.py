@@ -19,7 +19,7 @@ class ReviewInsightEngine:
     외부 AI API 없이 실행되는 규칙 기반 엔진입니다.
     """
 
-    VERSION = "review-insight-engine-74-3b"
+    VERSION = "review-insight-engine-76-2a"
 
     PAIN_PATTERNS = {
         "슬리퍼가 바닥에 흩어져 있다": [
@@ -353,6 +353,19 @@ class ReviewInsightEngine:
                 product_name
             )
 
+        selector_result = self._select_smart_reviews(
+            normalized_reviews,
+            product_name=product_name,
+        )
+
+        selected_reviews = selector_result.get(
+            "selected_reviews",
+            [],
+        )
+
+        if selected_reviews:
+            normalized_reviews = selected_reviews
+
         pain_pattern_map = {
             **self.PAIN_PATTERNS,
             **self.GENERAL_PAIN_PATTERNS,
@@ -391,8 +404,14 @@ class ReviewInsightEngine:
             normalized_reviews
         )
 
-        best_evidence = self._select_best_evidence(
-            normalized_reviews
+        sentence_evidence = self._build_sentence_evidence(
+            normalized_reviews,
+            product_name=product_name,
+        )
+
+        best_evidence = sentence_evidence.get(
+            "best_evidence",
+            {},
         )
 
         pain_points = self._apply_pain_fallbacks(
@@ -430,6 +449,14 @@ class ReviewInsightEngine:
             "슬리퍼를 벽에 걸어 깔끔하게 정리할 수 있다",
         )
 
+        best_benefit = self._align_benefit_with_evidence(
+            best_benefit=best_benefit,
+            evidence_text=best_evidence.get(
+                "text",
+                "",
+            ),
+        )
+
         best_buy_reason = self._first_label(
             buy_reasons,
             "욕실 슬리퍼를 정리하기 위해",
@@ -441,32 +468,52 @@ class ReviewInsightEngine:
         )
 
         print(
-            "[Sprint74-3 Insight] Version:",
+            "[Sprint76-2A Insight] Version:",
             self.VERSION,
             flush=True,
         )
         print(
-            "[Sprint74-3 Insight] Input Reviews:",
+            "[Sprint76-2A Insight] Raw Reviews:",
+            selector_result.get("raw_review_count", 0),
+            flush=True,
+        )
+        print(
+            "[Sprint76-2A Insight] Selected Reviews:",
+            selector_result.get("selected_review_count", 0),
+            flush=True,
+        )
+        print(
+            "[Sprint76-2A Insight] Filter Stats:",
+            selector_result.get("filter_stats", {}),
+            flush=True,
+        )
+        print(
+            "[Sprint76-2A Insight] Input Reviews:",
             len(normalized_reviews),
             flush=True,
         )
         print(
-            "[Sprint74-3 Insight] Best Evidence:",
+            "[Sprint76-2A Insight] Sentence Count:",
+            sentence_evidence.get("sentence_count", 0),
+            flush=True,
+        )
+        print(
+            "[Sprint76-2A Insight] Best Evidence:",
             repr(best_evidence.get("text", "")),
             flush=True,
         )
         print(
-            "[Sprint74-3 Insight] Evidence Score:",
+            "[Sprint76-2A Insight] Evidence Score:",
             best_evidence.get("evidence_score", 0),
             flush=True,
         )
         print(
-            "[Sprint74-3 Insight] Best Pain:",
+            "[Sprint76-2A Insight] Best Pain:",
             repr(best_pain),
             flush=True,
         )
         print(
-            "[Sprint74-3 Insight] Best Benefit:",
+            "[Sprint76-2A Insight] Best Benefit:",
             repr(best_benefit),
             flush=True,
         )
@@ -476,7 +523,33 @@ class ReviewInsightEngine:
             "version": self.VERSION,
             "product_name": product_name,
             "review_count": len(normalized_reviews),
+            "raw_review_count": selector_result.get(
+                "raw_review_count",
+                len(normalized_reviews),
+            ),
+            "selected_review_count": selector_result.get(
+                "selected_review_count",
+                len(normalized_reviews),
+            ),
             "social_comment_count": len(normalized_social),
+            "smart_selector": selector_result,
+            "evidence_top5": sentence_evidence.get(
+                "evidence_top5",
+                [],
+            ),
+            "sentence_evidence": sentence_evidence,
+            "pain_top3": selector_result.get(
+                "pain_top3",
+                [],
+            ),
+            "benefit_top3": selector_result.get(
+                "benefit_top3",
+                [],
+            ),
+            "emotion_top3": selector_result.get(
+                "emotion_top3",
+                [],
+            ),
             "pain_points": pain_points[:5],
             "benefits": benefits[:5],
             "buy_reasons": buy_reasons[:5],
@@ -761,6 +834,946 @@ class ReviewInsightEngine:
             )
             if token not in self.STOP_WORDS
         }
+
+    def _select_smart_reviews(
+        self,
+        reviews: List[Dict[str, Any]],
+        product_name: str = "",
+        limit: int = 30,
+    ) -> Dict[str, Any]:
+        scored: List[Dict[str, Any]] = []
+
+        filter_stats = {
+            "rejected_irrelevant": 0,
+            "rejected_low_trust": 0,
+            "rejected_duplicate": 0,
+            "accepted": 0,
+        }
+
+        product_tokens = self._product_tokens(
+            product_name
+        )
+
+        for review in reviews:
+            item = dict(review)
+            text = self._clean_text(
+                item.get("text", "")
+            )
+
+            if not text:
+                continue
+
+            relevance_score = self._relevance_score(
+                text,
+                product_tokens,
+            )
+
+            trust_score = self._trust_score(
+                item
+            )
+
+            evidence_score = self._evidence_strength(
+                item
+            )
+
+            emotion = self._emotion_label(
+                text
+            )
+
+            final_score = round(
+                relevance_score * 0.35
+                + trust_score * 0.30
+                + evidence_score * 0.35,
+                1,
+            )
+
+            item.update(
+                {
+                    "relevance_score": relevance_score,
+                    "trust_score": trust_score,
+                    "evidence_strength": evidence_score,
+                    "selector_score": final_score,
+                    "emotion": emotion,
+                }
+            )
+
+            if relevance_score < 32:
+                filter_stats[
+                    "rejected_irrelevant"
+                ] += 1
+                continue
+
+            if trust_score < 35:
+                filter_stats[
+                    "rejected_low_trust"
+                ] += 1
+                continue
+
+            scored.append(item)
+
+        scored.sort(
+            key=lambda item: (
+                item.get("selector_score", 0),
+                item.get("evidence_strength", 0),
+                item.get("quality_score", 0),
+                len(item.get("text", "")),
+            ),
+            reverse=True,
+        )
+
+        selected: List[Dict[str, Any]] = []
+
+        for item in scored:
+            if self._is_semantic_duplicate(
+                item,
+                selected,
+            ):
+                filter_stats[
+                    "rejected_duplicate"
+                ] += 1
+                continue
+
+            selected.append(item)
+
+            if len(selected) >= limit:
+                break
+
+        filter_stats["accepted"] = len(
+            selected
+        )
+
+        evidence_top5 = [
+            self._selector_summary(item)
+            for item in selected[:5]
+        ]
+
+        pain_candidates = [
+            item
+            for item in selected
+            if self._contains_pain_signal(
+                item.get("text", "")
+            )
+        ]
+
+        benefit_candidates = [
+            item
+            for item in selected
+            if self._contains_benefit_signal(
+                item.get("text", "")
+            )
+        ]
+
+        emotion_candidates = sorted(
+            selected,
+            key=lambda item: (
+                self._emotion_strength(
+                    item.get("text", "")
+                ),
+                item.get("selector_score", 0),
+            ),
+            reverse=True,
+        )
+
+        return {
+            "ok": bool(selected),
+            "version": "smart-review-selector-76-1",
+            "raw_review_count": len(reviews),
+            "selected_review_count": len(selected),
+            "selected_reviews": selected,
+            "filter_stats": filter_stats,
+            "evidence_top5": evidence_top5,
+            "pain_top3": [
+                self._selector_summary(item)
+                for item in pain_candidates[:3]
+            ],
+            "benefit_top3": [
+                self._selector_summary(item)
+                for item in benefit_candidates[:3]
+            ],
+            "emotion_top3": [
+                self._selector_summary(item)
+                for item in emotion_candidates[:3]
+            ],
+        }
+
+    def _selector_summary(
+        self,
+        item: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        return {
+            "text": item.get("text", ""),
+            "selector_score": item.get(
+                "selector_score",
+                0,
+            ),
+            "relevance_score": item.get(
+                "relevance_score",
+                0,
+            ),
+            "trust_score": item.get(
+                "trust_score",
+                0,
+            ),
+            "evidence_strength": item.get(
+                "evidence_strength",
+                0,
+            ),
+            "quality_score": item.get(
+                "quality_score",
+                0,
+            ),
+            "emotion": item.get(
+                "emotion",
+                "neutral",
+            ),
+            "source": item.get(
+                "source",
+                "",
+            ),
+        }
+
+    def _product_tokens(
+        self,
+        product_name: str,
+    ) -> set[str]:
+        text = self._clean_text(
+            product_name
+        ).lower()
+
+        tokens = {
+            token
+            for token in re.findall(
+                r"[가-힣A-Za-z0-9]{2,}",
+                text,
+            )
+            if token not in self.STOP_WORDS
+        }
+
+        category_aliases = {
+            "캐리어": {
+                "여행",
+                "짐",
+                "수납",
+                "바퀴",
+                "손잡이",
+                "지퍼",
+                "기내용",
+                "24인치",
+                "20인치",
+            },
+            "슬리퍼": {
+                "욕실",
+                "정리",
+                "바닥",
+                "벽",
+                "무타공",
+                "접착",
+                "건조",
+            },
+            "텀블러": {
+                "보냉",
+                "보온",
+                "빨대",
+                "물병",
+                "음료",
+                "얼음",
+            },
+        }
+
+        for category, aliases in category_aliases.items():
+            if category in text:
+                tokens.add(category)
+                tokens.update(aliases)
+
+        return tokens
+
+    def _relevance_score(
+        self,
+        text: str,
+        product_tokens: set[str],
+    ) -> float:
+        if not text:
+            return 0.0
+
+        if not product_tokens:
+            return 65.0
+
+        review_tokens = self._token_set(
+            text
+        )
+
+        overlap = review_tokens & product_tokens
+
+        score = 28.0
+
+        score += min(
+            len(overlap) * 12.0,
+            48.0,
+        )
+
+        if any(
+            token in text.lower()
+            for token in product_tokens
+        ):
+            score += 12.0
+
+        if len(text) >= 30:
+            score += 7.0
+
+        return round(
+            max(
+                0.0,
+                min(100.0, score),
+            ),
+            1,
+        )
+
+    def _trust_score(
+        self,
+        item: Dict[str, Any],
+    ) -> float:
+        quality = self._safe_float(
+            item.get("quality_score"),
+            70.0,
+        )
+
+        experience = self._safe_float(
+            item.get("experience_score"),
+            self._experience_score(
+                item.get("text", "")
+            ),
+        )
+
+        source = str(
+            item.get("source")
+            or ""
+        ).lower()
+
+        source_bonus = 0.0
+
+        if "coupang" in source:
+            source_bonus = 8.0
+        elif "ocr" in source:
+            source_bonus = 5.0
+        elif "social" in source:
+            source_bonus = 2.0
+
+        return round(
+            max(
+                0.0,
+                min(
+                    100.0,
+                    quality * 0.58
+                    + experience * 0.34
+                    + source_bonus,
+                ),
+            ),
+            1,
+        )
+
+    def _evidence_strength(
+        self,
+        item: Dict[str, Any],
+    ) -> float:
+        text = self._clean_text(
+            item.get("text", "")
+        )
+
+        specificity = self._safe_float(
+            item.get("specificity_score"),
+            self._specificity_score(text),
+        )
+
+        score = specificity * 0.60
+
+        if re.search(
+            r"\d+\s*(일|주|개월|달|년|박)",
+            text,
+        ):
+            score += 15.0
+
+        if any(
+            word in text
+            for word in (
+                "사용해보니",
+                "써보니",
+                "설치해보니",
+                "직접",
+                "실제로",
+                "아직도",
+                "재구매",
+            )
+        ):
+            score += 12.0
+
+        if len(text) >= 45:
+            score += 8.0
+
+        return round(
+            max(
+                0.0,
+                min(100.0, score),
+            ),
+            1,
+        )
+
+    def _is_semantic_duplicate(
+        self,
+        candidate: Dict[str, Any],
+        selected: List[Dict[str, Any]],
+    ) -> bool:
+        candidate_tokens = self._token_set(
+            candidate.get("text", "")
+        )
+
+        if not candidate_tokens:
+            return True
+
+        for existing in selected:
+            existing_tokens = self._token_set(
+                existing.get("text", "")
+            )
+
+            union = (
+                candidate_tokens
+                | existing_tokens
+            )
+
+            similarity = (
+                len(
+                    candidate_tokens
+                    & existing_tokens
+                )
+                / max(
+                    len(union),
+                    1,
+                )
+            )
+
+            if similarity >= 0.68:
+                return True
+
+        return False
+
+    def _contains_pain_signal(
+        self,
+        text: str,
+    ) -> bool:
+        signals = (
+            "불편",
+            "아쉽",
+            "걱정",
+            "어렵",
+            "부족",
+            "무거",
+            "좁",
+            "섞",
+            "문제",
+            "단점",
+        )
+
+        return any(
+            signal in text
+            for signal in signals
+        )
+
+    def _contains_benefit_signal(
+        self,
+        text: str,
+    ) -> bool:
+        signals = (
+            "편하",
+            "좋",
+            "만족",
+            "깔끔",
+            "튼튼",
+            "가볍",
+            "넉넉",
+            "추천",
+            "정리",
+            "수납",
+        )
+
+        return any(
+            signal in text
+            for signal in signals
+        )
+
+    def _emotion_label(
+        self,
+        text: str,
+    ) -> str:
+        if any(
+            word in text
+            for word in (
+                "최고",
+                "정말 만족",
+                "아주 만족",
+                "추천",
+                "재구매",
+                "대만족",
+            )
+        ):
+            return "strong_positive"
+
+        if any(
+            word in text
+            for word in (
+                "만족",
+                "좋아요",
+                "편해",
+                "깔끔",
+                "예뻐",
+            )
+        ):
+            return "positive"
+
+        if any(
+            word in text
+            for word in (
+                "불편",
+                "아쉽",
+                "별로",
+                "단점",
+                "실망",
+            )
+        ):
+            return "negative"
+
+        return "neutral"
+
+    def _emotion_strength(
+        self,
+        text: str,
+    ) -> int:
+        score = 0
+
+        strong_words = (
+            "정말",
+            "진짜",
+            "아주",
+            "최고",
+            "대만족",
+            "추천",
+            "재구매",
+            "실망",
+        )
+
+        score += sum(
+            2
+            for word in strong_words
+            if word in text
+        )
+
+        score += min(
+            text.count("!")
+            + text.count("?"),
+            3,
+        )
+
+        return score
+
+    def _build_sentence_evidence(
+        self,
+        reviews: List[Dict[str, Any]],
+        product_name: str = "",
+    ) -> Dict[str, Any]:
+        product_tokens = self._product_tokens(
+            product_name
+        )
+
+        candidates: List[Dict[str, Any]] = []
+
+        for review_index, review in enumerate(
+            reviews
+        ):
+            review_text = self._clean_text(
+                review.get("text", "")
+            )
+
+            for sentence_index, sentence in enumerate(
+                self._split_sentences(review_text)
+            ):
+                scored = self._score_evidence_sentence(
+                    sentence=sentence,
+                    review=review,
+                    product_tokens=product_tokens,
+                )
+
+                if scored.get("score", 0) < 48:
+                    continue
+
+                scored["review_index"] = review_index
+                scored["sentence_index"] = sentence_index
+                candidates.append(scored)
+
+        candidates.sort(
+            key=lambda item: (
+                item.get("score", 0),
+                item.get("feature_score", 0),
+                item.get("relevance_score", 0),
+                -abs(len(item.get("text", "")) - 48),
+            ),
+            reverse=True,
+        )
+
+        unique: List[Dict[str, Any]] = []
+
+        for candidate in candidates:
+            if self._sentence_duplicate(
+                candidate.get("text", ""),
+                unique,
+            ):
+                continue
+
+            unique.append(candidate)
+
+            if len(unique) >= 5:
+                break
+
+        best = (
+            dict(unique[0])
+            if unique
+            else self._select_best_evidence(
+                reviews
+            )
+        )
+
+        return {
+            "ok": bool(best),
+            "version": "evidence-sentence-extractor-76-2a",
+            "sentence_count": len(candidates),
+            "best_evidence": best,
+            "evidence_top5": unique,
+        }
+
+    def _split_sentences(
+        self,
+        text: str,
+    ) -> List[str]:
+        text = self._clean_text(text)
+
+        if not text:
+            return []
+
+        # OCR 숫자 노이즈와 소실된 종결어미 복원
+        text = re.sub(
+            r"추천드립니\s*[0-9ⅠIl|]*\s*(?=\d+\s*박)",
+            "추천드립니다. ",
+            text,
+        )
+
+        text = re.sub(
+            r"만족스러운\s*선택이었어요\s*(?=튼튼)",
+            "만족스러운 선택이었어요. ",
+            text,
+        )
+
+        text = re.sub(
+            r"([가-힣])(?=(한쪽은|다른 한쪽은|자잘한|제가 고른|튼튼하고|덕분에|2\s*박|3\s*박))",
+            r"\1. ",
+            text,
+        )
+
+        text = re.sub(
+            r"([.!?])(?=[가-힣A-Za-z0-9])",
+            r"\1 ",
+            text,
+        )
+
+        raw_parts = re.split(
+            r"(?<=[.!?])\s+|(?<=다)\s+(?=[가-힣])|(?<=요)\s+(?=[가-힣])",
+            text,
+        )
+
+        result: List[str] = []
+
+        for part in raw_parts:
+            sentence = self._repair_evidence_sentence(
+                part
+            )
+
+            if len(sentence) < 10:
+                continue
+
+            # 문장이 지나치게 길면 접속부 기준으로 한 번 더 분리
+            sub_parts = re.split(
+                r"\s+(?=덕분에|하지만|다만|그리고|또한|특히|2\s*박|3\s*박)",
+                sentence,
+            )
+
+            for sub_part in sub_parts:
+                cleaned = self._repair_evidence_sentence(
+                    sub_part
+                )
+
+                if 10 <= len(cleaned) <= 120:
+                    result.append(cleaned)
+
+        if not result and len(text) >= 10:
+            result.append(
+                self._repair_evidence_sentence(
+                    text[:120]
+                )
+            )
+
+        return result
+
+    def _repair_evidence_sentence(
+        self,
+        sentence: str,
+    ) -> str:
+        text = self._clean_text(sentence)
+
+        replacements = (
+            ("알차요한쪽은", "알차요. 한쪽은"),
+            ("더라고요자잘한", "더라고요. 자잘한"),
+            ("은색은사진", "은색은 사진"),
+            ("아주만족스러운선택", "아주 만족스러운 선택"),
+            ("가법고", "가볍고"),
+            ("으 로", "으로"),
+            ("추천드립니", "추천드립니다"),
+            ("그 r 기 다년다요", ""),
+        )
+
+        for before, after in replacements:
+            text = text.replace(
+                before,
+                after,
+            )
+
+        text = re.sub(
+            r"\s+[0-9ⅠIl|]\s+(?=\d+\s*박)",
+            ". ",
+            text,
+        )
+
+        text = re.sub(
+            r"\s+([,.!?])",
+            r"\1",
+            text,
+        )
+
+        text = re.sub(
+            r"\s+",
+            " ",
+            text,
+        ).strip(" .,-_/|")
+
+        if text and not text.endswith(
+            (".", "!", "?")
+        ):
+            text += "."
+
+        return text
+
+    def _score_evidence_sentence(
+        self,
+        sentence: str,
+        review: Dict[str, Any],
+        product_tokens: set[str],
+    ) -> Dict[str, Any]:
+        text = self._clean_text(sentence)
+
+        relevance_score = self._relevance_score(
+            text,
+            product_tokens,
+        )
+
+        specificity_score = self._specificity_score(
+            text
+        )
+
+        experience_score = self._experience_score(
+            text
+        )
+
+        quality_score = self._safe_float(
+            review.get("quality_score"),
+            70.0,
+        )
+
+        feature_words = (
+            "지퍼",
+            "분리",
+            "수납",
+            "메쉬",
+            "포켓",
+            "바퀴",
+            "손잡이",
+            "24인치",
+            "20인치",
+            "가볍",
+            "튼튼",
+            "이동",
+            "공간",
+        )
+
+        feature_score = min(
+            sum(
+                14.0
+                for word in feature_words
+                if word in text
+            ),
+            70.0,
+        )
+
+        score = round(
+            relevance_score * 0.25
+            + specificity_score * 0.20
+            + experience_score * 0.15
+            + quality_score * 0.20
+            + feature_score * 0.20,
+            1,
+        )
+
+        if 18 <= len(text) <= 85:
+            score += 10.0
+        elif len(text) > 110:
+            score -= 18.0
+
+        if re.search(
+            r"\d+\s*(일|주|개월|달|년|박|인치)",
+            text,
+        ):
+            score += 9.0
+
+        if any(
+            word in text
+            for word in (
+                "섞이지",
+                "분리하기 좋",
+                "편했",
+                "유용",
+                "딱 적당",
+                "이동이 편",
+            )
+        ):
+            score += 9.0
+
+        # 구체적 기능 없이 만족·추천만 있는 문장 감점
+        if (
+            any(
+                word in text
+                for word in (
+                    "만족",
+                    "추천",
+                    "좋아요",
+                )
+            )
+            and feature_score == 0
+        ):
+            score -= 12.0
+
+        score = round(
+            max(
+                0.0,
+                min(100.0, score),
+            ),
+            1,
+        )
+
+        return {
+            "text": text,
+            "score": score,
+            "evidence_score": score,
+            "relevance_score": relevance_score,
+            "specificity_score": specificity_score,
+            "experience_score": experience_score,
+            "quality_score": quality_score,
+            "feature_score": feature_score,
+            "emotion": self._emotion_label(text),
+        }
+
+    def _sentence_duplicate(
+        self,
+        sentence: str,
+        selected: List[Dict[str, Any]],
+    ) -> bool:
+        tokens = self._token_set(
+            sentence
+        )
+
+        if not tokens:
+            return True
+
+        for item in selected:
+            existing_tokens = self._token_set(
+                item.get("text", "")
+            )
+
+            union = tokens | existing_tokens
+
+            similarity = (
+                len(tokens & existing_tokens)
+                / max(len(union), 1)
+            )
+
+            if similarity >= 0.60:
+                return True
+
+        return False
+
+    def _align_benefit_with_evidence(
+        self,
+        best_benefit: str,
+        evidence_text: str,
+    ) -> str:
+        evidence = self._clean_text(
+            evidence_text
+        )
+
+        if any(
+            word in evidence
+            for word in (
+                "섞이지",
+                "분리",
+                "지퍼",
+                "메쉬 포켓",
+            )
+        ):
+            return (
+                "내부 공간을 나눠 깔끔하게 "
+                "분리 수납할 수 있다"
+            )
+
+        if any(
+            word in evidence
+            for word in (
+                "24인치",
+                "20인치",
+                "2박",
+                "3박",
+                "출장",
+            )
+        ):
+            return (
+                "여행 기간에 맞는 크기와 "
+                "수납공간을 활용할 수 있다"
+            )
+
+        if any(
+            word in evidence
+            for word in (
+                "가볍",
+                "이동",
+                "바퀴",
+                "손잡이",
+            )
+        ):
+            return "가볍고 이동이 편하다"
+
+        if any(
+            word in evidence
+            for word in (
+                "튼튼",
+                "오래",
+                "내구성",
+            )
+        ):
+            return "튼튼해서 오래 사용할 수 있다"
+
+        return best_benefit
 
     def _select_best_evidence(
         self,
@@ -1403,6 +2416,31 @@ class ReviewInsightEngine:
                 )
             ],
             "common_keywords": [],
+            "raw_review_count": 0,
+            "selected_review_count": 0,
+            "smart_selector": {
+                "ok": False,
+                "version": "smart-review-selector-76-1",
+                "raw_review_count": 0,
+                "selected_review_count": 0,
+                "selected_reviews": [],
+                "filter_stats": {},
+                "evidence_top5": [],
+                "pain_top3": [],
+                "benefit_top3": [],
+                "emotion_top3": [],
+            },
+            "evidence_top5": [],
+            "sentence_evidence": {
+                "ok": False,
+                "version": "evidence-sentence-extractor-76-2a",
+                "sentence_count": 0,
+                "best_evidence": {},
+                "evidence_top5": [],
+            },
+            "pain_top3": [],
+            "benefit_top3": [],
+            "emotion_top3": [],
             "best_pain_point": (
                 "욕실 슬리퍼가 바닥에 흩어져 "
                 "정리가 불편하다"

@@ -8,21 +8,25 @@ from typing import Any, Dict, List, Sequence, Tuple
 
 class SceneImageSelector:
     """
-    Sprint93-5 Scene Image Selector
+    Sprint98-1 Multi Reference Scene Image Selector
 
     역할:
     - Sprint93-4 scene_plan.json과 Sprint93-3 image_tags.json을 입력받음
     - 장면별 required_tags / fallback_tags / preferred_scene_roles를 기준으로
-      가장 적합한 이미지를 자동 선택
+      가장 적합한 이미지를 최대 4장까지 자동 선택
+    - 첫 번째 이미지는 primary reference로 유지
+    - 기존 selected_image_path 키를 유지하여 하위 호환
+    - selected_image_paths / reference_images를 추가하여 멀티 레퍼런스 지원
     - 동일 이미지 반복 사용을 줄이되 Hook/CTA는 대표이미지 재사용 허용
-    - 선택 점수, 근거, 후보 목록을 저장
     - 결과를 scene_selection.json으로 저장
     """
 
-    VERSION = "scene-image-selector-93-5"
+    VERSION = "scene-image-selector-98-1"
 
     REUSE_ALLOWED_SCENES = {"hook", "cta"}
-    MAX_CANDIDATES_PER_SCENE = 5
+    MAX_CANDIDATES_PER_SCENE = 8
+    MAX_REFERENCE_IMAGES_PER_SCENE = 4
+    MIN_SECONDARY_MATCH_SCORE = 12.0
 
     def select(
         self,
@@ -34,8 +38,17 @@ class SceneImageSelector:
         project_id: Any = "",
         product_name: str = "",
         save_result: bool = True,
+        max_reference_images: int = 4,
     ) -> Dict[str, Any]:
         started_at = time.time()
+
+        max_reference_images = max(
+            1,
+            min(
+                int(max_reference_images or self.MAX_REFERENCE_IMAGES_PER_SCENE),
+                self.MAX_REFERENCE_IMAGES_PER_SCENE,
+            ),
+        )
 
         result: Dict[str, Any] = {
             "ok": False,
@@ -51,6 +64,8 @@ class SceneImageSelector:
             "scene_count": 0,
             "selected_count": 0,
             "unselected_count": 0,
+            "max_reference_images": max_reference_images,
+            "total_reference_image_count": 0,
             "scenes": [],
             "summary": {},
             "warnings": [],
@@ -108,6 +123,7 @@ class SceneImageSelector:
             if isinstance(image, dict)
             and image.get("ok")
             and str(image.get("path") or "").strip()
+            and Path(str(image.get("path") or "")).is_file()
         ]
 
         if not valid_images:
@@ -118,7 +134,7 @@ class SceneImageSelector:
                 self._save_result(result, resolved_output_dir)
             return result
 
-        selected_paths: List[str] = []
+        globally_selected_paths: List[str] = []
         selected_scenes: List[Dict[str, Any]] = []
 
         for scene in scenes:
@@ -128,25 +144,26 @@ class SceneImageSelector:
             selected_scene = self._select_for_scene(
                 scene=scene,
                 images=valid_images,
-                selected_paths=selected_paths,
+                selected_paths=globally_selected_paths,
+                max_reference_images=max_reference_images,
             )
-
-            selected_path = str(
-                selected_scene.get("selected_image_path") or ""
-            ).strip()
 
             scene_type = str(
                 selected_scene.get("scene_type") or ""
             ).strip()
 
-            if (
-                selected_path
-                and (
+            selected_paths = [
+                str(path or "").strip()
+                for path in selected_scene.get("selected_image_paths") or []
+                if str(path or "").strip()
+            ]
+
+            for selected_path in selected_paths:
+                if (
                     scene_type not in self.REUSE_ALLOWED_SCENES
-                    or selected_path not in selected_paths
-                )
-            ):
-                selected_paths.append(selected_path)
+                    and selected_path not in globally_selected_paths
+                ):
+                    globally_selected_paths.append(selected_path)
 
             selected_scenes.append(selected_scene)
 
@@ -156,9 +173,15 @@ class SceneImageSelector:
             if scene.get("selection_status") == "selected"
         )
 
+        total_reference_image_count = sum(
+            len(scene.get("selected_image_paths") or [])
+            for scene in selected_scenes
+        )
+
         result["scenes"] = selected_scenes
         result["selected_count"] = selected_count
         result["unselected_count"] = len(selected_scenes) - selected_count
+        result["total_reference_image_count"] = total_reference_image_count
         result["summary"] = self._build_summary(
             scenes=selected_scenes,
             images=valid_images,
@@ -236,9 +259,9 @@ class SceneImageSelector:
         scene: Dict[str, Any],
         images: Sequence[Dict[str, Any]],
         selected_paths: Sequence[str],
+        max_reference_images: int,
     ) -> Dict[str, Any]:
         scene_copy = dict(scene)
-
         scored_candidates: List[Dict[str, Any]] = []
 
         for image in images:
@@ -275,11 +298,17 @@ class SceneImageSelector:
         )
 
         top_candidates = scored_candidates[: self.MAX_CANDIDATES_PER_SCENE]
-        best = top_candidates[0] if top_candidates else None
+        selected_references = self._select_reference_set(
+            candidates=top_candidates,
+            max_reference_images=max_reference_images,
+        )
 
-        if not best or float(best.get("match_score") or 0.0) <= 0:
+        if not selected_references:
             scene_copy["selection_status"] = "not_selected"
             scene_copy["selected_image_path"] = ""
+            scene_copy["selected_image_paths"] = []
+            scene_copy["primary_reference_image"] = ""
+            scene_copy["reference_images"] = []
             scene_copy["selected_image_index"] = None
             scene_copy["selected_image_filename"] = ""
             scene_copy["match_score"] = 0.0
@@ -287,22 +316,93 @@ class SceneImageSelector:
             scene_copy["matched_roles"] = []
             scene_copy["selection_reason"] = "적합한 이미지 후보가 없습니다"
             scene_copy["candidate_images"] = top_candidates
+            scene_copy["reference_image_count"] = 0
             return scene_copy
 
+        primary = selected_references[0]
+        reference_paths = [
+            str(item.get("path") or "")
+            for item in selected_references
+            if str(item.get("path") or "").strip()
+        ]
+
         scene_copy["selection_status"] = "selected"
-        scene_copy["selected_image_path"] = best["path"]
-        scene_copy["selected_image_index"] = best["image_index"]
-        scene_copy["selected_image_filename"] = best["filename"]
-        scene_copy["match_score"] = best["match_score"]
-        scene_copy["matched_tags"] = best["matched_tags"]
-        scene_copy["matched_roles"] = best["matched_roles"]
+
+        # 하위 호환 키
+        scene_copy["selected_image_path"] = primary["path"]
+        scene_copy["selected_image_index"] = primary["image_index"]
+        scene_copy["selected_image_filename"] = primary["filename"]
+
+        # Sprint98 멀티 레퍼런스 키
+        scene_copy["selected_image_paths"] = reference_paths
+        scene_copy["primary_reference_image"] = primary["path"]
+        scene_copy["reference_images"] = reference_paths
+        scene_copy["reference_image_count"] = len(reference_paths)
+        scene_copy["selected_reference_images"] = selected_references
+
+        scene_copy["match_score"] = primary["match_score"]
+        scene_copy["matched_tags"] = primary["matched_tags"]
+        scene_copy["matched_roles"] = primary["matched_roles"]
         scene_copy["selection_reason"] = self._selection_reason(
             scene=scene,
-            candidate=best,
+            candidate=primary,
+            reference_count=len(reference_paths),
         )
         scene_copy["candidate_images"] = top_candidates
 
         return scene_copy
+
+    def _select_reference_set(
+        self,
+        candidates: Sequence[Dict[str, Any]],
+        max_reference_images: int,
+    ) -> List[Dict[str, Any]]:
+        if not candidates:
+            return []
+
+        primary = candidates[0]
+        if float(primary.get("match_score") or 0.0) <= 0:
+            return []
+
+        selected = [dict(primary)]
+        selected_paths = {str(primary.get("path") or "")}
+        covered_tags = set(primary.get("matched_tags") or [])
+        covered_roles = set(primary.get("matched_roles") or [])
+
+        for candidate in candidates[1:]:
+            if len(selected) >= max_reference_images:
+                break
+
+            path = str(candidate.get("path") or "").strip()
+            score = float(candidate.get("match_score") or 0.0)
+
+            if not path or path in selected_paths:
+                continue
+            if score < self.MIN_SECONDARY_MATCH_SCORE:
+                continue
+
+            candidate_tags = set(candidate.get("matched_tags") or [])
+            candidate_roles = set(candidate.get("matched_roles") or [])
+
+            adds_new_information = bool(
+                candidate_tags - covered_tags
+                or candidate_roles - covered_roles
+            )
+
+            strong_support = score >= max(
+                self.MIN_SECONDARY_MATCH_SCORE,
+                float(primary.get("match_score") or 0.0) * 0.45,
+            )
+
+            if not adds_new_information and not strong_support:
+                continue
+
+            selected.append(dict(candidate))
+            selected_paths.add(path)
+            covered_tags.update(candidate_tags)
+            covered_roles.update(candidate_roles)
+
+        return selected
 
     def _score_candidate(
         self,
@@ -367,7 +467,7 @@ class SceneImageSelector:
         reuse_penalty = 0.0
 
         if path in selected_paths and scene_type not in self.REUSE_ALLOWED_SCENES:
-            reuse_penalty = 38.0
+            reuse_penalty = 26.0
 
         no_tag_penalty = 0.0
         if not matched_required and not matched_fallback:
@@ -412,6 +512,7 @@ class SceneImageSelector:
         self,
         scene: Dict[str, Any],
         candidate: Dict[str, Any],
+        reference_count: int,
     ) -> str:
         reasons: List[str] = []
 
@@ -435,8 +536,7 @@ class SceneImageSelector:
         if candidate.get("reused"):
             reasons.append("대표 이미지 재사용 허용 장면")
 
-        if not reasons:
-            reasons.append("가장 높은 종합 점수")
+        reasons.append(f"멀티 레퍼런스 {reference_count}장")
 
         return " / ".join(reasons)
 
@@ -451,14 +551,24 @@ class SceneImageSelector:
             if scene.get("selection_status") == "selected"
         ]
 
-        selected_paths = [
-            str(scene.get("selected_image_path") or "")
-            for scene in selected_scenes
-            if str(scene.get("selected_image_path") or "").strip()
-        ]
+        all_selected_paths: List[str] = []
+        scene_reference_counts: Dict[str, int] = {}
 
-        unique_selected_paths = list(dict.fromkeys(selected_paths))
-        reused_count = max(0, len(selected_paths) - len(unique_selected_paths))
+        for scene in selected_scenes:
+            scene_id = str(scene.get("scene_id") or "")
+            paths = [
+                str(path or "").strip()
+                for path in scene.get("selected_image_paths") or []
+                if str(path or "").strip()
+            ]
+            all_selected_paths.extend(paths)
+            scene_reference_counts[scene_id] = len(paths)
+
+        unique_selected_paths = list(dict.fromkeys(all_selected_paths))
+        reused_count = max(
+            0,
+            len(all_selected_paths) - len(unique_selected_paths),
+        )
 
         scores = [
             float(scene.get("match_score") or 0.0)
@@ -469,8 +579,15 @@ class SceneImageSelector:
             "scene_count": len(scenes),
             "selected_scene_count": len(selected_scenes),
             "available_image_count": len(images),
+            "total_reference_image_count": len(all_selected_paths),
             "unique_selected_image_count": len(unique_selected_paths),
             "reused_image_count": reused_count,
+            "average_references_per_scene": (
+                round(len(all_selected_paths) / len(selected_scenes), 2)
+                if selected_scenes
+                else 0.0
+            ),
+            "scene_reference_counts": scene_reference_counts,
             "average_match_score": (
                 round(sum(scores) / len(scores), 2)
                 if scores
@@ -487,8 +604,12 @@ class SceneImageSelector:
                 else 0.0
             ),
             "selected_image_paths": unique_selected_paths,
+            "multi_reference_ready": all(
+                len(scene.get("selected_image_paths") or []) >= 1
+                for scene in selected_scenes
+            ),
             "director_ready": len(selected_scenes) == len(scenes),
-            "next_step": "Sprint93-6 Gemini Director",
+            "next_step": "Sprint98-2 Gemini Director Multi Reference",
         }
 
     def _save_result(

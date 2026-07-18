@@ -15,7 +15,7 @@ class ReviewScriptGenerator:
     - 외부 AI API 없이 규칙 기반으로 동작
     """
 
-    VERSION = "review-script-generator-81-9"
+    VERSION = "review-script-generator-81-10"
 
     def _build_analysis_bundle(
         self,
@@ -679,6 +679,21 @@ class ReviewScriptGenerator:
             review_count=count,
         )
 
+        export_pack = self._build_export_pack(
+            product_name=product_name,
+            product_type=product_type,
+            target_customer=target_customer,
+            review_count=count,
+            best_script=best_script,
+            optimized_script=optimized_script,
+            optimized_platform_scripts=optimized_platform_scripts,
+            hook_variation=hook_variation,
+            cta_optimization=cta_optimization,
+            validation_result=validation_result,
+            story_context=story_context,
+            evidence_summary=evidence_summary,
+        )
+
         platform_recommendations = {
             "tiktok": "short",
             "instagram_reels": "medium",
@@ -686,209 +701,209 @@ class ReviewScriptGenerator:
         }
 
         print(
-            "[Sprint81-9 Script] Version:",
+            "[Sprint81-10 Script] Version:",
             self.VERSION,
             flush=True,
         )
         print(
-            "[Sprint81-9 Script] Analysis Bundle:",
+            "[Sprint81-10 Script] Analysis Bundle:",
             "built_once",
             flush=True,
         )
         print(
-            "[Sprint81-9 Script] Bundle Keys:",
+            "[Sprint81-10 Script] Bundle Keys:",
             sorted(bundle.keys()),
             flush=True,
         )
         print(
-            "[Sprint81-9 Script] Bridge Library:",
+            "[Sprint81-10 Script] Bridge Library:",
             "bridge-library-80-2a",
             flush=True,
         )
         print(
-            "[Sprint81-9 Script] Bridge Psychology:",
+            "[Sprint81-10 Script] Bridge Psychology:",
             psychology_type,
             flush=True,
         )
         print(
-            "[Sprint81-9 Script] Product:",
+            "[Sprint81-10 Script] Product:",
             product_name,
             flush=True,
         )
         print(
-            "[Sprint81-9 Script] Product Type:",
+            "[Sprint81-10 Script] Product Type:",
             product_type,
             flush=True,
         )
         print(
-            "[Sprint81-9 Script] Shorts Strategy:",
+            "[Sprint81-10 Script] Shorts Strategy:",
             shorts_strategy,
             flush=True,
         )
         print(
-            "[Sprint81-9 Script] Strategy Reason:",
+            "[Sprint81-10 Script] Strategy Reason:",
             product_strategy.get("strategy_reason", ""),
             flush=True,
         )
         print(
-            "[Sprint81-9 Script] Strategy Bridge:",
+            "[Sprint81-10 Script] Strategy Bridge:",
             strategy_bridge,
             flush=True,
         )
         print(
-            "[Sprint81-9 Script] Target Customer:",
+            "[Sprint81-10 Script] Target Customer:",
             target_customer,
             flush=True,
         )
         print(
-            "[Sprint81-9 Script] Target Reason:",
+            "[Sprint81-10 Script] Target Reason:",
             target_reason,
             flush=True,
         )
         print(
-            "[Sprint81-9 Script] Target Confidence:",
+            "[Sprint81-10 Script] Target Confidence:",
             target_customer_result.get("confidence", 0),
             flush=True,
         )
         print(
-            "[Sprint81-9 Script] Target Bridge:",
+            "[Sprint81-10 Script] Target Bridge:",
             target_bridge,
             flush=True,
         )
         print(
-            "[Sprint81-9 Script] Hook Type:",
+            "[Sprint81-10 Script] Hook Type:",
             best_hook_type,
             flush=True,
         )
         print(
-            "[Sprint81-9 Script] Dominant Review Type:",
+            "[Sprint81-10 Script] Dominant Review Type:",
             review_type_result.get("dominant_type", ""),
             review_type_result.get("dominant_label", ""),
             flush=True,
         )
         print(
-            "[Sprint81-9 Script] Review Type Scores:",
+            "[Sprint81-10 Script] Review Type Scores:",
             review_type_result.get("scores", {}),
             flush=True,
         )
         print(
-            "[Sprint81-9 Script] Before:",
+            "[Sprint81-10 Script] Before:",
             before_after_story.get("before", ""),
             flush=True,
         )
         print(
-            "[Sprint81-9 Script] Choice:",
+            "[Sprint81-10 Script] Choice:",
             before_after_story.get("choice", ""),
             flush=True,
         )
         print(
-            "[Sprint81-9 Script] After:",
+            "[Sprint81-10 Script] After:",
             before_after_story.get("after", ""),
             flush=True,
         )
         print(
-            "[Sprint81-9 Script] Psychology Type:",
+            "[Sprint81-10 Script] Psychology Type:",
             psychology_result.get("dominant_type", ""),
             psychology_result.get("dominant_label", ""),
             flush=True,
         )
         print(
-            "[Sprint81-9 Script] Psychology Scores:",
+            "[Sprint81-10 Script] Psychology Scores:",
             psychology_result.get("scores", {}),
             flush=True,
         )
         print(
-            "[Sprint81-9 Script] Problem:",
+            "[Sprint81-10 Script] Problem:",
             psychology_story.get("problem", ""),
             flush=True,
         )
         print(
-            "[Sprint81-9 Script] Empathy:",
+            "[Sprint81-10 Script] Empathy:",
             psychology_story.get("empathy", ""),
             flush=True,
         )
         print(
-            "[Sprint81-9 Story] Version:",
+            "[Sprint81-10 Story] Version:",
             story_context.get("version", ""),
             flush=True,
         )
         print(
-            "[Sprint81-9 Story] Built:",
+            "[Sprint81-10 Story] Built:",
             bool(story_context),
             flush=True,
         )
         print(
-            "[Sprint81-9 Story] Arc:",
+            "[Sprint81-10 Story] Arc:",
             story_context.get("arc_type", ""),
             flush=True,
         )
         print(
-            "[Sprint81-9 Story] Problem:",
+            "[Sprint81-10 Story] Problem:",
             story_context.get("problem", ""),
             flush=True,
         )
         print(
-            "[Sprint81-9 Story] Emotion:",
+            "[Sprint81-10 Story] Emotion:",
             story_context.get("emotion", ""),
             flush=True,
         )
         print(
-            "[Sprint81-9 Story] Decision:",
+            "[Sprint81-10 Story] Decision:",
             story_context.get("decision", ""),
             flush=True,
         )
         print(
-            "[Sprint81-9 Story] Change:",
+            "[Sprint81-10 Story] Change:",
             story_context.get("change", ""),
             flush=True,
         )
         print(
-            "[Sprint81-9 Story] Result:",
+            "[Sprint81-10 Story] Result:",
             story_context.get("result", ""),
             flush=True,
         )
         print(
-            "[Sprint81-9 Emotion] Version:",
+            "[Sprint81-10 Emotion] Version:",
             emotion_curve.get("version", ""),
             flush=True,
         )
         print(
-            "[Sprint81-9 Emotion] Built:",
+            "[Sprint81-10 Emotion] Built:",
             bool(emotion_curve),
             flush=True,
         )
         print(
-            "[Sprint81-9 Emotion] Curve:",
+            "[Sprint81-10 Emotion] Curve:",
             emotion_curve.get("curve_type", ""),
             flush=True,
         )
         print(
-            "[Sprint81-9 Emotion] Hook:",
+            "[Sprint81-10 Emotion] Hook:",
             emotion_curve.get("hook", ""),
             flush=True,
         )
         print(
-            "[Sprint81-9 Emotion] Empathy:",
+            "[Sprint81-10 Emotion] Empathy:",
             emotion_curve.get("empathy", ""),
             flush=True,
         )
         print(
-            "[Sprint81-9 Emotion] Tension:",
+            "[Sprint81-10 Emotion] Tension:",
             emotion_curve.get("tension", ""),
             flush=True,
         )
         print(
-            "[Sprint81-9 Emotion] Relief:",
+            "[Sprint81-10 Emotion] Relief:",
             emotion_curve.get("relief", ""),
             flush=True,
         )
         print(
-            "[Sprint81-9 Emotion] Satisfaction:",
+            "[Sprint81-10 Emotion] Satisfaction:",
             emotion_curve.get("satisfaction", ""),
             flush=True,
         )
         print(
-            "[Sprint81-9 Script] Short:",
+            "[Sprint81-10 Script] Short:",
             short_script.get("estimated_seconds", 0),
             "s",
             "error=",
@@ -902,7 +917,7 @@ class ReviewScriptGenerator:
             flush=True,
         )
         print(
-            "[Sprint81-9 Script] Medium:",
+            "[Sprint81-10 Script] Medium:",
             medium_script.get("estimated_seconds", 0),
             "s",
             "error=",
@@ -916,7 +931,7 @@ class ReviewScriptGenerator:
             flush=True,
         )
         print(
-            "[Sprint81-9 Script] Long:",
+            "[Sprint81-10 Script] Long:",
             long_script.get("estimated_seconds", 0),
             "s",
             "error=",
@@ -935,7 +950,7 @@ class ReviewScriptGenerator:
             ("Long", long_script),
         ):
             print(
-                f"[Sprint81-9 Score] {label}:",
+                f"[Sprint81-10 Score] {label}:",
                 {
                     "story": script.get("story_score", 0),
                     "emotion": script.get("emotion_score", 0),
@@ -947,77 +962,77 @@ class ReviewScriptGenerator:
                 flush=True,
             )
         print(
-            "[Sprint81-9 Score] Version:",
+            "[Sprint81-10 Score] Version:",
             "story-score-engine-81-3",
             flush=True,
         )
         print(
-            "[Sprint81-9 Score] Selected Quality:",
+            "[Sprint81-10 Score] Selected Quality:",
             best_script.get("quality_score", 0),
             flush=True,
         )
         print(
-            "[Sprint81-9 Gate] Version:",
+            "[Sprint81-10 Gate] Version:",
             "story-quality-gate-81-4",
             flush=True,
         )
         print(
-            "[Sprint81-9 Gate] Selected Passed:",
+            "[Sprint81-10 Gate] Selected Passed:",
             best_script.get("quality_gate_passed", False),
             flush=True,
         )
         print(
-            "[Sprint81-9 Gate] Selected Status:",
+            "[Sprint81-10 Gate] Selected Status:",
             best_script.get("quality_gate_status", ""),
             flush=True,
         )
         print(
-            "[Sprint81-9 Gate] Weak Dimensions:",
+            "[Sprint81-10 Gate] Weak Dimensions:",
             best_script.get("quality_gate_weak_dimensions", []),
             flush=True,
         )
         print(
-            "[Sprint81-9 Gate] Improvement Priority:",
+            "[Sprint81-10 Gate] Improvement Priority:",
             best_script.get("quality_gate_improvement_priority", []),
             flush=True,
         )
         print(
-            "[Sprint81-9 Optimizer] Version:",
+            "[Sprint81-10 Optimizer] Version:",
             narrative_optimization.get("version", ""),
             flush=True,
         )
         print(
-            "[Sprint81-9 Optimizer] Applied:",
+            "[Sprint81-10 Optimizer] Applied:",
             narrative_optimization.get("applied", False),
             flush=True,
         )
         print(
-            "[Sprint81-9 Optimizer] Changes:",
+            "[Sprint81-10 Optimizer] Changes:",
             narrative_optimization.get("changes", []),
             flush=True,
         )
         print(
-            "[Sprint81-9 Optimizer] Score:",
+            "[Sprint81-10 Optimizer] Score:",
             narrative_optimization.get("optimization_score", 0),
             flush=True,
         )
         print(
-            "[Sprint81-9 Optimizer] Script:",
+            "[Sprint81-10 Optimizer] Script:",
             optimized_script,
             flush=True,
         )
         print(
-            "[Sprint81-9 Platform] Version:",
+            "[Sprint81-10 Platform] Version:",
             platform_adaptation.get("version", ""),
             flush=True,
         )
         print(
-            "[Sprint81-9 Platform] Built:",
+            "[Sprint81-10 Platform] Built:",
             bool(platform_scripts),
             flush=True,
         )
         print(
-            "[Sprint81-9 Platform] Score:",
+            "[Sprint81-10 Platform] Score:",
             platform_adaptation.get("adaptation_score", 0),
             flush=True,
         )
@@ -1028,22 +1043,22 @@ class ReviewScriptGenerator:
         ):
             platform_data = platform_scripts.get(platform_name, {})
             print(
-                f"[Sprint81-9 Platform] {platform_name}:",
+                f"[Sprint81-10 Platform] {platform_name}:",
                 platform_data.get("script", ""),
                 flush=True,
             )
         print(
-            "[Sprint81-9 CTA] Version:",
+            "[Sprint81-10 CTA] Version:",
             cta_optimization.get("version", ""),
             flush=True,
         )
         print(
-            "[Sprint81-9 CTA] Built:",
+            "[Sprint81-10 CTA] Built:",
             cta_optimization.get("built", False),
             flush=True,
         )
         print(
-            "[Sprint81-9 CTA] Score:",
+            "[Sprint81-10 CTA] Score:",
             cta_optimization.get("cta_score", 0),
             flush=True,
         )
@@ -1054,77 +1069,102 @@ class ReviewScriptGenerator:
         ):
             cta_data = cta_optimization.get("platform_cta", {}).get(platform_name, {})
             print(
-                f"[Sprint81-9 CTA] {platform_name}:",
+                f"[Sprint81-10 CTA] {platform_name}:",
                 cta_data.get("selected_cta", ""),
                 flush=True,
             )
         print(
-            "[Sprint81-9 Hook] Version:",
+            "[Sprint81-10 Hook] Version:",
             hook_variation.get("version", ""),
             flush=True,
         )
         print(
-            "[Sprint81-9 Hook] Built:",
+            "[Sprint81-10 Hook] Built:",
             hook_variation.get("built", False),
             flush=True,
         )
         print(
-            "[Sprint81-9 Hook] Count:",
+            "[Sprint81-10 Hook] Count:",
             hook_variation.get("hook_count", 0),
             flush=True,
         )
         print(
-            "[Sprint81-9 Hook] Selected Type:",
+            "[Sprint81-10 Hook] Selected Type:",
             hook_variation.get("selected_hook_type", ""),
             flush=True,
         )
         print(
-            "[Sprint81-9 Hook] Selected Score:",
+            "[Sprint81-10 Hook] Selected Score:",
             hook_variation.get("selected_hook_score", 0),
             flush=True,
         )
         print(
-            "[Sprint81-9 Hook] Selected:",
+            "[Sprint81-10 Hook] Selected:",
             hook_variation.get("selected_hook", ""),
             flush=True,
         )
         print(
-            "[Sprint81-9 Validator] Version:",
+            "[Sprint81-10 Validator] Version:",
             validation_result.get("version", ""),
             flush=True,
         )
         print(
-            "[Sprint81-9 Validator] Built:",
+            "[Sprint81-10 Validator] Built:",
             validation_result.get("built", False),
             flush=True,
         )
         print(
-            "[Sprint81-9 Validator] Passed:",
+            "[Sprint81-10 Validator] Passed:",
             validation_result.get("passed", False),
             flush=True,
         )
         print(
-            "[Sprint81-9 Validator] Final Score:",
+            "[Sprint81-10 Validator] Final Score:",
             validation_result.get("final_quality_score", 0),
             flush=True,
         )
         print(
-            "[Sprint81-9 Validator] Warnings:",
+            "[Sprint81-10 Validator] Warnings:",
             validation_result.get("warnings", []),
             flush=True,
         )
         print(
-            "[Sprint81-9 Validator] Improvement Priority:",
+            "[Sprint81-10 Validator] Improvement Priority:",
             validation_result.get("improvement_priority", []),
             flush=True,
         )
         print(
-            "[Sprint81-9 Script] Selected:",
+            "[Sprint81-10 Export] Version:",
+            export_pack.get("version", ""),
+            flush=True,
+        )
+        print(
+            "[Sprint81-10 Export] Built:",
+            export_pack.get("built", False),
+            flush=True,
+        )
+        print(
+            "[Sprint81-10 Export] Ready:",
+            export_pack.get("ready", False),
+            flush=True,
+        )
+        print(
+            "[Sprint81-10 Export] Items:",
+            export_pack.get("item_count", 0),
+            flush=True,
+        )
+        print(
+            "[Sprint81-10 Export] Title:",
+            export_pack.get("title", ""),
+            flush=True,
+        )
+        print(
+            "[Sprint81-10 Script] Selected:",
             best_script.get("type", ""),
             flush=True,
         )
         print(
-            "[Sprint81-9 Script] Best Script:",
+            "[Sprint81-10 Script] Best Script:",
             best_script.get("text", ""),
             flush=True,
         )
@@ -1192,6 +1232,13 @@ class ReviewScriptGenerator:
                 "final_quality_score",
                 0,
             ),
+            "export_pack_version": "script-export-pack-81-10",
+            "export_pack": export_pack,
+            "export_ready": export_pack.get("ready", False),
+            "export_title": export_pack.get("title", ""),
+            "export_description": export_pack.get("description", ""),
+            "export_hashtags": export_pack.get("hashtags", []),
+            "thumbnail_prompt": export_pack.get("thumbnail_prompt", ""),
             "quality_gate_passed": best_script.get("quality_gate_passed", False),
             "quality_gate_status": best_script.get("quality_gate_status", ""),
             "quality_gate_weak_dimensions": best_script.get(
@@ -3874,6 +3921,153 @@ class ReviewScriptGenerator:
             "quality_grade": self._quality_grade(quality_score),
         })
         return result
+
+    def _build_export_pack(
+        self,
+        product_name: str,
+        product_type: str,
+        target_customer: str,
+        review_count: int,
+        best_script: Dict[str, Any],
+        optimized_script: str,
+        optimized_platform_scripts: Dict[str, Any],
+        hook_variation: Dict[str, Any],
+        cta_optimization: Dict[str, Any],
+        validation_result: Dict[str, Any],
+        story_context: Dict[str, str],
+        evidence_summary: str,
+    ) -> Dict[str, Any]:
+        """Build one stable export package from already-generated results."""
+        product = self._clean_text(product_name)
+        target = self._clean_text(target_customer)
+        evidence = self._clean_text(evidence_summary)
+        selected_hook = self._first_text(
+            hook_variation.get("selected_hook"),
+            best_script.get("sections", {}).get("hook"),
+            best_script.get("text"),
+        )
+
+        title_seed = self._clean_text(selected_hook).rstrip(".?!")
+        if product and product not in title_seed:
+            title = f"{title_seed} | {product}"
+        else:
+            title = title_seed
+        title = self._shorten(title, 70).rstrip("…")
+
+        description_parts = [
+            self._first_text(
+                story_context.get("problem"),
+                f"{product} 선택 전 꼭 확인해야 할 기준을 정리했습니다",
+            ),
+            self._first_text(
+                evidence,
+                f"실제 후기 {review_count}개를 바탕으로 핵심 내용을 정리했습니다",
+            ),
+        ]
+        if target:
+            description_parts.append(f"추천 대상: {target}")
+        description = " ".join(
+            self._sentence(part)
+            for part in description_parts
+            if self._clean_text(part)
+        )
+
+        hashtag_candidates = [
+            product.replace(" ", ""),
+            self._clean_text(product_type),
+            "쇼핑쇼츠",
+            "제품리뷰",
+            "구매가이드",
+        ]
+        if "캐리어" in product:
+            hashtag_candidates.extend(["캐리어추천", "여행준비", "기내용캐리어"])
+        hashtags: List[str] = []
+        for value in hashtag_candidates:
+            cleaned = re.sub(r"[^0-9A-Za-z가-힣_]", "", self._clean_text(value))
+            if cleaned and cleaned not in hashtags:
+                hashtags.append(cleaned)
+
+        thumbnail_prompt = (
+            f"9:16 세로 쇼핑쇼츠 썸네일, {product}를 화면 중앙에 크게 배치, "
+            f"선택 고민이 한눈에 보이는 비교 구도, 핵심 문구 '{title_seed}', "
+            "깔끔한 한국 이커머스 스타일, 선명한 제품 디테일, 과장 없는 실사용 분위기, "
+            "텍스트 가독성을 위한 충분한 여백"
+        )
+
+        platform_scripts = {
+            platform: self._clean_text(data.get("script", ""))
+            for platform, data in optimized_platform_scripts.items()
+            if isinstance(data, dict)
+        }
+        platform_cta = {
+            platform: self._clean_text(data.get("selected_cta", ""))
+            for platform, data in cta_optimization.get("platform_cta", {}).items()
+            if isinstance(data, dict)
+        }
+
+        scores = {
+            "story": best_script.get("story_score", 0),
+            "emotion": best_script.get("emotion_score", 0),
+            "natural": best_script.get("natural_score", 0),
+            "evidence": best_script.get("evidence_score", 0),
+            "retention": best_script.get("retention_score", 0),
+            "quality": best_script.get("quality_score", 0),
+            "final": validation_result.get("final_quality_score", 0),
+        }
+
+        required_values = [
+            optimized_script,
+            platform_scripts.get("tiktok", ""),
+            platform_scripts.get("instagram_reels", ""),
+            platform_scripts.get("youtube_shorts", ""),
+            selected_hook,
+            title,
+            description,
+        ]
+        ready = bool(
+            validation_result.get("passed", False)
+            and all(self._clean_text(value) for value in required_values)
+        )
+
+        item_count = (
+            1
+            + len(platform_scripts)
+            + len(platform_cta)
+            + len(hashtags)
+            + 4
+        )
+
+        return {
+            "version": "script-export-pack-81-10",
+            "built": True,
+            "ready": ready,
+            "item_count": item_count,
+            "product_name": product,
+            "target_customer": target,
+            "best_script": self._clean_text(best_script.get("text", "")),
+            "optimized_script": self._clean_text(optimized_script),
+            "platform_scripts": platform_scripts,
+            "best_hook": self._clean_text(selected_hook),
+            "hook_type": hook_variation.get("selected_hook_type", ""),
+            "hook_score": hook_variation.get("selected_hook_score", 0),
+            "platform_cta": platform_cta,
+            "title": title,
+            "description": description,
+            "hashtags": hashtags,
+            "hashtag_text": " ".join(f"#{tag}" for tag in hashtags),
+            "thumbnail_prompt": thumbnail_prompt,
+            "scores": scores,
+            "validation_passed": validation_result.get("passed", False),
+            "validation_warnings": validation_result.get("warnings", []),
+            "metadata": {
+                "generator_version": self.VERSION,
+                "review_count": self._safe_int(review_count),
+                "product_type": self._clean_text(product_type),
+                "best_script_type": best_script.get("type", ""),
+                "estimated_seconds": best_script.get("estimated_seconds", 0),
+                "platform_count": len(platform_scripts),
+            },
+        }
 
     def _validate_final_script(
         self,

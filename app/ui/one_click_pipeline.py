@@ -35,9 +35,11 @@ except Exception:
     SearchKeywordEngine = None
 
 
-UI_VERSION = "sprint89-1-youtube-privacy-ui"
+UI_VERSION = "sprint94-1-manual-multi-image-ui"
 RESULT_DIR = Path("exports/one_click_results")
 REVIEW_IMAGE_ROOT = Path("assets/review_images")
+PRODUCT_IMAGE_ROOT = Path("assets/products")
+SUPPORTED_PRODUCT_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp"}
 SUPPORTED_REVIEW_IMAGE_SUFFIXES = {
     ".png",
     ".jpg",
@@ -167,6 +169,121 @@ def save_uploaded_review_images(project, uploaded_files):
         saved_paths.append(str(destination))
 
     return saved_paths
+
+
+def product_image_dir(project):
+    return PRODUCT_IMAGE_ROOT / f"project_{safe_project_id(project)}"
+
+
+def list_saved_product_images(project):
+    """프로젝트별로 저장된 상품/상세 이미지를 순서대로 반환합니다."""
+    folder = product_image_dir(project)
+    if not folder.exists():
+        return []
+
+    return [
+        str(path)
+        for path in sorted(folder.iterdir())
+        if path.is_file()
+        and path.suffix.lower() in SUPPORTED_PRODUCT_IMAGE_SUFFIXES
+    ]
+
+
+def find_saved_product_image(project):
+    """기존 1장 호출부 호환용 대표 이미지 경로를 반환합니다."""
+    paths = list_saved_product_images(project)
+    return paths[0] if paths else ""
+
+
+def save_uploaded_product_images(project, uploaded_files):
+    """
+    상품 대표 이미지와 상세페이지 캡처를 프로젝트 폴더에 저장합니다.
+
+    새 파일이 선택되면 기존 상품 이미지들을 모두 교체합니다.
+    첫 번째 이미지는 00_main, 나머지는 detail 이미지로 저장합니다.
+    """
+    files = list(uploaded_files or [])
+
+    if not files:
+        return list_saved_product_images(project)
+
+    folder = product_image_dir(project)
+    folder.mkdir(parents=True, exist_ok=True)
+
+    for old_path in folder.iterdir():
+        if (
+            old_path.is_file()
+            and old_path.suffix.lower() in SUPPORTED_PRODUCT_IMAGE_SUFFIXES
+        ):
+            old_path.unlink()
+
+    saved_paths = []
+
+    for index, uploaded_file in enumerate(files):
+        original_name = getattr(uploaded_file, "name", "") or ""
+        suffix = Path(original_name).suffix.lower()
+        if suffix not in SUPPORTED_PRODUCT_IMAGE_SUFFIXES:
+            suffix = ".jpg"
+
+        filename = (
+            f"00_main{suffix}"
+            if index == 0
+            else f"{index:02d}_detail{suffix}"
+        )
+        destination = folder / filename
+        destination.write_bytes(uploaded_file.getbuffer())
+        saved_paths.append(str(destination))
+
+    return saved_paths
+
+
+def save_uploaded_product_image(project, uploaded_file):
+    """기존 1장 호출부 호환용 저장 함수입니다."""
+    files = [] if uploaded_file is None else [uploaded_file]
+    paths = save_uploaded_product_images(project, files)
+    return paths[0] if paths else ""
+
+
+def show_product_image_upload_area(project, key_prefix):
+    project_safe_id = safe_project_id(project)
+    saved_paths = list_saved_product_images(project)
+
+    st.subheader("상품 이미지 · 상세페이지 캡처")
+    st.caption(
+        "상품 대표 이미지와 상세페이지 캡처를 여러 장 선택하세요. "
+        "첫 번째 이미지는 대표 이미지, 나머지는 상세 이미지로 사용합니다."
+    )
+
+    uploaded_files = st.file_uploader(
+        "상품 이미지 여러 장 선택",
+        type=["png", "jpg", "jpeg", "webp"],
+        accept_multiple_files=True,
+        key=f"{key_prefix}_product_images_{project_safe_id}",
+    )
+
+    if uploaded_files:
+        st.success(
+            f"새 상품 이미지 {len(uploaded_files)}장이 선택되었습니다."
+        )
+        preview_columns = st.columns(min(4, len(uploaded_files)))
+        for index, uploaded_file in enumerate(uploaded_files[:4]):
+            with preview_columns[index % len(preview_columns)]:
+                st.image(
+                    uploaded_file,
+                    caption=("대표" if index == 0 else f"상세 {index}"),
+                    width=180,
+                )
+    elif saved_paths:
+        st.info(
+            f"저장된 상품 이미지 {len(saved_paths)}장을 다시 사용합니다."
+        )
+        st.caption(str(product_image_dir(project)))
+    else:
+        st.warning(
+            "상품 이미지가 없습니다. Vision·Image Tagger·Scene Planner를 건너뜁니다."
+        )
+
+    return uploaded_files
 
 
 def extract_product_payload(built, coupang_url, product_name):
@@ -458,6 +575,8 @@ def run_project_pipeline(
     project,
     sample_count,
     review_image_paths=None,
+    product_image_paths=None,
+    product_image_path="",
     youtube_privacy_status="private",
 ):
     print(
@@ -466,6 +585,10 @@ def run_project_pipeline(
     )
 
     review_image_paths = list(review_image_paths or [])
+    product_image_paths = list(product_image_paths or [])
+    if product_image_path and product_image_path not in product_image_paths:
+        product_image_paths.insert(0, product_image_path)
+    product_image_path = product_image_paths[0] if product_image_paths else ""
 
     print(
         "[Sprint72-1] Review Images:",
@@ -474,10 +597,19 @@ def run_project_pipeline(
         flush=True,
     )
 
+    print(
+        "[Sprint94-1 Manual Images] Product Images:",
+        len(product_image_paths),
+        product_image_paths,
+        flush=True,
+    )
+
     result = WorkflowEngine().run_project(
         project,
         sample_count=sample_count,
         review_image_paths=review_image_paths,
+        product_image_paths=product_image_paths,
+        product_image_path=product_image_path,
         youtube_privacy_status=youtube_privacy_status,
     )
 
@@ -549,6 +681,11 @@ def render_project_pipeline(
             f"{path_debug.get('size_mb')}MB"
         )
 
+    uploaded_product_images = show_product_image_upload_area(
+        project,
+        key_prefix="existing",
+    )
+
     uploaded_review_images = show_review_upload_area(
         project,
         key_prefix="existing",
@@ -566,6 +703,18 @@ def render_project_pipeline(
         )
 
         try:
+            product_image_paths = save_uploaded_product_images(
+                project,
+                uploaded_product_images,
+            )
+            product_image_path = (
+                product_image_paths[0] if product_image_paths else ""
+            )
+        except Exception as exc:
+            st.error(f"상품 대표 이미지 저장 실패: {exc}")
+            return
+
+        try:
             review_paths = save_uploaded_review_images(
                 project,
                 uploaded_review_images,
@@ -573,6 +722,11 @@ def render_project_pipeline(
         except Exception as exc:
             st.error(f"리뷰 이미지 저장 실패: {exc}")
             return
+
+        if product_image_paths:
+            st.info(
+                f"상품 이미지 {len(product_image_paths)}장을 AI Director에 전달합니다."
+            )
 
         if review_paths:
             st.info(
@@ -585,6 +739,8 @@ def render_project_pipeline(
                     project,
                     sample_count,
                     review_image_paths=review_paths,
+                    product_image_paths=product_image_paths,
+                    product_image_path=product_image_path,
                     youtube_privacy_status=youtube_privacy_status,
                 )
             except Exception as exc:
@@ -749,8 +905,8 @@ def render_project_pipeline(
 def show_one_click_pipeline():
     st.title("⚡ 원클릭 파이프라인")
     st.caption(
-        "쿠팡 링크 → 상품 분석 → 검색 키워드 → 프로젝트 생성 → "
-        "후보 수집 → 리뷰 OCR → 콘텐츠 팩까지 연결합니다."
+        "상품명 + 상품/상세 이미지 + 리뷰 캡처를 기본 입력으로 사용합니다. "
+        "쿠팡 링크는 선택사항입니다."
     )
     st.caption(f"UI 버전: {UI_VERSION}")
 
@@ -788,12 +944,12 @@ def show_one_click_pipeline():
     )
 
     st.divider()
-    st.subheader("쿠팡 링크로 새 프로젝트 생성")
+    st.subheader("수동 자료로 새 프로젝트 생성")
 
     coupang_url = st.text_area(
-        "쿠팡 링크",
+        "쿠팡 링크 (선택)",
         height=80,
-        placeholder="https://www.coupang.com/vp/products/...",
+        placeholder="링크 없이도 생성할 수 있습니다.",
     )
 
     product_name = st.text_area(
@@ -801,6 +957,21 @@ def show_one_click_pipeline():
         height=100,
         placeholder="쿠팡 상품명을 붙여넣어 주세요.",
     )
+
+    new_project_product_images = st.file_uploader(
+        "새 프로젝트 상품 이미지 · 상세페이지 캡처",
+        type=["png", "jpg", "jpeg", "webp"],
+        accept_multiple_files=True,
+        key="new_project_product_images",
+        help=(
+            "첫 번째 이미지는 대표 이미지, 나머지는 상세 이미지로 저장됩니다."
+        ),
+    )
+
+    if new_project_product_images:
+        st.success(
+            f"상품 이미지 {len(new_project_product_images)}장이 선택되었습니다."
+        )
 
     new_project_review_images = st.file_uploader(
         "새 프로젝트 리뷰 이미지",
@@ -825,32 +996,56 @@ def show_one_click_pipeline():
     )
 
     if st.button(
-        "쿠팡 링크로 프로젝트 생성",
+        "수동 자료로 프로젝트 생성",
         type="primary",
         use_container_width=True,
     ):
-        if not coupang_url.strip():
-            st.error("쿠팡 링크를 입력해 주세요.")
-            return
-
         if not product_name.strip():
             st.error("상품명을 입력해 주세요.")
             return
 
-        with st.spinner(
-            "ProductEngine → SearchKeywordEngine → "
-            "ProjectService 실행 중입니다..."
-        ):
+        with st.spinner("프로젝트와 검색 키워드를 생성 중입니다..."):
             try:
-                project, product_payload, keywords = (
-                    rebuild_project_from_coupang(
-                        coupang_url.strip(),
+                if coupang_url.strip():
+                    project, product_payload, keywords = (
+                        rebuild_project_from_coupang(
+                            coupang_url.strip(),
+                            product_name.strip(),
+                        )
+                    )
+                else:
+                    product_payload = {
+                        "coupang_url": "",
+                        "product_name": product_name.strip(),
+                        "title": product_name.strip(),
+                        "source": "manual_upload",
+                    }
+                    keywords = build_keywords(
+                        product_payload,
                         product_name.strip(),
                     )
-                )
+                    project = create_project_from_payload(
+                        product_payload,
+                        keywords,
+                    )
+                    project_id = getattr(project, "id", None)
+                    if project_id:
+                        project = ProjectRepository().get(project_id) or project
             except Exception as exc:
                 st.error(f"프로젝트 생성 실패: {exc}")
                 return
+
+        try:
+            product_image_paths = save_uploaded_product_images(
+                project,
+                new_project_product_images,
+            )
+            product_image_path = (
+                product_image_paths[0] if product_image_paths else ""
+            )
+        except Exception as exc:
+            st.error(f"상품 대표 이미지 저장 실패: {exc}")
+            return
 
         try:
             review_paths = save_uploaded_review_images(
@@ -867,7 +1062,13 @@ def show_one_click_pipeline():
         st.session_state["sprint50_product_payload"] = product_payload
         st.session_state["sprint50_keywords"] = keywords
 
-        st.success("쿠팡 링크 기반 프로젝트를 생성했습니다.")
+        st.success("수동 자료 기반 프로젝트를 생성했습니다.")
+
+        if product_image_paths:
+            st.success(
+                f"상품 이미지 {len(product_image_paths)}장을 저장했습니다."
+            )
+            st.caption(str(product_image_dir(project)))
 
         if review_paths:
             st.success(
@@ -886,6 +1087,8 @@ def show_one_click_pipeline():
                         project,
                         sample_count,
                         review_image_paths=review_paths,
+                        product_image_paths=product_image_paths,
+                        product_image_path=product_image_path,
                         youtube_privacy_status=youtube_privacy_status,
                     )
                     st.success("원클릭 후보 수집까지 완료했습니다.")

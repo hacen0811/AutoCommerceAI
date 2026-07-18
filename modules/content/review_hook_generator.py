@@ -15,7 +15,7 @@ class ReviewHookGenerator:
     - 외부 AI API 없이 규칙 기반으로 동작
     """
 
-    VERSION = "review-hook-generator-78-2"
+    VERSION = "review-hook-generator-76-2b"
 
     def generate(
         self,
@@ -60,18 +60,6 @@ class ReviewHookGenerator:
             or quotes.get("review_count")
         )
 
-        psychology_type = self._first_text(
-            insight.get("purchase_psychology_type"),
-            insight.get("psychology_type"),
-            quotes.get("purchase_psychology_type"),
-            quotes.get("psychology_type"),
-            self._infer_purchase_psychology(
-                product_name=product_name,
-                best_pain=best_pain,
-                best_evidence=best_evidence,
-            ),
-        )
-
         benefit_summary = self._summarize_benefit(
             best_benefit,
             best_quote,
@@ -89,15 +77,6 @@ class ReviewHookGenerator:
         hooks: List[Dict[str, Any]] = []
 
         hook_candidates = [
-            (
-                "psychology",
-                self._psychology_hook(
-                    psychology_type=psychology_type,
-                    product_name=product_name,
-                    evidence=evidence_summary,
-                ),
-                "purchase_psychology",
-            ),
             (
                 "problem",
                 f"{pain_summary}, 아직도 고민하고 계세요?",
@@ -166,7 +145,6 @@ class ReviewHookGenerator:
 
         hooks = self._dedupe_hooks(hooks)
         type_priority = {
-            "psychology": 7,
             "review_evidence": 6,
             "curiosity": 5,
             "before_after": 3,
@@ -189,35 +167,30 @@ class ReviewHookGenerator:
         best_hook = hooks[0] if hooks else {}
 
         print(
-            "[Sprint78-2 Hook] Version:",
+            "[Sprint76-2B Hook] Version:",
             self.VERSION,
             flush=True,
         )
         print(
-            "[Sprint78-2 Hook] Product:",
+            "[Sprint76-2B Hook] Product:",
             product_name,
             flush=True,
         )
         print(
-            "[Sprint78-2 Hook] Psychology Type:",
-            psychology_type,
-            flush=True,
-        )
-        print(
-            "[Sprint78-2 Hook] Best Hook:",
+            "[Sprint76-2B Hook] Best Hook:",
             best_hook.get("text", ""),
             flush=True,
         )
 
         print(
-            "[Sprint78-2 Hook] Generated:",
+            "[Sprint76-2B Hook] Generated:",
             len(hooks),
             flush=True,
         )
 
         for item in hooks:
             print(
-                "[Sprint78-2 Hook] Score:",
+                "[Sprint76-2B Hook] Score:",
                 item.get("type"),
                 item.get("score"),
                 repr(item.get("text", "")),
@@ -225,7 +198,7 @@ class ReviewHookGenerator:
             )
 
         print(
-            "[Sprint78-2 Hook] Selected:",
+            "[Sprint76-2B Hook] Selected:",
             best_hook.get("type", ""),
             flush=True,
         )
@@ -236,7 +209,6 @@ class ReviewHookGenerator:
             "status": "generated" if best_hook else "empty",
             "product_name": product_name,
             "review_count": count,
-            "psychology_type": psychology_type,
             "best_hook": best_hook.get("text", ""),
             "best_hook_type": best_hook.get("type", ""),
             "best_hook_score": best_hook.get("score", 0),
@@ -254,114 +226,25 @@ class ReviewHookGenerator:
                 "pain_summary": pain_summary,
                 "benefit_summary": benefit_summary,
                 "evidence_summary": evidence_summary,
-                "psychology_type": psychology_type,
             },
         }
-
-    def _infer_purchase_psychology(
-        self,
-        product_name: str,
-        best_pain: str,
-        best_evidence: str,
-    ) -> str:
-        product = self._clean_text(product_name)
-        pain = self._clean_text(best_pain)
-        evidence = self._clean_text(best_evidence)
-
-        scores = {
-            "comparison": 0,
-            "anxiety": 0,
-            "mistake_prevention": 0,
-            "empathy": 0,
-            "recommendation": 0,
-        }
-
-        if any(word in evidence for word in ("인치", "크기", "적당", "맞")):
-            scores["comparison"] += 6
-            scores["mistake_prevention"] += 4
-
-        if any(word in pain for word in ("고르기", "어렵", "고민", "걱정")):
-            scores["anxiety"] += 4
-            scores["empathy"] += 3
-
-        if "캐리어" in product:
-            scores["comparison"] += 3
-            scores["mistake_prevention"] += 2
-
-        scores["recommendation"] += 1
-
-        priority = {
-            "comparison": 5,
-            "mistake_prevention": 4,
-            "anxiety": 3,
-            "empathy": 2,
-            "recommendation": 1,
-        }
-
-        return max(
-            scores,
-            key=lambda key: (
-                scores.get(key, 0),
-                priority.get(key, 0),
-            ),
-        )
-
-    def _psychology_hook(
-        self,
-        psychology_type: str,
-        product_name: str,
-        evidence: str,
-    ) -> str:
-        psychology = self._clean_text(psychology_type)
-        product = self._clean_text(product_name)
-        evidence_text = self._clean_text(evidence)
-
-        if psychology == "comparison":
-            if "캐리어" in product:
-                return "20인치와 24인치, 어떤 걸 사야 할까요?"
-            return f"{product}, 어떤 기준으로 골라야 할까요?"
-
-        if psychology == "anxiety":
-            if "캐리어" in product:
-                return "캐리어 크기 하나만 잘못 골라도 여행 내내 불편할 수 있습니다."
-            return f"{product}, 잘못 고르면 사용 내내 불편할 수 있습니다."
-
-        if psychology == "mistake_prevention":
-            if "캐리어" in product:
-                return "가장 많이 하는 실수가 캐리어 크기를 잘못 고르는 것입니다."
-            return f"{product}를 고를 때 가장 많이 하는 실수가 있습니다."
-
-        if psychology == "empathy":
-            if "캐리어" in product:
-                return "여행 갈 때마다 캐리어 크기 때문에 고민한 적 있으신가요?"
-            return f"{product} 때문에 한 번쯤 고민한 적 있으신가요?"
-
-        if psychology == "recommendation":
-            if "24인치" in evidence_text:
-                return "실제 구매자들이 가장 많이 추천한 크기는 24인치였습니다."
-            return f"실제 구매자들이 가장 많이 추천한 선택은 {product}였습니다."
-
-        return self._review_evidence_hook(
-            count=0,
-            evidence=evidence_text,
-        )
 
     def _review_evidence_hook(
         self,
         count: int,
         evidence: str,
     ) -> str:
-        quote = self._quote_style_evidence(evidence)
+        clause = self._evidence_clause(evidence)
 
         if count > 0:
             return (
-                f"실제 구매 후기 {count}개에서 가장 많이 나온 말은 "
-                f'"{quote}"였습니다.'
+                f"리뷰 {count}개를 분석했더니 "
+                f"{clause} 후기가 가장 많았습니다."
             )
 
         return (
-            f"실제 구매 후기에서 가장 많이 나온 말은 "
-            f'"{quote}"였습니다.'
+            f"실사용 후기를 분석했더니 "
+            f"{clause} 후기가 가장 많았습니다."
         )
 
     def _curiosity_hook(
@@ -447,8 +330,7 @@ class ReviewHookGenerator:
             score += 4
 
         type_bonus = {
-            "psychology": 32,
-            "review_evidence": 28,
+            "review_evidence": 24,
             "curiosity": 12,
             "before_after": 8,
             "problem": 6,
@@ -459,12 +341,6 @@ class ReviewHookGenerator:
             hook_type,
             0,
         )
-
-        if hook_type == "psychology":
-            score = max(
-                score,
-                99,
-            )
 
         if cleaned.endswith("?"):
             score += 2
@@ -546,33 +422,6 @@ class ReviewHookGenerator:
             return text[:-1] + "다는"
 
         return text + "라는"
-
-    def _quote_style_evidence(
-        self,
-        evidence: str,
-    ) -> str:
-        text = self._clean_text(evidence).rstrip(".!? ")
-
-        replacements = (
-            ("딱 적당하다", "딱 적당해요"),
-            ("적당하다", "적당해요"),
-            ("편하다", "편해요"),
-            ("좋다", "좋아요"),
-            ("만족스럽다", "만족스러워요"),
-            ("튼튼하다", "튼튼해요"),
-            ("가볍다", "가벼워요"),
-        )
-
-        for before, after in replacements:
-            if text.endswith(before):
-                text = text[: -len(before)] + after
-                break
-
-        if not text.endswith(("요", "니다", "죠")):
-            if text.endswith("다"):
-                text = text[:-1] + "요"
-
-        return self._shorten(text, 40).rstrip("…")
 
     def _summarize_benefit(
         self,

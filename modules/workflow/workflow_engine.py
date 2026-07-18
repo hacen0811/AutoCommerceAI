@@ -36,6 +36,7 @@ from modules.publisher.instagram_upload_executor import InstagramUploadExecutor
 from modules.video.ai_video_engine import AIVideoEngine
 from modules.video.gemini_veo_provider import GeminiVeoProvider
 from modules.video.ai_scene_merger import AISceneMerger
+from modules.story import StoryIntelligenceEngine
 from modules.image_ai import (
     ImageStripSplitter,
     ImageVisionAnalyzer,
@@ -63,7 +64,7 @@ from modules.video.download_utils import (
 )
 
 
-print("######## WORKFLOW_ENGINE SPRINT98-5 LOADED ########", flush=True)
+print("######## WORKFLOW_ENGINE SPRINT100-4 LOADED ########", flush=True)
 
 
 class WorkflowEngine:
@@ -88,7 +89,7 @@ class WorkflowEngine:
     → CapCutExport
     """
 
-    WORKFLOW_VERSION = "workflow-engine-98-5"
+    WORKFLOW_VERSION = "workflow-engine-100-4"
 
     STEP_NAMES = [
         "product_plan",
@@ -127,6 +128,95 @@ class WorkflowEngine:
             )
         except Exception:
             return {}
+
+    def _sprint100_4_text_probe(self, label, value, limit=5):
+        """Sprint100-4: 문자열 값과 실제 UTF-8 바이트를 함께 출력합니다."""
+        print("=" * 80, flush=True)
+        print(f"[Sprint100-3 Diagnostic] {label}", flush=True)
+
+        items = value if isinstance(value, (list, tuple)) else [value]
+        for index, item in enumerate(list(items)[: max(1, int(limit))]):
+            print(
+                f"[Sprint100-3 Diagnostic] {label}[{index}] Type:",
+                type(item).__name__,
+                flush=True,
+            )
+            print(
+                f"[Sprint100-3 Diagnostic] {label}[{index}] Repr:",
+                repr(item),
+                flush=True,
+            )
+            try:
+                encoded = (
+                    item.encode("utf-8", errors="replace")
+                    if isinstance(item, str)
+                    else repr(item).encode("utf-8", errors="replace")
+                )
+            except Exception as exc:
+                encoded = f"ENCODE_ERROR: {type(exc).__name__}: {exc}"
+            print(
+                f"[Sprint100-3 Diagnostic] {label}[{index}] UTF8:",
+                encoded,
+                flush=True,
+            )
+        print("=" * 80, flush=True)
+
+    def _write_sprint100_4_debug_json(
+        self,
+        output_dir,
+        filename,
+        payload,
+    ):
+        """Sprint100-4: Story 디버그 데이터를 UTF-8 JSON으로 저장합니다."""
+        result = {
+            "ok": False,
+            "status": "not_saved",
+            "path": "",
+            "filename": str(filename or ""),
+            "errors": [],
+        }
+
+        try:
+            target_dir = Path(str(output_dir or "."))
+            target_dir.mkdir(parents=True, exist_ok=True)
+            target_path = target_dir / str(filename)
+
+            target_path.write_text(
+                json.dumps(
+                    payload,
+                    ensure_ascii=False,
+                    indent=2,
+                    default=str,
+                ),
+                encoding="utf-8",
+            )
+
+            result.update(
+                {
+                    "ok": True,
+                    "status": "saved",
+                    "path": str(target_path),
+                }
+            )
+        except Exception as exc:
+            result.update(
+                {
+                    "status": "save_failed",
+                    "errors": [
+                        f"{type(exc).__name__}: {exc}"
+                    ],
+                }
+            )
+
+        print(
+            "[Sprint100-3 Debug JSON]",
+            result.get("filename", ""),
+            result.get("status", ""),
+            result.get("path", ""),
+            result.get("errors", []),
+            flush=True,
+        )
+        return result
 
     def _normalize_youtube_privacy_status(self, value):
         """YouTube 공개 설정을 API 허용값으로 통일합니다."""
@@ -1150,7 +1240,7 @@ class WorkflowEngine:
             )
         )
         print(
-            "######## RUN_PROJECT SPRINT98-5 START ########",
+            "######## RUN_PROJECT SPRINT100-4 START ########",
             flush=True,
         )
         print(
@@ -1529,6 +1619,19 @@ class WorkflowEngine:
             "images": [],
             "errors": [],
         }
+        story_intelligence_result = {
+            "ok": False,
+            "ready": False,
+            "version": StoryIntelligenceEngine.VERSION,
+            "status": "not_run",
+            "story_type": "",
+            "product_type": "",
+            "selling_points": [],
+            "emotion_curve": [],
+            "scene_goals": [],
+            "image_role_plan": [],
+            "errors": [],
+        }
         scene_plan_result = {
             "ok": False,
             "ready": False,
@@ -1659,6 +1762,263 @@ class WorkflowEngine:
             flush=True,
         )
 
+        # Sprint100-4: Story 실행 전에 리뷰 OCR/정제/Insight를 먼저 준비합니다.
+        pre_story_review_ocr = {
+            "ok": False,
+            "status": "not_run",
+            "reviews": [],
+            "review_count": 0,
+        }
+        pre_story_clean = {
+            "ok": False,
+            "status": "not_run",
+            "reviews": [],
+            "review_count": 0,
+        }
+        pre_story_reviews = []
+        pre_story_review_insight = {}
+
+        try:
+            pre_story_image_paths = self._review_image_paths(
+                project,
+                project_data,
+                supplied_paths=review_image_paths,
+            )
+            pre_story_review_ocr = self._run_review_image_ocr(
+                pre_story_image_paths,
+                project,
+            )
+            pre_story_ocr_reviews = self._normalize_reviews(
+                pre_story_review_ocr.get("reviews", []),
+                source="review_image_ocr",
+            )
+            pre_story_product_reviews = self._normalize_reviews(
+                (product_plan.get("reviews") or product_plan.get("review_data") or [])
+                if isinstance(product_plan, dict)
+                else [],
+                source=(product_plan.get("review_source") or "product_plan")
+                if isinstance(product_plan, dict)
+                else "product_plan",
+            )
+            pre_story_raw_reviews = self._merge_reviews(
+                pre_story_product_reviews,
+                pre_story_ocr_reviews,
+            )
+            pre_story_clean = ReviewCleaner().clean(
+                reviews=pre_story_raw_reviews,
+                source="product_plan+review_image_ocr",
+            )
+            pre_story_reviews = list(
+                pre_story_clean.get("reviews", [])
+                or pre_story_raw_reviews
+            )
+            pre_story_review_insight = ReviewInsightEngine().analyze(
+                reviews=pre_story_reviews,
+                social_comments=[],
+                product_name=product_name_for_director,
+            )
+
+            outputs["review_ocr"] = pre_story_review_ocr
+            outputs["review_clean"] = pre_story_clean
+            outputs["merged_reviews"] = pre_story_reviews
+            outputs["review_insight"] = pre_story_review_insight
+            outputs["review_image_paths"] = pre_story_image_paths
+
+            if isinstance(product_plan, dict):
+                product_plan["ocr_reviews"] = pre_story_ocr_reviews
+                product_plan["reviews"] = pre_story_reviews
+                product_plan["review_data"] = pre_story_reviews
+                product_plan["review_count"] = len(pre_story_reviews)
+                product_plan["review_source"] = (
+                    "review_image_ocr"
+                    if pre_story_ocr_reviews
+                    else product_plan.get("review_source", "product_plan")
+                )
+                product_plan["review_ocr"] = pre_story_review_ocr
+                product_plan["review_clean"] = pre_story_clean
+                outputs["product_plan"] = product_plan
+
+            print(
+                "[Sprint100-4 Pre-Story Review] OCR:",
+                len(pre_story_ocr_reviews),
+                "Merged:",
+                len(pre_story_reviews),
+                "Insight:",
+                pre_story_review_insight.get("review_count", len(pre_story_reviews))
+                if isinstance(pre_story_review_insight, dict)
+                else 0,
+                flush=True,
+            )
+        except Exception as exc:
+            print(
+                "[Sprint100-4 Pre-Story Review] ERROR:",
+                repr(exc),
+                flush=True,
+            )
+
+        # Sprint100-4: Story 실행 시점의 실제 입력과 결과를 JSON으로 저장합니다.
+        story_review_input = (
+            outputs.get("review_insight", {})
+            if isinstance(outputs.get("review_insight", {}), dict)
+            and outputs.get("review_insight", {})
+            else {
+                "review_count": (
+                    product_plan.get("review_count", 0)
+                    if isinstance(product_plan, dict)
+                    else 0
+                ),
+                "reviews": (
+                    product_plan.get("reviews", [])
+                    if isinstance(product_plan, dict)
+                    else []
+                ),
+            }
+        )
+        story_input_source = (
+            "outputs.review_insight"
+            if isinstance(outputs.get("review_insight", {}), dict)
+            and outputs.get("review_insight", {})
+            else "product_plan fallback"
+        )
+        story_product_info = {
+            "product_name": (
+                getattr(project, "product_name", "")
+                or getattr(project, "title", "")
+                or project_data.get("product_name", "")
+                or project_data.get("title", "")
+                or product_name_for_director
+            ),
+            "category": getattr(project, "category", ""),
+            "keyword": getattr(project, "keyword", ""),
+            "price": getattr(project, "price", ""),
+            "product_plan": product_plan,
+        }
+        story_ocr_result = (
+            outputs.get("review_ocr", {}).get("reviews", [])
+            if isinstance(outputs.get("review_ocr", {}), dict)
+            else []
+        )
+        story_analysis_bundle = {
+            "project_data": project_data,
+            "product_plan": product_plan,
+            "product_name": product_name_for_director,
+            "category": getattr(project, "category", ""),
+            "keyword": getattr(project, "keyword", ""),
+        }
+        story_build_input = {
+            "workflow_version": self.WORKFLOW_VERSION,
+            "project_id": str(project_id_for_director or ""),
+            "input_source": story_input_source,
+            "product_info": story_product_info,
+            "review_insight": story_review_input,
+            "vision_result": vision_analysis_result,
+            "image_tags": image_tags_result,
+            "ocr_result": story_ocr_result,
+            "analysis_bundle": story_analysis_bundle,
+            "scene_count": 6,
+        }
+
+        print(
+            "[Sprint100-3 Diagnostic] Story Input Source:",
+            story_input_source,
+            flush=True,
+        )
+        print(
+            "[Sprint100-3 Diagnostic] Story Input Review Count:",
+            story_review_input.get("review_count", 0)
+            if isinstance(story_review_input, dict)
+            else 0,
+            flush=True,
+        )
+        self._sprint100_4_text_probe(
+            "STORY INPUT",
+            story_review_input,
+            limit=1,
+        )
+
+        story_input_debug = self._write_sprint100_4_debug_json(
+            output_dir=director_output_dir,
+            filename="story_input_debug.json",
+            payload=story_build_input,
+        )
+        outputs["story_input_debug"] = story_input_debug
+
+        # Sprint99-3 Product Story Intelligence + Scene Goal Bridge
+        try:
+            story_intelligence_result = StoryIntelligenceEngine().build(
+                product_info=story_product_info,
+                review_insight=story_review_input,
+                vision_result=vision_analysis_result,
+                image_tags=image_tags_result,
+                ocr_result=story_ocr_result,
+                analysis_bundle=story_analysis_bundle,
+                scene_count=6,
+            )
+        except Exception as exc:
+            story_intelligence_result.update(
+                status="failed",
+                errors=[f"{type(exc).__name__}: {exc}"],
+            )
+
+        story_result_debug = self._write_sprint100_4_debug_json(
+            output_dir=director_output_dir,
+            filename="story_result_debug.json",
+            payload=story_intelligence_result,
+        )
+        outputs["story_result_debug"] = story_result_debug
+
+        outputs["story_intelligence"] = story_intelligence_result
+        print(
+            "[Sprint100-3 Story Intelligence] Version:",
+            story_intelligence_result.get("version", ""),
+            flush=True,
+        )
+        print(
+            "[Sprint100-3 Story Intelligence] Status:",
+            story_intelligence_result.get("status", ""),
+            flush=True,
+        )
+        print(
+            "[Sprint100-3 Story Intelligence] Product Type:",
+            story_intelligence_result.get("product_type", ""),
+            flush=True,
+        )
+        print(
+            "[Sprint100-3 Story Intelligence] Story Type:",
+            story_intelligence_result.get("story_type", ""),
+            flush=True,
+        )
+        print(
+            "[Sprint100-3 Story Intelligence] Scene Goals:",
+            len(story_intelligence_result.get("scene_goals", []) or []),
+            flush=True,
+        )
+        print(
+            "[Sprint100-3 Story Intelligence] Product Subtype:",
+            story_intelligence_result.get("product_subtype", ""),
+            flush=True,
+        )
+        print(
+            "[Sprint100-3 Story Intelligence] Pain Points:",
+            story_intelligence_result.get("pain_points", []),
+            flush=True,
+        )
+        print(
+            "[Sprint100-3 Story Intelligence] Benefits:",
+            story_intelligence_result.get("benefits", []),
+            flush=True,
+        )
+        print(
+            "[Sprint100-3 Story Intelligence] Auto Complement:",
+            story_intelligence_result.get("auto_complement", {}),
+            flush=True,
+        )
+        print(
+            "[Sprint100-3 Story Intelligence] Errors:",
+            story_intelligence_result.get("errors", []),
+            flush=True,
+        )
+
         try:
             scene_plan_result = ScenePlanner().plan(
                 tag_result=image_tags_result,
@@ -1678,6 +2038,67 @@ class WorkflowEngine:
                 status="failed",
                 errors=[f"{type(exc).__name__}: {exc}"],
             )
+
+        # Sprint99-3: 기존 ScenePlanner 결과에 Story Intelligence 장면 목표를 결합합니다.
+        story_scene_goals = list(
+            story_intelligence_result.get("scene_goals", []) or []
+        )
+        planned_scenes = list(scene_plan_result.get("scenes", []) or [])
+        bridged_scene_count = 0
+
+        for index, scene in enumerate(planned_scenes):
+            if not isinstance(scene, dict) or index >= len(story_scene_goals):
+                continue
+            goal = story_scene_goals[index]
+            if not isinstance(goal, dict):
+                continue
+
+            scene["story_goal"] = str(goal.get("goal") or "")
+            scene["story_purpose"] = str(goal.get("purpose") or "feature")
+            scene["emotion_stage"] = (
+                (story_intelligence_result.get("emotion_curve") or [])[index]
+                if index < len(story_intelligence_result.get("emotion_curve") or [])
+                else ""
+            )
+            scene["preferred_roles"] = list(
+                goal.get("preferred_roles") or []
+            )
+            scene["primary_selling_point"] = str(
+                goal.get("primary_selling_point") or ""
+            )
+            scene["selection_reason"] = (
+                f"{scene['story_purpose']} 장면 목표에 맞는 이미지 역할 "
+                f"{', '.join(scene['preferred_roles'])} 우선"
+            )
+            bridged_scene_count += 1
+
+        scene_plan_result["scenes"] = planned_scenes
+        scene_plan_result["story_intelligence_version"] = (
+            story_intelligence_result.get("version", "")
+        )
+        scene_plan_result["story_type"] = story_intelligence_result.get(
+            "story_type", ""
+        )
+        scene_plan_result["product_type"] = story_intelligence_result.get(
+            "product_type", ""
+        )
+        scene_plan_result["story_goal_bridge_count"] = bridged_scene_count
+        scene_plan_result["story_goal_bridge_ready"] = bool(
+            planned_scenes and bridged_scene_count == len(planned_scenes)
+        )
+
+        print(
+            "[Sprint100-3 Scene Goal Bridge] Count:",
+            bridged_scene_count,
+            "/",
+            len(planned_scenes),
+            flush=True,
+        )
+        print(
+            "[Sprint100-3 Scene Goal Bridge] Ready:",
+            scene_plan_result.get("story_goal_bridge_ready", False),
+            flush=True,
+        )
 
         outputs["scene_plan"] = scene_plan_result
         print(
@@ -2971,6 +3392,14 @@ class WorkflowEngine:
                 ),
                 flush=True,
             )
+            self._sprint100_4_text_probe(
+                "OCR RAW",
+                review_ocr_result.get("reviews", []),
+            )
+            self._sprint100_4_text_probe(
+                "OCR NORMALIZED",
+                ocr_reviews,
+            )
             merged_reviews = self._merge_reviews(
                 coupang_reviews,
                 ocr_reviews,
@@ -2986,6 +3415,10 @@ class WorkflowEngine:
             clean_reviews = review_clean_result.get(
                 "reviews",
                 [],
+            )
+            self._sprint100_4_text_probe(
+                "CLEAN REVIEW",
+                clean_reviews,
             )
 
             if clean_reviews:
@@ -3166,6 +3599,28 @@ class WorkflowEngine:
                 ),
             )
             outputs["review_insight"] = review_insight_result
+            print(
+                "[Sprint100-3 Diagnostic] Review Insight Keys:",
+                list(review_insight_result.keys())
+                if isinstance(review_insight_result, dict)
+                else [],
+                flush=True,
+            )
+            for diagnostic_key in (
+                "best_pain",
+                "best_pain_point",
+                "pain",
+                "best_benefit",
+                "benefit",
+                "best_evidence",
+                "evidence",
+            ):
+                if isinstance(review_insight_result, dict) and diagnostic_key in review_insight_result:
+                    self._sprint100_4_text_probe(
+                        f"REVIEW INSIGHT {diagnostic_key}",
+                        review_insight_result.get(diagnostic_key),
+                        limit=1,
+                    )
 
             print(
                 "[Sprint71-2] ReviewInsight:",

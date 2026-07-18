@@ -13,6 +13,9 @@ from modules.video.capcut_draft_builder import CapCutDraftBuilder
 from modules.capcut.project_builder import CapCutProjectBuilder
 from modules.content.coupang_review_ai import CoupangReviewAI
 from modules.content.review_insight_engine import ReviewInsightEngine
+from modules.content.review_quote_selector import ReviewQuoteSelector
+from modules.content.review_hook_generator import ReviewHookGenerator
+from modules.content.review_script_generator import ReviewScriptGenerator
 
 CONTENT_PACK_DIR = Path("exports/content_packs")
 
@@ -161,6 +164,70 @@ class ContentFactory:
         pack["review_insight"] = review_insight
         pack["hook_ai"] = review_ai.get("best_hook")
         pack["script_ai"] = review_ai.get("script")
+
+               # ===================================
+        # Sprint73 Review Pipeline
+        # ===================================
+
+        review_quotes = ReviewQuoteSelector().select(
+            review_source,
+            review_insight,
+        )
+
+        review_hooks = ReviewHookGenerator().generate(
+            review_quotes=review_quotes,
+            review_insight=review_insight,
+            product_name=project_name,
+            review_count=review_ai.get("review_count", 0),
+        )
+
+        review_scripts = ReviewScriptGenerator().generate(
+            review_hooks=review_hooks,
+            review_quotes=review_quotes,
+            review_insight=review_insight,
+            product_name=project_name,
+            review_count=review_ai.get("review_count", 0),
+        )
+
+        pack["review_quotes"] = review_quotes
+        pack["review_hooks"] = review_hooks
+        pack["review_scripts"] = review_scripts
+
+        print(
+            "[Sprint73-4] Quote Selector:",
+            review_quotes.get("ok"),
+            flush=True,
+        )
+
+        print(
+            "[Sprint73-4] Hook Generator:",
+            review_hooks.get("ok"),
+            flush=True,
+        )
+
+        print(
+            "[Sprint73-4] Script Generator:",
+            review_scripts.get("ok"),
+            flush=True,
+        )
+
+        print(
+            "[Sprint73-4] Script Count:",
+            review_scripts.get("script_count"),
+            flush=True,
+        )
+
+        print(
+            "[Sprint73-4] Best Script:",
+            review_scripts.get("best_script"),
+            flush=True,
+        )
+
+        print(
+            "[Sprint73-4] Script Type:",
+            review_scripts.get("best_script_type"),
+            flush=True,
+        )
 
         print(
             "[Sprint65] ReviewAI:",
