@@ -64,7 +64,7 @@ from modules.video.download_utils import (
 )
 
 
-print("######## WORKFLOW_ENGINE SPRINT100-4 LOADED ########", flush=True)
+print("######## WORKFLOW_ENGINE SPRINT101-3 LOADED ########", flush=True)
 
 
 class WorkflowEngine:
@@ -89,7 +89,7 @@ class WorkflowEngine:
     → CapCutExport
     """
 
-    WORKFLOW_VERSION = "workflow-engine-100-4"
+    WORKFLOW_VERSION = "workflow-engine-101-3"
 
     STEP_NAMES = [
         "product_plan",
@@ -132,17 +132,17 @@ class WorkflowEngine:
     def _sprint100_4_text_probe(self, label, value, limit=5):
         """Sprint100-4: 문자열 값과 실제 UTF-8 바이트를 함께 출력합니다."""
         print("=" * 80, flush=True)
-        print(f"[Sprint100-3 Diagnostic] {label}", flush=True)
+        print(f"[Sprint101-1 Diagnostic] {label}", flush=True)
 
         items = value if isinstance(value, (list, tuple)) else [value]
         for index, item in enumerate(list(items)[: max(1, int(limit))]):
             print(
-                f"[Sprint100-3 Diagnostic] {label}[{index}] Type:",
+                f"[Sprint101-1 Diagnostic] {label}[{index}] Type:",
                 type(item).__name__,
                 flush=True,
             )
             print(
-                f"[Sprint100-3 Diagnostic] {label}[{index}] Repr:",
+                f"[Sprint101-1 Diagnostic] {label}[{index}] Repr:",
                 repr(item),
                 flush=True,
             )
@@ -155,7 +155,7 @@ class WorkflowEngine:
             except Exception as exc:
                 encoded = f"ENCODE_ERROR: {type(exc).__name__}: {exc}"
             print(
-                f"[Sprint100-3 Diagnostic] {label}[{index}] UTF8:",
+                f"[Sprint101-1 Diagnostic] {label}[{index}] UTF8:",
                 encoded,
                 flush=True,
             )
@@ -209,7 +209,7 @@ class WorkflowEngine:
             )
 
         print(
-            "[Sprint100-3 Debug JSON]",
+            "[Sprint101-2 Debug JSON]",
             result.get("filename", ""),
             result.get("status", ""),
             result.get("path", ""),
@@ -1919,23 +1919,17 @@ class WorkflowEngine:
         }
 
         print(
-            "[Sprint100-3 Diagnostic] Story Input Source:",
+            "[Sprint101-2 Story Input] Source:",
             story_input_source,
             flush=True,
         )
         print(
-            "[Sprint100-3 Diagnostic] Story Input Review Count:",
+            "[Sprint101-2 Story Input] Review Count:",
             story_review_input.get("review_count", 0)
             if isinstance(story_review_input, dict)
             else 0,
             flush=True,
         )
-        self._sprint100_4_text_probe(
-            "STORY INPUT",
-            story_review_input,
-            limit=1,
-        )
-
         story_input_debug = self._write_sprint100_4_debug_json(
             output_dir=director_output_dir,
             filename="story_input_debug.json",
@@ -1967,54 +1961,223 @@ class WorkflowEngine:
         )
         outputs["story_result_debug"] = story_result_debug
 
+        # Sprint101-1: 각 Story Scene Goal에 실제 리뷰 근거를 직접 연결합니다.
+        # 기존 StoryIntelligence 결과 구조는 유지하고 증거 관련 키만 추가합니다.
+        story_scene_goals_for_evidence = list(
+            story_intelligence_result.get("scene_goals", []) or []
+        )
+
+        def _story_text_items(value):
+            items = []
+            if isinstance(value, str):
+                value = value.strip()
+                if value:
+                    items.append(value)
+            elif isinstance(value, dict):
+                for key in (
+                    "text", "content", "review_text", "quote",
+                    "evidence", "sentence", "value", "reason",
+                ):
+                    candidate = value.get(key)
+                    if isinstance(candidate, str) and candidate.strip():
+                        items.append(candidate.strip())
+                        break
+            elif isinstance(value, (list, tuple)):
+                for item in value:
+                    items.extend(_story_text_items(item))
+            return items
+
+        pain_evidence_pool = []
+        benefit_evidence_pool = []
+        proof_evidence_pool = []
+
+        if isinstance(story_review_input, dict):
+            for key in (
+                "best_pain", "best_pain_point", "pain_points",
+                "pain_point", "problems", "concerns",
+            ):
+                pain_evidence_pool.extend(
+                    _story_text_items(story_review_input.get(key))
+                )
+
+            for key in (
+                "best_benefit", "benefits", "benefit",
+                "strengths", "advantages", "solutions",
+            ):
+                benefit_evidence_pool.extend(
+                    _story_text_items(story_review_input.get(key))
+                )
+
+            for key in (
+                "best_evidence", "evidence", "review_evidence",
+                "selected_reviews", "reviews", "quotes",
+                "best_quotes", "top_reviews",
+            ):
+                proof_evidence_pool.extend(
+                    _story_text_items(story_review_input.get(key))
+                )
+
+        proof_evidence_pool.extend(_story_text_items(story_ocr_result))
+
+        def _dedupe_story_evidence(items):
+            unique = []
+            seen = set()
+            for item in items:
+                normalized = " ".join(str(item).split()).strip()
+                if not normalized or normalized in seen:
+                    continue
+                seen.add(normalized)
+                unique.append(normalized)
+            return unique
+
+        pain_evidence_pool = _dedupe_story_evidence(pain_evidence_pool)
+        benefit_evidence_pool = _dedupe_story_evidence(benefit_evidence_pool)
+        proof_evidence_pool = _dedupe_story_evidence(proof_evidence_pool)
+
+        evidence_assignments = []
+        evidence_cursor = {"pain": 0, "benefit": 0, "proof": 0}
+
+        for scene_index, goal in enumerate(story_scene_goals_for_evidence):
+            if not isinstance(goal, dict):
+                continue
+
+            purpose = str(goal.get("purpose") or "feature").lower()
+            goal_text = str(goal.get("goal") or "").lower()
+            combined = f"{purpose} {goal_text}"
+
+            if any(token in combined for token in (
+                "problem", "pain", "공감", "불편", "문제", "고민", "긴장",
+            )):
+                evidence_type = "pain"
+                evidence_pool = pain_evidence_pool or proof_evidence_pool
+            elif any(token in combined for token in (
+                "proof", "compare", "comparison", "review", "evidence",
+                "후기", "근거", "비교", "검증",
+            )):
+                evidence_type = "proof"
+                evidence_pool = proof_evidence_pool or benefit_evidence_pool
+            else:
+                evidence_type = "benefit"
+                evidence_pool = benefit_evidence_pool or proof_evidence_pool
+
+            evidence_text = ""
+            if evidence_pool:
+                cursor_key = evidence_type
+                cursor = evidence_cursor.get(cursor_key, 0)
+                evidence_text = evidence_pool[cursor % len(evidence_pool)]
+                evidence_cursor[cursor_key] = cursor + 1
+
+            goal["review_evidence"] = evidence_text
+            goal["evidence_text"] = evidence_text
+            goal["evidence_type"] = evidence_type
+            goal["evidence_source"] = (
+                "review_insight" if evidence_text else "none"
+            )
+            goal["evidence_scene_index"] = scene_index + 1
+            goal["must_show"] = evidence_text or str(
+                goal.get("primary_selling_point") or goal.get("goal") or ""
+            )
+
+            evidence_assignments.append({
+                "scene": scene_index + 1,
+                "purpose": purpose,
+                "evidence_type": evidence_type,
+                "evidence_text": evidence_text,
+            })
+
+        story_intelligence_result["scene_goals"] = story_scene_goals_for_evidence
+        story_intelligence_result["review_evidence_bridge"] = {
+            "version": "review-evidence-bridge-101-2",
+            "scene_count": len(story_scene_goals_for_evidence),
+            "assigned_count": sum(
+                1 for item in evidence_assignments
+                if item.get("evidence_text")
+            ),
+            "pain_pool_count": len(pain_evidence_pool),
+            "benefit_pool_count": len(benefit_evidence_pool),
+            "proof_pool_count": len(proof_evidence_pool),
+            "assignments": evidence_assignments,
+        }
+
         outputs["story_intelligence"] = story_intelligence_result
         print(
-            "[Sprint100-3 Story Intelligence] Version:",
+            "[Sprint101-2 Evidence Bridge] Assigned:",
+            story_intelligence_result.get("review_evidence_bridge", {}).get(
+                "assigned_count", 0
+            ),
+            "/",
+            story_intelligence_result.get("review_evidence_bridge", {}).get(
+                "scene_count", 0
+            ),
+            flush=True,
+        )
+        print(
+            "[Sprint101-2 Evidence Bridge] Pools:",
+            "pain=", len(pain_evidence_pool),
+            "benefit=", len(benefit_evidence_pool),
+            "proof=", len(proof_evidence_pool),
+            flush=True,
+        )
+        for assignment in evidence_assignments:
+            evidence_preview = " ".join(
+                str(assignment.get("evidence_text") or "").split()
+            )[:80]
+            print(
+                "[Sprint101-2 Evidence Scene]",
+                f"Scene{int(assignment.get('scene', 0)):02d}",
+                "->",
+                assignment.get("evidence_type", "none"),
+                "|",
+                evidence_preview or "NO_EVIDENCE",
+                flush=True,
+            )
+        print(
+            "[Sprint101-2 Story Intelligence] Version:",
             story_intelligence_result.get("version", ""),
             flush=True,
         )
         print(
-            "[Sprint100-3 Story Intelligence] Status:",
+            "[Sprint101-2 Story Intelligence] Status:",
             story_intelligence_result.get("status", ""),
             flush=True,
         )
         print(
-            "[Sprint100-3 Story Intelligence] Product Type:",
+            "[Sprint101-2 Story Intelligence] Product Type:",
             story_intelligence_result.get("product_type", ""),
             flush=True,
         )
         print(
-            "[Sprint100-3 Story Intelligence] Story Type:",
+            "[Sprint101-2 Story Intelligence] Story Type:",
             story_intelligence_result.get("story_type", ""),
             flush=True,
         )
         print(
-            "[Sprint100-3 Story Intelligence] Scene Goals:",
+            "[Sprint101-2 Story Intelligence] Scene Goals:",
             len(story_intelligence_result.get("scene_goals", []) or []),
             flush=True,
         )
         print(
-            "[Sprint100-3 Story Intelligence] Product Subtype:",
+            "[Sprint101-2 Story Intelligence] Product Subtype:",
             story_intelligence_result.get("product_subtype", ""),
             flush=True,
         )
         print(
-            "[Sprint100-3 Story Intelligence] Pain Points:",
+            "[Sprint101-2 Story Intelligence] Pain Points:",
             story_intelligence_result.get("pain_points", []),
             flush=True,
         )
         print(
-            "[Sprint100-3 Story Intelligence] Benefits:",
+            "[Sprint101-2 Story Intelligence] Benefits:",
             story_intelligence_result.get("benefits", []),
             flush=True,
         )
         print(
-            "[Sprint100-3 Story Intelligence] Auto Complement:",
+            "[Sprint101-2 Story Intelligence] Auto Complement:",
             story_intelligence_result.get("auto_complement", {}),
             flush=True,
         )
         print(
-            "[Sprint100-3 Story Intelligence] Errors:",
+            "[Sprint101-2 Story Intelligence] Errors:",
             story_intelligence_result.get("errors", []),
             flush=True,
         )
@@ -2066,10 +2229,59 @@ class WorkflowEngine:
             scene["primary_selling_point"] = str(
                 goal.get("primary_selling_point") or ""
             )
-            scene["selection_reason"] = (
-                f"{scene['story_purpose']} 장면 목표에 맞는 이미지 역할 "
-                f"{', '.join(scene['preferred_roles'])} 우선"
+            scene["review_evidence"] = str(
+                goal.get("review_evidence")
+                or goal.get("evidence_text")
+                or ""
             )
+            scene["evidence_type"] = str(
+                goal.get("evidence_type") or ""
+            )
+            scene["evidence_source"] = str(
+                goal.get("evidence_source") or ""
+            )
+            scene["must_show"] = str(
+                goal.get("must_show")
+                or goal.get("primary_selling_point")
+                or goal.get("goal")
+                or ""
+            )
+
+            purpose_key = scene["story_purpose"].lower()
+            evidence_key = scene["evidence_type"].lower()
+            if any(token in purpose_key for token in ("hook", "intro", "후킹")):
+                recommended_image_type = "main_product"
+                recommended_video_type = "hero_motion"
+            elif evidence_key == "pain":
+                recommended_image_type = "problem_context"
+                recommended_video_type = "pain_demonstration"
+            elif evidence_key == "proof":
+                recommended_image_type = "detail_proof"
+                recommended_video_type = "evidence_demonstration"
+            elif any(token in purpose_key for token in ("cta", "close", "ending")):
+                recommended_image_type = "main_product"
+                recommended_video_type = "clean_product_close"
+            else:
+                recommended_image_type = "usage_benefit"
+                recommended_video_type = "benefit_demonstration"
+
+            scene["recommended_image_type"] = recommended_image_type
+            scene["recommended_video_type"] = recommended_video_type
+            scene["selection_reason"] = (
+                f"{scene['story_purpose']} 장면 목표와 "
+                f"{scene['evidence_type']} 리뷰 근거에 맞는 "
+                f"{recommended_image_type} 이미지 우선"
+            )
+            scene["director_context"] = {
+                "scene_goal": scene["story_goal"],
+                "story_purpose": scene["story_purpose"],
+                "emotion_stage": scene["emotion_stage"],
+                "review_evidence": scene["review_evidence"],
+                "evidence_type": scene["evidence_type"],
+                "must_show": scene["must_show"],
+                "recommended_image_type": recommended_image_type,
+                "recommended_video_type": recommended_video_type,
+            }
             bridged_scene_count += 1
 
         scene_plan_result["scenes"] = planned_scenes
@@ -2088,14 +2300,14 @@ class WorkflowEngine:
         )
 
         print(
-            "[Sprint100-3 Scene Goal Bridge] Count:",
+            "[Sprint101-3 Scene Goal Bridge] Count:",
             bridged_scene_count,
             "/",
             len(planned_scenes),
             flush=True,
         )
         print(
-            "[Sprint100-3 Scene Goal Bridge] Ready:",
+            "[Sprint101-3 Scene Goal Bridge] Ready:",
             scene_plan_result.get("story_goal_bridge_ready", False),
             flush=True,
         )
@@ -2145,7 +2357,76 @@ class WorkflowEngine:
                 errors=[f"{type(exc).__name__}: {exc}"],
             )
 
+        # Sprint101-3: Scene Image Selector 결과에 Story/Evidence 연출 문맥을 주입합니다.
+        selection_items = []
+        selection_key = ""
+        for candidate_key in ("scenes", "selections", "selected_scenes", "items"):
+            candidate_items = scene_selection_result.get(candidate_key)
+            if isinstance(candidate_items, list):
+                selection_items = candidate_items
+                selection_key = candidate_key
+                break
+
+        director_context_count = 0
+        planned_scene_lookup = list(scene_plan_result.get("scenes", []) or [])
+        for index, selected_scene in enumerate(selection_items):
+            if not isinstance(selected_scene, dict) or index >= len(planned_scene_lookup):
+                continue
+            planned_scene = planned_scene_lookup[index]
+            if not isinstance(planned_scene, dict):
+                continue
+
+            context = dict(planned_scene.get("director_context") or {})
+            selected_scene["story_goal"] = planned_scene.get("story_goal", "")
+            selected_scene["story_purpose"] = planned_scene.get("story_purpose", "")
+            selected_scene["emotion_stage"] = planned_scene.get("emotion_stage", "")
+            selected_scene["review_evidence"] = planned_scene.get("review_evidence", "")
+            selected_scene["evidence_type"] = planned_scene.get("evidence_type", "")
+            selected_scene["must_show"] = planned_scene.get("must_show", "")
+            selected_scene["recommended_image_type"] = planned_scene.get(
+                "recommended_image_type", ""
+            )
+            selected_scene["recommended_video_type"] = planned_scene.get(
+                "recommended_video_type", ""
+            )
+            selected_scene["director_context"] = context
+            director_context_count += 1
+
+        if selection_key:
+            scene_selection_result[selection_key] = selection_items
+        scene_selection_result["story_director_bridge"] = {
+            "version": "story-director-bridge-101-3",
+            "selection_key": selection_key,
+            "scene_count": len(selection_items),
+            "context_count": director_context_count,
+            "ready": bool(selection_items and director_context_count == len(selection_items)),
+        }
+
         outputs["scene_selection"] = scene_selection_result
+        print(
+            "[Sprint101-3 Story Director Bridge] Context:",
+            director_context_count,
+            "/",
+            len(selection_items),
+            flush=True,
+        )
+        print(
+            "[Sprint101-3 Story Director Bridge] Ready:",
+            scene_selection_result.get("story_director_bridge", {}).get("ready", False),
+            flush=True,
+        )
+        for index, selected_scene in enumerate(selection_items, start=1):
+            if not isinstance(selected_scene, dict):
+                continue
+            print(
+                f"[Sprint101-3 Director Scene] Scene{index:02d}",
+                "->",
+                selected_scene.get("recommended_video_type", ""),
+                "|",
+                str(selected_scene.get("must_show", ""))[:80],
+                flush=True,
+            )
+
         print(
             "[Sprint93-5 Scene Image Selector] Version:",
             scene_selection_result.get("version", ""),
@@ -3600,27 +3881,17 @@ class WorkflowEngine:
             )
             outputs["review_insight"] = review_insight_result
             print(
-                "[Sprint100-3 Diagnostic] Review Insight Keys:",
-                list(review_insight_result.keys())
+                "[Sprint101-2 Review Insight]",
+                "Review Count:",
+                review_insight_result.get("review_count", 0)
                 if isinstance(review_insight_result, dict)
-                else [],
+                else 0,
+                "Keys:",
+                len(review_insight_result)
+                if isinstance(review_insight_result, dict)
+                else 0,
                 flush=True,
             )
-            for diagnostic_key in (
-                "best_pain",
-                "best_pain_point",
-                "pain",
-                "best_benefit",
-                "benefit",
-                "best_evidence",
-                "evidence",
-            ):
-                if isinstance(review_insight_result, dict) and diagnostic_key in review_insight_result:
-                    self._sprint100_4_text_probe(
-                        f"REVIEW INSIGHT {diagnostic_key}",
-                        review_insight_result.get(diagnostic_key),
-                        limit=1,
-                    )
 
             print(
                 "[Sprint71-2] ReviewInsight:",
