@@ -37,6 +37,7 @@ from modules.video.ai_video_engine import AIVideoEngine
 from modules.video.gemini_veo_provider import GeminiVeoProvider
 from modules.video.ai_scene_merger import AISceneMerger
 from modules.image_ai import (
+    ImageStripSplitter,
     ImageVisionAnalyzer,
     ImageTagger,
     ScenePlanner,
@@ -62,7 +63,7 @@ from modules.video.download_utils import (
 )
 
 
-print("######## WORKFLOW_ENGINE SPRINT96-2 LOADED ########", flush=True)
+print("######## WORKFLOW_ENGINE SPRINT98-5 LOADED ########", flush=True)
 
 
 class WorkflowEngine:
@@ -87,7 +88,7 @@ class WorkflowEngine:
     → CapCutExport
     """
 
-    WORKFLOW_VERSION = "workflow-engine-96-2"
+    WORKFLOW_VERSION = "workflow-engine-98-5"
 
     STEP_NAMES = [
         "product_plan",
@@ -1149,7 +1150,7 @@ class WorkflowEngine:
             )
         )
         print(
-            "######## RUN_PROJECT SPRINT96-2 START ########",
+            "######## RUN_PROJECT SPRINT98-5 START ########",
             flush=True,
         )
         print(
@@ -1200,6 +1201,89 @@ class WorkflowEngine:
             else ""
         )
 
+        image_strip_result = {
+            "ok": False,
+            "ready": False,
+            "version": ImageStripSplitter.VERSION,
+            "status": "not_run",
+            "image_count": 0,
+            "images": [],
+            "strip_detected": False,
+            "source_summaries": [],
+            "warnings": [],
+            "errors": [],
+        }
+
+        if len(manual_product_image_paths) == 1:
+            try:
+                strip_source_path = manual_product_image_paths[0]
+                strip_output_dir = (
+                    Path("assets")
+                    / "products"
+                    / f"project_{getattr(project, 'id', '')}"
+                )
+
+                image_strip_result = ImageStripSplitter().process(
+                    uploaded_images=[strip_source_path],
+                    project_id=getattr(project, "id", ""),
+                    product_name=(
+                        getattr(project, "product_name", "")
+                        or getattr(project, "title", "")
+                        or "선택 상품"
+                    ),
+                    output_dir=strip_output_dir,
+                    max_images=40,
+                    split_strip=True,
+                    preserve_original=False,
+                    clear_previous=False,
+                )
+
+                if image_strip_result.get("strip_detected"):
+                    split_images = list(
+                        image_strip_result.get("images", []) or []
+                    )
+                    split_paths = [
+                        str(item.get("path") or "")
+                        for item in split_images
+                        if str(item.get("path") or "").strip()
+                    ]
+
+                    if split_paths:
+                        manual_product_image_paths = split_paths
+                        manual_product_image_path = split_paths[0]
+
+            except Exception as exc:
+                image_strip_result.update(
+                    status="failed",
+                    errors=[f"{type(exc).__name__}: {exc}"],
+                )
+
+        print(
+            "[Sprint98-5 Image Strip] Version:",
+            image_strip_result.get("version", ""),
+            flush=True,
+        )
+        print(
+            "[Sprint98-5 Image Strip] Status:",
+            image_strip_result.get("status", ""),
+            flush=True,
+        )
+        print(
+            "[Sprint98-5 Image Strip] Detected:",
+            image_strip_result.get("strip_detected", False),
+            flush=True,
+        )
+        print(
+            "[Sprint98-5 Image Strip] Count:",
+            image_strip_result.get("image_count", 0),
+            flush=True,
+        )
+        print(
+            "[Sprint98-5 Image Strip] Errors:",
+            image_strip_result.get("errors", []),
+            flush=True,
+        )
+
         print(
             "[Sprint94-1 Manual Images] Count:",
             len(manual_product_image_paths),
@@ -1225,6 +1309,7 @@ class WorkflowEngine:
             "workflow_version": self.WORKFLOW_VERSION,
             "auto_connected": auto_connected,
             "youtube_privacy_status": youtube_privacy_status,
+            "image_strip_splitter": image_strip_result,
         }
 
         # 1. Product Plan
@@ -1309,10 +1394,17 @@ class WorkflowEngine:
 
         # 1-1. Sprint93-1 Multi Image Collector
         if manual_product_image_paths:
-            multi_image_result = self._build_manual_product_image_result(
-                manual_product_image_paths,
-                project,
-            )
+            if (
+                image_strip_result.get("strip_detected")
+                and image_strip_result.get("images")
+            ):
+                multi_image_result = image_strip_result
+            else:
+                multi_image_result = self._build_manual_product_image_result(
+                    manual_product_image_paths,
+                    project,
+                )
+
             product_images = list(
                 multi_image_result.get("images", []) or []
             )
@@ -1739,7 +1831,7 @@ class WorkflowEngine:
             flush=True,
         )
 
-        # Sprint96-1 Director Manifest → scene_XX.mp4 생성
+        # Sprint97-1 Director Manifest → scene_XX.mp4 생성 + 실패 장면 재시도
         try:
             scene_video_result = SceneVideoGenerator().generate(
                 director_manifest_path=director_manifest_result.get(
@@ -1751,6 +1843,9 @@ class WorkflowEngine:
                 product_name=product_name_for_director,
                 aspect_ratio="9:16",
                 update_manifest=True,
+                max_attempts=2,
+                retry_delay_seconds=2.0,
+                reuse_existing=True,
             )
         except Exception as exc:
             scene_video_result.update(
@@ -1760,32 +1855,44 @@ class WorkflowEngine:
 
         outputs["scene_video_generation"] = scene_video_result
         print(
-            "[Sprint96-1 Scene Video Generator] Version:",
+            "[Sprint97-1 Scene Video Generator] Version:",
             scene_video_result.get("version", ""),
             flush=True,
         )
         print(
-            "[Sprint96-1 Scene Video Generator] Status:",
+            "[Sprint97-1 Scene Video Generator] Status:",
             scene_video_result.get("status", ""),
             flush=True,
         )
         print(
-            "[Sprint96-1 Scene Video Generator] Generated:",
+            "[Sprint97-1 Scene Video Generator] Attempts:",
+            scene_video_result.get("attempt_count", 0),
+            "/",
+            scene_video_result.get("max_attempts", 0),
+            flush=True,
+        )
+        print(
+            "[Sprint97-1 Scene Video Generator] Reused:",
+            scene_video_result.get("reused_scene_count", 0),
+            flush=True,
+        )
+        print(
+            "[Sprint97-1 Scene Video Generator] Generated:",
             scene_video_result.get("generated_scene_count", 0),
             flush=True,
         )
         print(
-            "[Sprint96-1 Scene Video Generator] Failed:",
+            "[Sprint97-1 Scene Video Generator] Failed:",
             scene_video_result.get("failed_scene_count", 0),
             flush=True,
         )
         print(
-            "[Sprint96-1 Scene Video Generator] Files:",
+            "[Sprint97-1 Scene Video Generator] Files:",
             scene_video_result.get("generated_files", []),
             flush=True,
         )
         print(
-            "[Sprint96-1 Scene Video Generator] Errors:",
+            "[Sprint97-1 Scene Video Generator] Errors:",
             scene_video_result.get("errors", []),
             flush=True,
         )
