@@ -5,6 +5,7 @@ import json
 import mimetypes
 import shutil
 import threading
+import time
 
 from modules.product.product_engine import ProductEngine
 from modules.source.source_video_engine import SourceVideoEngine
@@ -66,7 +67,7 @@ from modules.video.download_utils import (
 )
 
 
-print("######## WORKFLOW_ENGINE SPRINT102-4 LOADED ########", flush=True)
+print("######## WORKFLOW_ENGINE SPRINT103-1 LOADED ########", flush=True)
 
 
 class WorkflowEngine:
@@ -91,7 +92,7 @@ class WorkflowEngine:
     → CapCutExport
     """
 
-    WORKFLOW_VERSION = "workflow-engine-102-4"
+    WORKFLOW_VERSION = "workflow-engine-103-1"
 
     # Sprint102-3: 동일 프로젝트의 WorkflowEngine 중복 진입을 차단합니다.
     _RUN_GUARD = threading.RLock()
@@ -1303,7 +1304,7 @@ class WorkflowEngine:
             )
         )
         print(
-            "######## RUN_PROJECT SPRINT102-4 START ########",
+            "######## RUN_PROJECT SPRINT103-1 START ########",
             flush=True,
         )
         print(
@@ -2840,27 +2841,73 @@ class WorkflowEngine:
             flush=True,
         )
 
-        # Sprint97-1 Director Manifest → scene_XX.mp4 생성 + 실패 장면 재시도
+        # Sprint103-1: Veo 429 발생 후 1시간 동안 API 호출 자체를 즉시 건너뜁니다.
+        quota_guard_path = Path(director_output_dir) / "veo_quota_guard.json"
+        quota_guard_cooldown_seconds = 60 * 60
+        quota_guard_active = False
+        quota_guard_remaining_seconds = 0
+
         try:
-            scene_video_result = SceneVideoGenerator().generate(
-                director_manifest_path=director_manifest_result.get(
-                    "manifest_path",
-                    "",
-                ),
-                output_dir=director_output_dir,
-                project_id=project_id_for_director,
-                product_name=product_name_for_director,
-                aspect_ratio="9:16",
-                update_manifest=True,
-                max_attempts=1,
-                retry_delay_seconds=0.0,
-                reuse_existing=True,
-            )
-        except Exception as exc:
+            if quota_guard_path.exists():
+                quota_guard_data = json.loads(
+                    quota_guard_path.read_text(encoding="utf-8")
+                )
+                blocked_at = float(quota_guard_data.get("blocked_at", 0) or 0)
+                elapsed = max(0.0, time.time() - blocked_at)
+                if elapsed < quota_guard_cooldown_seconds:
+                    quota_guard_active = True
+                    quota_guard_remaining_seconds = int(
+                        quota_guard_cooldown_seconds - elapsed
+                    )
+                else:
+                    quota_guard_path.unlink(missing_ok=True)
+        except Exception:
+            quota_guard_active = False
+            quota_guard_remaining_seconds = 0
+
+        if quota_guard_active:
             scene_video_result.update(
-                status="failed",
-                errors=[f"{type(exc).__name__}: {exc}"],
+                ok=False,
+                ready=False,
+                status="skipped_quota_cooldown",
+                generated_files=[],
+                errors=[],
+                quota_exhausted=True,
+                retry_blocked=True,
+                skip_reason="Gemini/Veo quota cooldown active",
+                quota_guard_path=str(quota_guard_path),
+                quota_guard_remaining_seconds=quota_guard_remaining_seconds,
             )
+            print(
+                "[Sprint103-1 Veo Fast Skip] Status: skipped_quota_cooldown",
+                flush=True,
+            )
+            print(
+                "[Sprint103-1 Veo Fast Skip] Remaining Seconds:",
+                quota_guard_remaining_seconds,
+                flush=True,
+            )
+        else:
+            try:
+                scene_video_result = SceneVideoGenerator().generate(
+                    director_manifest_path=director_manifest_result.get(
+                        "manifest_path",
+                        "",
+                    ),
+                    output_dir=director_output_dir,
+                    project_id=project_id_for_director,
+                    product_name=product_name_for_director,
+                    aspect_ratio="9:16",
+                    update_manifest=True,
+                    max_attempts=1,
+                    retry_delay_seconds=0.0,
+                    reuse_existing=True,
+                )
+            except Exception as exc:
+                scene_video_result.update(
+                    status="failed",
+                    errors=[f"{type(exc).__name__}: {exc}"],
+                )
 
         scene_video_errors = list(scene_video_result.get("errors") or [])
         scene_video_error_text = " ".join(
@@ -2878,6 +2925,34 @@ class WorkflowEngine:
         )
         scene_video_result["quota_exhausted"] = quota_exhausted
         scene_video_result["retry_blocked"] = quota_exhausted
+
+        if quota_exhausted and not quota_guard_active:
+            try:
+                quota_guard_path.parent.mkdir(parents=True, exist_ok=True)
+                quota_guard_path.write_text(
+                    json.dumps(
+                        {
+                            "blocked_at": time.time(),
+                            "reason": "RESOURCE_EXHAUSTED",
+                            "cooldown_seconds": quota_guard_cooldown_seconds,
+                        },
+                        ensure_ascii=False,
+                        indent=2,
+                    ),
+                    encoding="utf-8",
+                )
+                scene_video_result["quota_guard_path"] = str(quota_guard_path)
+                print(
+                    "[Sprint103-1 Veo Fast Skip] Guard Saved:",
+                    str(quota_guard_path),
+                    flush=True,
+                )
+            except Exception as exc:
+                print(
+                    "[Sprint103-1 Veo Fast Skip] Guard Save ERROR:",
+                    f"{type(exc).__name__}: {exc}",
+                    flush=True,
+                )
 
         outputs["scene_video_generation"] = scene_video_result
         print(
@@ -5151,7 +5226,7 @@ class WorkflowEngine:
         final_state = state.load(job_id)
 
         print(
-            "######## RUN_PROJECT SPRINT102-4 END ########",
+            "######## RUN_PROJECT SPRINT103-1 END ########",
             flush=True,
         )
 
