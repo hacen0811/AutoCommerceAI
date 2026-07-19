@@ -12,7 +12,7 @@ from PIL import Image, ImageChops, ImageStat
 
 class ImageStripSplitter:
     """
-    Sprint98-6 Image Strip Splitter
+    Sprint105-1 Smart Image Strip Engine
 
     역할:
     - 세로로 이어진 상품 이미지 스트립 1장을 자동 분할
@@ -23,8 +23,8 @@ class ImageStripSplitter:
     - 원본 이미지 보존 여부 선택 가능
     """
 
-    VERSION = "image-strip-splitter-98-6"
-    SOURCE_VERSION = "image-strip-splitter-98-4"
+    VERSION = "smart-image-strip-105-1"
+    SOURCE_VERSION = "image-strip-splitter-98-6"
 
     IMAGE_EXTENSIONS = {
         ".jpg",
@@ -115,7 +115,7 @@ class ImageStripSplitter:
                     min_content_ratio=min_content_ratio,
                 )
                 split_method = (
-                    "white_gap"
+                    "photo_block"
                     if len(segments) > 1
                     else "strip_fallback_single"
                 )
@@ -400,414 +400,310 @@ class ImageStripSplitter:
         min_content_ratio: float,
     ) -> List[Tuple[int, int]]:
         """
-        Sprint98-6 하이브리드 세로 스트립 분할.
+        Sprint105-1 사진 블록 중심 세로 스트립 분할.
 
-        분할 기준:
-        - 흰색 여백
-        - 행별 밝기 변화
-        - 행별 색상 변화
-        - 행별 에지 밀도 변화
-        - 너무 긴 구간 자동 재분할
+        기존처럼 작은 밝기 변화마다 경계를 만드는 대신 다음 순서로 처리한다.
+        1) 축소 이미지의 행별 사진성(photo-likeness)을 계산한다.
+        2) 연속된 사진성 구간을 사진 블록 후보로 만든다.
+        3) 짧은 텍스트/여백 구간은 인접 사진 블록에 병합한다.
+        4) 지나치게 긴 블록만 안전한 저밀도 지점에서 재분할한다.
+        5) 작은 아이콘·버튼·얇은 설명 조각은 독립 세그먼트로 만들지 않는다.
 
-        쿠팡/타오바오/1688 상세 이미지처럼 흰 여백이 거의 없어도
-        장면 경계를 추정해서 여러 구간으로 나눈다.
+        반환 형식은 기존과 동일한 (top, bottom) 목록이므로 WorkflowEngine 및
+        manifest 구조와의 호환성을 유지한다.
         """
         width, height = image.size
 
         if width <= 0 or height <= 0:
             return []
 
-        analysis_width = min(width, 320)
+        analysis_width = min(width, 360)
         analysis_height = max(
             1,
             int(round(height * analysis_width / max(width, 1))),
         )
-
         analysis = image.resize(
             (analysis_width, analysis_height),
             Image.Resampling.BILINEAR,
         ).convert("RGB")
-
         scale_y = height / max(analysis_height, 1)
 
         row_non_white: List[float] = []
         row_brightness: List[float] = []
-        row_color: List[Tuple[float, float, float]] = []
-        row_edge: List[float] = []
-
-        previous_gray: List[float] | None = None
+        row_variance: List[float] = []
+        row_saturation: List[float] = []
+        row_horizontal_detail: List[float] = []
 
         for y in range(analysis_height):
-            row = list(
-                analysis.crop(
-                    (0, y, analysis_width, y + 1)
-                ).getdata()
-            )
-
+            row = list(analysis.crop((0, y, analysis_width, y + 1)).getdata())
             if not row:
                 row_non_white.append(0.0)
                 row_brightness.append(255.0)
-                row_color.append((255.0, 255.0, 255.0))
-                row_edge.append(0.0)
+                row_variance.append(0.0)
+                row_saturation.append(0.0)
+                row_horizontal_detail.append(0.0)
                 continue
 
-            non_white = 0
-            red_sum = 0.0
-            green_sum = 0.0
-            blue_sum = 0.0
             gray_values: List[float] = []
+            saturation_values: List[float] = []
+            non_white = 0
+            horizontal_detail = 0.0
+            previous_gray: float | None = None
 
             for red, green, blue in row:
-                red_sum += red
-                green_sum += green
-                blue_sum += blue
-
-                if (
-                    red < white_threshold
-                    or green < white_threshold
-                    or blue < white_threshold
-                ):
-                    non_white += 1
-
-                gray_values.append(
-                    0.299 * red + 0.587 * green + 0.114 * blue
+                gray = 0.299 * red + 0.587 * green + 0.114 * blue
+                gray_values.append(gray)
+                maximum = max(red, green, blue)
+                minimum = min(red, green, blue)
+                saturation_values.append(
+                    0.0 if maximum <= 0 else (maximum - minimum) / maximum
                 )
 
-            count = max(len(row), 1)
+                if min(red, green, blue) < white_threshold:
+                    non_white += 1
 
-            mean_red = red_sum / count
-            mean_green = green_sum / count
-            mean_blue = blue_sum / count
-            mean_brightness = (
-                0.299 * mean_red
-                + 0.587 * mean_green
-                + 0.114 * mean_blue
-            )
+                if previous_gray is not None:
+                    horizontal_detail += abs(gray - previous_gray)
+                previous_gray = gray
+
+            count = max(len(row), 1)
+            mean_gray = sum(gray_values) / count
+            variance = sum(
+                (value - mean_gray) ** 2 for value in gray_values
+            ) / count
 
             row_non_white.append(non_white / count)
-            row_brightness.append(mean_brightness)
-            row_color.append((mean_red, mean_green, mean_blue))
+            row_brightness.append(mean_gray)
+            row_variance.append(variance ** 0.5)
+            row_saturation.append(sum(saturation_values) / count)
+            row_horizontal_detail.append(
+                horizontal_detail / max(count - 1, 1)
+            )
 
-            if previous_gray is None:
-                edge_value = 0.0
-            else:
-                edge_value = sum(
-                    abs(current - previous)
-                    for current, previous in zip(
-                        gray_values,
-                        previous_gray,
-                    )
-                ) / count
-
-            row_edge.append(edge_value)
-            previous_gray = gray_values
-
-        def smooth(values: List[float], radius: int = 2) -> List[float]:
+        def smooth(values: List[float], radius: int) -> List[float]:
             if not values:
                 return []
-
-            smoothed: List[float] = []
-
+            prefix = [0.0]
+            for value in values:
+                prefix.append(prefix[-1] + value)
+            result: List[float] = []
             for index in range(len(values)):
-                start = max(0, index - radius)
-                end = min(len(values), index + radius + 1)
-                window = values[start:end]
-                smoothed.append(sum(window) / max(len(window), 1))
+                left = max(0, index - radius)
+                right = min(len(values), index + radius + 1)
+                result.append(
+                    (prefix[right] - prefix[left]) / max(right - left, 1)
+                )
+            return result
 
-            return smoothed
+        smooth_non_white = smooth(row_non_white, radius=3)
+        smooth_brightness = smooth(row_brightness, radius=3)
+        smooth_variance = smooth(row_variance, radius=4)
+        smooth_saturation = smooth(row_saturation, radius=4)
+        smooth_detail = smooth(row_horizontal_detail, radius=3)
 
-        smooth_non_white = smooth(row_non_white, radius=2)
-        smooth_brightness = smooth(row_brightness, radius=2)
-        smooth_edge = smooth(row_edge, radius=2)
-
-        content_threshold = max(
-            0.003,
-            min(float(min_content_ratio or 0.015), 0.025),
-        )
         scaled_min_gap = max(
             2,
             int(round(min_gap_height / max(scale_y, 0.001))),
         )
         scaled_min_segment = max(
-            8,
+            10,
             int(round(min_segment_height / max(scale_y, 0.001))),
         )
 
-        boundary_scores = [0.0 for _ in range(analysis_height)]
-
-        # 1) 흰색 여백 감지
-        gap_start = None
-
-        for y, ratio in enumerate(smooth_non_white):
-            is_gap = ratio < content_threshold
-
-            if is_gap and gap_start is None:
-                gap_start = y
-            elif not is_gap and gap_start is not None:
-                gap_length = y - gap_start
-
-                if gap_length >= scaled_min_gap:
-                    center = (gap_start + y) // 2
-                    boundary_scores[center] += 8.0
-
-                gap_start = None
-
-        if gap_start is not None:
-            gap_length = analysis_height - gap_start
-
-            if gap_length >= scaled_min_gap:
-                center = (gap_start + analysis_height) // 2
-                boundary_scores[center] += 8.0
-
-        # 2) 행별 밝기/색상/에지 변화 감지
-        for y in range(2, analysis_height - 2):
-            brightness_change = abs(
-                smooth_brightness[y + 1]
-                - smooth_brightness[y - 1]
-            )
-
-            color_before = row_color[y - 1]
-            color_after = row_color[y + 1]
-            color_change = sum(
-                abs(after - before)
-                for before, after in zip(
-                    color_before,
-                    color_after,
-                )
-            ) / 3.0
-
-            edge_change = abs(
-                smooth_edge[y + 1]
-                - smooth_edge[y - 1]
-            )
-
-            content_change = abs(
-                smooth_non_white[y + 1]
-                - smooth_non_white[y - 1]
-            )
+        # 제품 사진은 일반적으로 충분한 면적, 색 변화, 질감 중 둘 이상을 가진다.
+        photo_scores: List[float] = []
+        for index in range(analysis_height):
+            density = smooth_non_white[index]
+            variance = smooth_variance[index]
+            saturation = smooth_saturation[index]
+            detail = smooth_detail[index]
+            brightness = smooth_brightness[index]
 
             score = 0.0
+            score += min(3.0, density * 5.0)
+            score += min(2.5, variance / 18.0)
+            score += min(2.0, saturation * 7.0)
+            score += min(2.5, detail / 10.0)
 
-            if brightness_change >= 10:
-                score += min(3.0, brightness_change / 12.0)
+            # 거의 흰 여백은 사진 점수를 강하게 낮춘다.
+            if density < max(0.008, min_content_ratio * 0.55):
+                score -= 4.0
+            if brightness >= 250 and density < 0.03:
+                score -= 2.0
 
-            if color_change >= 12:
-                score += min(3.0, color_change / 15.0)
+            photo_scores.append(score)
 
-            if edge_change >= 8:
-                score += min(2.5, edge_change / 10.0)
+        smooth_photo_scores = smooth(photo_scores, radius=5)
+        active_threshold = 2.15
+        active_rows = [score >= active_threshold for score in smooth_photo_scores]
 
-            if content_change >= 0.08:
-                score += min(2.5, content_change * 12.0)
-
-            # 아주 밝고 비어 있는 행은 경계 가능성을 추가한다.
-            if (
-                smooth_brightness[y] >= 247
-                and smooth_non_white[y] < content_threshold * 1.5
-            ):
-                score += 2.0
-
-            boundary_scores[y] += score
-
-        # 3) 후보 경계 추출
-        candidates: List[Tuple[float, int]] = []
-
-        for y in range(1, analysis_height - 1):
-            score = boundary_scores[y]
-
-            if score < 3.2:
-                continue
-
-            if (
-                score >= boundary_scores[y - 1]
-                and score >= boundary_scores[y + 1]
-            ):
-                candidates.append((score, y))
-
-        candidates.sort(
-            key=lambda item: (-item[0], item[1])
+        # 짧은 비활성 구간은 사진 속 텍스트/여백일 가능성이 크므로 메운다.
+        maximum_internal_gap = max(
+            scaled_min_gap * 4,
+            int(round(analysis_width * 0.16)),
         )
+        gap_start: int | None = None
+        for y, active in enumerate(active_rows + [True]):
+            if not active and gap_start is None:
+                gap_start = y
+            elif active and gap_start is not None:
+                gap_end = y
+                left_active = gap_start > 0 and active_rows[gap_start - 1]
+                right_active = gap_end < analysis_height and (
+                    active_rows[gap_end] if gap_end < analysis_height else False
+                )
+                if (
+                    left_active
+                    and right_active
+                    and gap_end - gap_start <= maximum_internal_gap
+                ):
+                    for fill_y in range(gap_start, gap_end):
+                        active_rows[fill_y] = True
+                gap_start = None
 
-        selected_analysis: List[int] = []
-        minimum_distance = max(
+        # 짧은 활성 조각은 아이콘/버튼일 가능성이 높으므로 제거한다.
+        minimum_photo_run = max(
             scaled_min_segment,
-            int(round(analysis_width * 0.35)),
+            int(round(analysis_width * 0.42)),
         )
+        run_start: int | None = None
+        for y, active in enumerate(active_rows + [False]):
+            if active and run_start is None:
+                run_start = y
+            elif not active and run_start is not None:
+                if y - run_start < minimum_photo_run:
+                    for remove_y in range(run_start, y):
+                        active_rows[remove_y] = False
+                run_start = None
 
-        for score, y in candidates:
-            if y < minimum_distance:
+        candidate_blocks: List[Tuple[int, int]] = []
+        block_start: int | None = None
+        for y, active in enumerate(active_rows + [False]):
+            if active and block_start is None:
+                block_start = y
+            elif not active and block_start is not None:
+                if y - block_start >= minimum_photo_run:
+                    candidate_blocks.append((block_start, y))
+                block_start = None
+
+        # 인접한 사진 블록 사이의 짧은 설명문은 한 장면으로 병합한다.
+        merged_blocks: List[Tuple[int, int]] = []
+        merge_gap = max(
+            scaled_min_gap * 6,
+            int(round(analysis_width * 0.32)),
+        )
+        for top, bottom in candidate_blocks:
+            if not merged_blocks:
+                merged_blocks.append((top, bottom))
                 continue
 
-            if analysis_height - y < minimum_distance:
-                continue
+            previous_top, previous_bottom = merged_blocks[-1]
+            gap = top - previous_bottom
 
-            if any(
-                abs(y - existing) < minimum_distance
-                for existing in selected_analysis
-            ):
-                continue
+            if gap <= merge_gap:
+                gap_density = (
+                    sum(smooth_non_white[previous_bottom:top]) / max(gap, 1)
+                    if gap > 0
+                    else 0.0
+                )
+                # 짧고 내용이 적은 간격은 사진 내부 설명 영역으로 판단한다.
+                if gap_density < 0.22:
+                    merged_blocks[-1] = (previous_top, bottom)
+                    continue
 
-            selected_analysis.append(y)
+            merged_blocks.append((top, bottom))
 
-        selected_analysis.sort()
-
-        boundaries = [0]
-        boundaries.extend(
-            max(
-                0,
-                min(
-                    height,
-                    int(round(y * scale_y)),
-                ),
+        # 원본 좌표로 변환하면서 약간의 문맥 여백을 포함한다.
+        padding = max(4, int(round(width * 0.025)))
+        original_blocks: List[Tuple[int, int]] = []
+        for top, bottom in merged_blocks:
+            original_top = max(0, int(round(top * scale_y)) - padding)
+            original_bottom = min(
+                height,
+                int(round(bottom * scale_y)) + padding,
             )
-            for y in selected_analysis
-        )
-        boundaries.append(height)
-        boundaries = sorted(set(boundaries))
+            if original_bottom - original_top >= min_segment_height:
+                original_blocks.append((original_top, original_bottom))
 
-        # 4) 너무 긴 구간은 자동 균등 분할
-        preferred_height = max(
-            int(width * 1.15),
-            min_segment_height * 3,
-        )
-        maximum_height = max(
-            int(width * 2.2),
-            preferred_height * 2,
-        )
+        # 너무 긴 사진 블록만 저밀도 지점에서 재분할한다.
+        preferred_height = max(int(width * 1.35), min_segment_height * 4)
+        maximum_height = max(int(width * 2.6), preferred_height * 2)
+        refined_blocks: List[Tuple[int, int]] = []
 
-        expanded_boundaries = [boundaries[0]]
-
-        for top, bottom in zip(boundaries, boundaries[1:]):
-            segment_height = bottom - top
-
-            if segment_height <= maximum_height:
-                expanded_boundaries.append(bottom)
+        for top, bottom in original_blocks:
+            block_height = bottom - top
+            if block_height <= maximum_height:
+                refined_blocks.append((top, bottom))
                 continue
 
-            piece_count = max(
-                2,
-                int(round(segment_height / preferred_height)),
-            )
-            piece_height = segment_height / piece_count
+            piece_count = max(2, int(round(block_height / preferred_height)))
+            cut_points = [top]
 
             for piece_index in range(1, piece_count):
-                candidate = int(
-                    round(top + piece_height * piece_index)
-                )
-
-                # 후보 주변에서 가장 낮은 콘텐츠 밀도 또는 가장 큰 변화 지점을 찾는다.
-                search_radius = max(
-                    min_segment_height,
-                    int(width * 0.18),
-                )
-                search_top = max(
-                    top + min_segment_height,
-                    candidate - search_radius,
-                )
-                search_bottom = min(
-                    bottom - min_segment_height,
-                    candidate + search_radius,
-                )
-
-                best_y = candidate
-                best_score = float("-inf")
+                expected = int(round(top + block_height * piece_index / piece_count))
+                search_radius = max(min_segment_height, int(width * 0.22))
+                search_top = max(top + min_segment_height, expected - search_radius)
+                search_bottom = min(bottom - min_segment_height, expected + search_radius)
+                best_y = expected
+                best_value = float("inf")
 
                 for original_y in range(search_top, search_bottom + 1):
                     analysis_y = max(
                         0,
                         min(
                             analysis_height - 1,
-                            int(round(original_y / scale_y)),
+                            int(round(original_y / max(scale_y, 0.001))),
                         ),
                     )
-
-                    density_score = (
-                        1.0 - min(
-                            1.0,
-                            smooth_non_white[analysis_y]
-                            / max(content_threshold * 8.0, 0.001),
-                        )
+                    value = (
+                        smooth_non_white[analysis_y] * 2.2
+                        + max(0.0, smooth_photo_scores[analysis_y]) * 0.35
                     )
-                    change_score = boundary_scores[analysis_y] / 8.0
-                    combined = density_score + change_score
-
-                    if combined > best_score:
-                        best_score = combined
+                    if value < best_value:
+                        best_value = value
                         best_y = original_y
 
-                if (
-                    best_y - expanded_boundaries[-1]
-                    >= min_segment_height
-                ):
-                    expanded_boundaries.append(best_y)
+                if best_y - cut_points[-1] >= min_segment_height:
+                    cut_points.append(best_y)
 
-            expanded_boundaries.append(bottom)
+            cut_points.append(bottom)
+            for split_top, split_bottom in zip(cut_points, cut_points[1:]):
+                if split_bottom - split_top >= min_segment_height:
+                    refined_blocks.append((split_top, split_bottom))
 
-        boundaries = sorted(set(expanded_boundaries))
-
-        # 5) 구간 생성 및 작은 구간 병합
-        raw_segments: List[Tuple[int, int]] = []
-
-        for top, bottom in zip(boundaries, boundaries[1:]):
-            if bottom - top <= 0:
-                continue
-
-            if bottom - top < min_segment_height:
-                if raw_segments:
-                    previous_top, _ = raw_segments[-1]
-                    raw_segments[-1] = (previous_top, bottom)
-                continue
-
-            raw_segments.append((top, bottom))
-
-        segments: List[Tuple[int, int]] = []
-
-        for top, bottom in raw_segments:
-            segment = image.crop((0, top, width, bottom))
-
-            if self._has_meaningful_content(
-                segment,
-                white_threshold=white_threshold,
-                min_content_ratio=max(
-                    0.002,
-                    min_content_ratio * 0.35,
-                ),
-            ):
-                segments.append((top, bottom))
-            elif segments:
-                previous_top, _ = segments[-1]
-                segments[-1] = (previous_top, bottom)
-
-        # 스트립 감지는 되었지만 후보가 전혀 없으면
-        # 세로 길이를 기준으로 최소 2장 이상 분할한다.
-        if len(segments) <= 1 and height >= width * 1.8:
-            fallback_height = max(
-                int(width * 1.25),
-                min_segment_height * 3,
-            )
-            fallback_count = max(
-                2,
-                min(
-                    20,
-                    int(round(height / fallback_height)),
-                ),
-            )
-
+        # 사진 블록 검출 실패 시 기존처럼 무작정 잘게 자르지 않고,
+        # 큰 세로 이미지일 때만 폭 기준의 안전한 폴백을 사용한다.
+        if not refined_blocks and height >= width * 1.8:
+            fallback_height = max(int(width * 1.5), min_segment_height * 5)
+            fallback_count = max(2, min(12, int(round(height / fallback_height))))
             fallback_boundaries = [
                 int(round(height * index / fallback_count))
                 for index in range(fallback_count + 1)
             ]
+            refined_blocks = [
+                (top, bottom)
+                for top, bottom in zip(
+                    fallback_boundaries,
+                    fallback_boundaries[1:],
+                )
+                if bottom - top >= min_segment_height
+            ]
 
-            segments = []
-
-            for top, bottom in zip(
-                fallback_boundaries,
-                fallback_boundaries[1:],
+        # 최종 의미 있는 콘텐츠 검사 및 지나치게 작은 높이 제거.
+        final_segments: List[Tuple[int, int]] = []
+        minimum_final_height = max(min_segment_height, int(width * 0.55))
+        for top, bottom in refined_blocks:
+            if bottom - top < minimum_final_height:
+                continue
+            segment = image.crop((0, top, width, bottom))
+            if self._has_meaningful_content(
+                segment,
+                white_threshold=white_threshold,
+                min_content_ratio=max(0.004, min_content_ratio * 0.45),
             ):
-                if bottom - top >= min_segment_height:
-                    segments.append((top, bottom))
+                final_segments.append((top, bottom))
 
-        return segments or [(0, height)]
+        return final_segments or [(0, height)]
 
     def _trim_outer_whitespace(
         self,
@@ -934,57 +830,57 @@ class ImageStripSplitter:
         )
 
         print(
-            "[Sprint98-6 Image Strip] Version:",
+            "[Sprint105-1 Smart Strip] Version:",
             result.get("version", ""),
             flush=True,
         )
         print(
-            "[Sprint98-6 Image Strip] Status:",
+            "[Sprint105-1 Smart Strip] Status:",
             result.get("status", ""),
             flush=True,
         )
         print(
-            "[Sprint98-6 Image Strip] Inputs:",
+            "[Sprint105-1 Smart Strip] Inputs:",
             result.get("input_count", 0),
             flush=True,
         )
         print(
-            "[Sprint98-6 Image Strip] Strip Detected:",
+            "[Sprint105-1 Smart Strip] Strip Detected:",
             result.get("strip_detected", False),
             flush=True,
         )
 
         for source in result.get("source_summaries", []):
             print(
-                "[Sprint98-6 Image Strip] Input Size:",
+                "[Sprint105-1 Smart Strip] Input Size:",
                 f"{source.get('width', 0)}x{source.get('height', 0)}",
                 flush=True,
             )
             print(
-                "[Sprint98-6 Image Strip] Detected Segments:",
+                "[Sprint105-1 Smart Strip] Detected Segments:",
                 source.get("segment_count", 0),
                 flush=True,
             )
 
             for index, segment in enumerate(source.get("segments", []), start=1):
                 print(
-                    f"[Sprint98-6 Image Strip] Segment{index}:",
+                    f"[Sprint105-1 Smart Strip] Segment{index}:",
                     f"y={segment.get('top', 0)}~{segment.get('bottom', 0)}",
                     flush=True,
                 )
 
         print(
-            "[Sprint98-6 Image Strip] Saved:",
+            "[Sprint105-1 Smart Strip] Saved:",
             result.get("image_count", 0),
             flush=True,
         )
         print(
-            "[Sprint98-6 Image Strip] Manifest:",
+            "[Sprint105-1 Smart Strip] Manifest:",
             result.get("manifest_path", ""),
             flush=True,
         )
         print(
-            "[Sprint98-6 Image Strip] Errors:",
+            "[Sprint105-1 Smart Strip] Errors:",
             result.get("errors", []),
             flush=True,
         )

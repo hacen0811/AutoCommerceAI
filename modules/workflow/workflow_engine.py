@@ -1,4 +1,4 @@
-from uuid import uuid4
+﻿from uuid import uuid4
 from pathlib import Path
 import hashlib
 import json
@@ -7,6 +7,11 @@ import shutil
 import subprocess
 import threading
 import time
+
+try:
+    from PIL import Image
+except ImportError:
+    Image = None
 
 from modules.product.product_engine import ProductEngine
 from modules.source.source_video_engine import SourceVideoEngine
@@ -41,6 +46,10 @@ from modules.video.gemini_veo_provider import GeminiVeoProvider
 from modules.video.ai_scene_merger import AISceneMerger
 from modules.story import StoryIntelligenceEngine
 from modules.image_ai.image_pool_builder import ImagePoolBuilder
+try:
+    from modules.image_ai.image_extractor import ImageExtractor
+except ImportError:
+    ImageExtractor = None
 from modules.image_ai import (
     ImageStripSplitter,
     ImageVisionAnalyzer,
@@ -68,7 +77,7 @@ from modules.video.download_utils import (
 )
 
 
-print("######## WORKFLOW_ENGINE SPRINT103-5 LOADED ########", flush=True)
+print("######## WORKFLOW_ENGINE SPRINT114-1 LOADED ########", flush=True)
 
 
 class WorkflowEngine:
@@ -93,7 +102,7 @@ class WorkflowEngine:
     → CapCutExport
     """
 
-    WORKFLOW_VERSION = "workflow-engine-103-5"
+    WORKFLOW_VERSION = "workflow-engine-114-1"
 
     # Sprint102-3: 동일 프로젝트의 WorkflowEngine 중복 진입을 차단합니다.
     _RUN_GUARD = threading.RLock()
@@ -232,8 +241,10 @@ class WorkflowEngine:
         image_paths,
         output_path,
         seconds_per_image=2.8,
+        image_pool_result=None,
+        image_role_result=None,
     ):
-        """Veo 장면이 없을 때 현재 프로젝트 이미지로 9:16 모션 영상을 만듭니다."""
+        """Sprint113-1: 리뷰·고텍스트 이미지를 제외한 Smart Motion fallback 영상을 만듭니다."""
         result = {
             "ok": False,
             "status": "not_created",
@@ -241,7 +252,19 @@ class WorkflowEngine:
             "image_count": 0,
             "selected_images": [],
             "rejected_images": [],
+            "duplicate_images": [],
+            "timeline": [],
             "motion_count": 0,
+            "smart_motion_version": "smart-motion-director-111-2",
+            "role_recovery_version": "role-recovery-111-2",
+            "role_recovery_count": 0,
+            "role_recoveries": [],
+            "smart_motion_ready": False,
+            "motion_plan": [],
+            "motion_counts": {},
+            "role_counts": {},
+            "fallback_filter_version": "fallback-image-filter-113-1",
+            "fallback_filter_counts": {},
             "errors": [],
         }
 
@@ -252,14 +275,10 @@ class WorkflowEngine:
                         "ffprobe", "-v", "error",
                         "-select_streams", "v:0",
                         "-show_entries", "stream=width,height",
-                        "-of", "json",
-                        str(path),
+                        "-of", "json", str(path),
                     ],
-                    capture_output=True,
-                    text=True,
-                    encoding="utf-8",
-                    errors="replace",
-                    check=False,
+                    capture_output=True, text=True, encoding="utf-8",
+                    errors="replace", check=False,
                 )
                 payload = json.loads(completed.stdout or "{}")
                 stream = (payload.get("streams") or [{}])[0]
@@ -267,57 +286,313 @@ class WorkflowEngine:
             except Exception:
                 return 0, 0
 
+        def visual_fingerprint(path):
+            """경로가 달라도 같은 사진이면 같은 지문이 나오도록 축소 해시를 만듭니다."""
+            if Image is None:
+                try:
+                    return hashlib.sha256(path.read_bytes()).hexdigest()
+                except Exception:
+                    return str(path.resolve()).lower()
+            try:
+                with Image.open(path) as image:
+                    image = image.convert("L").resize((16, 16))
+                    pixels = list(image.getdata())
+                average = sum(pixels) / max(1, len(pixels))
+                bits = "".join("1" if value >= average else "0" for value in pixels)
+                return f"phash:{int(bits, 2):064x}"
+            except Exception:
+                try:
+                    return hashlib.sha256(path.read_bytes()).hexdigest()
+                except Exception:
+                    return str(path.resolve()).lower()
+
+        # Sprint113-1 Fallback Image Filter
+        # Image Role Classifier의 역할·소스·텍스트 비율을 경로별로 연결합니다.
+        def fallback_path_key(value):
+            try:
+                return str(Path(str(value)).resolve()).lower()
+            except Exception:
+                return str(value or "").replace("\\", "/").lower()
+
+        fallback_image_meta = {}
+        role_payload_for_filter = (
+            image_role_result if isinstance(image_role_result, dict) else {}
+        )
+        for role_item in list(role_payload_for_filter.get("images") or []):
+            if not isinstance(role_item, dict):
+                continue
+            role_path = str(
+                role_item.get("output_path")
+                or role_item.get("path")
+                or role_item.get("source_path")
+                or ""
+            ).strip()
+            if not role_path:
+                continue
+            fallback_image_meta[fallback_path_key(role_path)] = {
+                "role": str(
+                    role_item.get("image_type")
+                    or role_item.get("role")
+                    or "unknown"
+                ).lower(),
+                "source_type": str(role_item.get("source_type") or "").lower(),
+                "text_like_ratio": float(role_item.get("text_like_ratio", 0) or 0),
+            }
+
+        # 중요: 분할기가 만든 순서를 그대로 보존합니다. 크기 정렬을 하지 않습니다.
         candidates = []
-        seen = set()
         rejected = []
+        duplicates = []
+        seen_paths = set()
+        seen_fingerprints = {}
+
         for raw_path in image_paths or []:
             path = Path(str(raw_path or ""))
             try:
-                resolved = path.resolve()
+                resolved_key = str(path.resolve()).lower()
             except Exception:
-                resolved = path
-            key = str(resolved).lower()
-            if not path.is_file() or key in seen:
+                resolved_key = str(path).lower()
+            if not path.is_file() or resolved_key in seen_paths:
                 continue
-            if path.suffix.lower() not in {
-                ".png", ".jpg", ".jpeg", ".webp", ".bmp"
-            }:
+            if path.suffix.lower() not in {".png", ".jpg", ".jpeg", ".webp", ".bmp"}:
                 continue
-            seen.add(key)
+            seen_paths.add(resolved_key)
             width, height = probe_size(path)
-            ratio = (width / height) if height else 0.0
-            # 지나치게 긴 썸네일 스트립/콜라주와 너무 작은 이미지는 제외합니다.
-            if width < 420 or height < 420 or ratio > 2.15 or ratio < 0.38:
-                rejected.append({
+            if width <= 0 or height <= 0:
+                rejected.append({"path": str(path), "reason": "unreadable"})
+                continue
+
+            fingerprint = visual_fingerprint(path)
+            if fingerprint in seen_fingerprints:
+                duplicates.append({
                     "path": str(path),
-                    "width": width,
-                    "height": height,
-                    "reason": "small_or_extreme_ratio",
+                    "same_as": seen_fingerprints[fingerprint],
+                    "fingerprint": fingerprint,
                 })
                 continue
-            # 세로 이미지와 해상도가 큰 이미지를 우선합니다.
-            portrait_bonus = 1 if height >= width else 0
-            area = width * height
-            candidates.append((portrait_bonus, area, path, width, height))
 
-        # 필터 때문에 전부 제외된 경우에는 유효한 원본 이미지를 다시 허용합니다.
-        if not candidates:
-            # 모든 이미지가 1차 기준에서 제외되면 원본을 안전 프레이밍 방식으로 재허용합니다.
-            # 재허용된 이미지는 최종 rejected 집계에서 제외합니다.
-            rejected = []
+            # Sprint103-7 품질 필터:
+            # 긴 상세페이지 스트립에서 잘린 작은 아이콘/버튼/얇은 배너 조각을 제외합니다.
+            # 원본 자체가 저해상도일 수 있으므로 절대 해상도만 보지 않고
+            # 최소 변 길이, 면적, 극단적인 가로세로 비율을 함께 확인합니다.
+            short_side = min(width, height)
+            area = width * height
+            aspect = max(width / max(1, height), height / max(1, width))
+            reject_reason = ""
+            if short_side < 80:
+                reject_reason = f"short_side_too_small:{short_side}"
+            elif area < 10000:
+                reject_reason = f"area_too_small:{area}"
+            elif aspect > 3.0:
+                reject_reason = f"extreme_aspect:{aspect:.2f}"
+
+            if reject_reason:
+                rejected.append({
+                    "path": str(path),
+                    "reason": reject_reason,
+                    "width": width,
+                    "height": height,
+                })
+                continue
+
+            seen_fingerprints[fingerprint] = str(path)
+            # 면적이 크고 비율이 안정적인 이미지를 우선할 수 있도록 점수를 보관합니다.
+            quality_score = area / max(1.0, aspect)
+            candidates.append((path, width, height, fingerprint, quality_score))
+
+        # 고유 이미지가 너무 적으면 시각 해시가 과민했을 수 있으므로 경로 고유값 전체를 사용합니다.
+        if len(candidates) < 3:
+            candidates = []
+            duplicates = []
+            seen_paths = set()
             for raw_path in image_paths or []:
                 path = Path(str(raw_path or ""))
-                if path.is_file() and path.suffix.lower() in {
-                    ".png", ".jpg", ".jpeg", ".webp", ".bmp"
-                }:
+                try:
+                    key = str(path.resolve()).lower()
+                except Exception:
+                    key = str(path).lower()
+                if (
+                    path.is_file()
+                    and key not in seen_paths
+                    and path.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
+                ):
+                    seen_paths.add(key)
                     width, height = probe_size(path)
-                    candidates.append((0, width * height, path, width, height))
+                    if width > 0 and height > 0:
+                        candidates.append((path, width, height, visual_fingerprint(path), width * height))
 
-        candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
-        valid_images = [item[2] for item in candidates[:12]]
+        # Sprint114-1: Fallback 역할 기반 장면 선택기
+        # 목표 순서: hero → usage → usage → detail → feature → cta
+        # - review는 절대 사용하지 않습니다.
+        # - text_like_ratio 0.12 초과 이미지는 제외합니다.
+        # - 부족한 일반 장면은 hero/usage/detail/feature/unknown 순으로 보충합니다.
+        # - comparison은 일반 후보가 부족할 때만 마지막 보충 후보로 사용합니다.
+        # - CTA는 존재할 경우 마지막 장면 한 장만 사용합니다.
+        preferred_roles = ("hero", "usage", "detail", "feature")
+        role_buckets = {role: [] for role in preferred_roles}
+        unknown_items = []
+        comparison_items = []
+        cta_items = []
+        fallback_filter_counts = {
+            "review_excluded": 0,
+            "high_text_excluded": 0,
+            "comparison_deferred": 0,
+            "cta_limited": 0,
+        }
+
+        for item in candidates:
+            path = item[0]
+            meta = fallback_image_meta.get(fallback_path_key(path), {})
+            filename = Path(str(path)).stem.lower()
+            role = str(meta.get("role") or "unknown").lower()
+            source_type = str(meta.get("source_type") or "").lower()
+            text_like_ratio = float(meta.get("text_like_ratio", 0) or 0)
+
+            if role == "unknown":
+                for token in ("comparison", "cta", "review", "hero", "usage", "feature", "detail"):
+                    if token in filename:
+                        role = token
+                        break
+
+            if role == "review" or source_type == "review_image":
+                fallback_filter_counts["review_excluded"] += 1
+                rejected.append({
+                    "path": str(path),
+                    "reason": "fallback_review_excluded",
+                    "role": role,
+                    "source_type": source_type,
+                })
+                continue
+
+            if text_like_ratio > 0.12:
+                fallback_filter_counts["high_text_excluded"] += 1
+                rejected.append({
+                    "path": str(path),
+                    "reason": f"fallback_text_like_ratio:{text_like_ratio:.4f}",
+                    "role": role,
+                    "text_like_ratio": text_like_ratio,
+                })
+                continue
+
+            if role in role_buckets:
+                role_buckets[role].append(item)
+            elif role == "comparison":
+                comparison_items.append(item)
+            elif role == "cta":
+                cta_items.append(item)
+            else:
+                unknown_items.append(item)
+
+        selected_items = []
+        selected_keys = set()
+
+        def item_key(item):
+            return fallback_path_key(item[0])
+
+        def take_first(bucket):
+            while bucket:
+                item = bucket.pop(0)
+                key = item_key(item)
+                if key in selected_keys:
+                    continue
+                selected_keys.add(key)
+                selected_items.append(item)
+                return True
+            return False
+
+        # CTA를 제외한 앞쪽 5장면의 기본 역할 구조입니다.
+        take_first(role_buckets["hero"])
+        take_first(role_buckets["usage"])
+        take_first(role_buckets["usage"])
+        take_first(role_buckets["detail"])
+        take_first(role_buckets["feature"])
+
+        # 기본 역할이 부족하면 안전한 상품 이미지로 5장까지 보충합니다.
+        refill_buckets = [
+            role_buckets["hero"],
+            role_buckets["usage"],
+            role_buckets["detail"],
+            role_buckets["feature"],
+            unknown_items,
+        ]
+        for bucket in refill_buckets:
+            while len(selected_items) < 5 and take_first(bucket):
+                pass
+            if len(selected_items) >= 5:
+                break
+
+        # comparison은 일반 후보로 5장을 채우지 못했을 때만 사용합니다.
+        while len(selected_items) < 5 and take_first(comparison_items):
+            pass
+        fallback_filter_counts["comparison_deferred"] = len(comparison_items)
+
+        # CTA는 반드시 마지막에 한 장만 추가합니다.
+        if cta_items:
+            cta_item = cta_items[-1]
+            cta_key = item_key(cta_item)
+            if cta_key not in selected_keys:
+                selected_keys.add(cta_key)
+                selected_items.append(cta_item)
+            fallback_filter_counts["cta_limited"] = max(0, len(cta_items) - 1)
+
+        # CTA가 없으면 남은 안전 후보로 최대 6장까지 채웁니다.
+        if len(selected_items) < 6:
+            refill_tail = [
+                role_buckets["hero"],
+                role_buckets["usage"],
+                role_buckets["detail"],
+                role_buckets["feature"],
+                unknown_items,
+                comparison_items,
+            ]
+            for bucket in refill_tail:
+                while len(selected_items) < 6 and take_first(bucket):
+                    pass
+                if len(selected_items) >= 6:
+                    break
+
+        valid_items = selected_items[:6]
+        valid_images = [item[0] for item in valid_items]
+        result["fallback_filter_counts"] = fallback_filter_counts
+        result["fallback_role_sequence"] = []
+
+        for item in valid_items:
+            path = item[0]
+            meta = fallback_image_meta.get(fallback_path_key(path), {})
+            role = str(meta.get("role") or "unknown").lower()
+            filename = Path(str(path)).stem.lower()
+            if role == "unknown":
+                for token in ("comparison", "cta", "hero", "usage", "feature", "detail"):
+                    if token in filename:
+                        role = token
+                        break
+            result["fallback_role_sequence"].append(role)
+
+        print("[Sprint114-1 Role Selector] Version: fallback-role-selector-114-1", flush=True)
+        print("[Sprint114-1 Role Selector] Counts:", fallback_filter_counts, flush=True)
+        print("[Sprint114-1 Role Selector] Selected:", len(valid_images), flush=True)
+        print("[Sprint114-1 Role Selector] Sequence:", result["fallback_role_sequence"], flush=True)
         result["image_count"] = len(valid_images)
         result["selected_images"] = [str(item) for item in valid_images]
         result["rejected_images"] = rejected
+        result["duplicate_images"] = duplicates
+
+        print("[Sprint103-7 Quality Filter] Input Count:", len(list(image_paths or [])), flush=True)
+        print("[Sprint103-7 Quality Filter] Unique Count:", len(valid_images), flush=True)
+        print("[Sprint103-7 Quality Filter] Duplicate Count:", len(duplicates), flush=True)
+        print("[Sprint103-7 Quality Filter] Rejected Count:", len(rejected), flush=True)
+        for item in rejected:
+            print(
+                f"[Sprint103-7 Quality Filter] REJECT: {item.get('path')} "
+                f"reason={item.get('reason')}",
+                flush=True,
+            )
+        for index, (path, width, height, fingerprint, quality_score) in enumerate(valid_items, start=1):
+            print(
+                f"[Sprint103-7 Quality Filter] {index:02d}: {path} "
+                f"({width}x{height}) score={quality_score:.0f} {fingerprint[:22]}",
+                flush=True,
+            )
 
         if not valid_images:
             result.update(
@@ -329,83 +604,179 @@ class WorkflowEngine:
         target = Path(str(output_path))
         target.parent.mkdir(parents=True, exist_ok=True)
         temp_dir = target.parent / f".{target.stem}_motion_parts"
+        shutil.rmtree(temp_dir, ignore_errors=True)
         temp_dir.mkdir(parents=True, exist_ok=True)
         concat_path = temp_dir / "concat.txt"
         duration = max(1.8, float(seconds_per_image or 2.8))
         fps = 30
         frame_count = max(54, int(duration * fps))
-        fade_duration = min(0.35, duration / 5.0)
+        fade_duration = min(0.28, duration / 6.0)
         segment_paths = []
 
-        # Sprint103-5: 원본 비율을 보존한 선명한 전경과 흐린 배경을 합성합니다.
-        # 세로 화면을 억지로 cover-crop하지 않아 제품이 과도하게 확대되지 않습니다.
-        motion_filters = [
-            (
-                "split=2[bg][fg];"
-                "[bg]scale=1080:1920:force_original_aspect_ratio=increase,"
-                "crop=1080:1920,gblur=sigma=28,eq=brightness=-0.08:saturation=0.78[bg2];"
-                "[fg]scale=972:1728:force_original_aspect_ratio=decrease[fg2];"
-                "[bg2][fg2]overlay=(W-w)/2:(H-h)/2,"
-                f"zoompan=z='min(zoom+0.00035,1.04)':x='iw/2-(iw/zoom/2)':"
-                f"y='ih/2-(ih/zoom/2)':d={frame_count}:s=1080x1920:fps={fps}"
-            ),
-            (
-                "split=2[bg][fg];"
-                "[bg]scale=1080:1920:force_original_aspect_ratio=increase,"
-                "crop=1080:1920,gblur=sigma=28,eq=brightness=-0.08:saturation=0.78[bg2];"
-                "[fg]scale=972:1728:force_original_aspect_ratio=decrease[fg2];"
-                "[bg2][fg2]overlay=(W-w)/2:(H-h)/2,"
-                f"zoompan=z='if(eq(on,0),1.04,max(1.0,zoom-0.00035))':"
-                f"x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
-                f"d={frame_count}:s=1080x1920:fps={fps}"
-            ),
-            (
-                "split=2[bg][fg];"
-                "[bg]scale=1080:1920:force_original_aspect_ratio=increase,"
-                "crop=1080:1920,gblur=sigma=28,eq=brightness=-0.08:saturation=0.78[bg2];"
-                "[fg]scale=972:1728:force_original_aspect_ratio=decrease[fg2];"
-                "[bg2][fg2]overlay=(W-w)/2:(H-h)/2,"
-                f"zoompan=z='1.025':x='(iw-iw/zoom)*0.40+(iw-iw/zoom)*0.20*on/{max(1, frame_count-1)}':"
-                f"y='ih/2-(ih/zoom/2)':d={frame_count}:s=1080x1920:fps={fps}"
-            ),
-            (
-                "split=2[bg][fg];"
-                "[bg]scale=1080:1920:force_original_aspect_ratio=increase,"
-                "crop=1080:1920,gblur=sigma=28,eq=brightness=-0.08:saturation=0.78[bg2];"
-                "[fg]scale=972:1728:force_original_aspect_ratio=decrease[fg2];"
-                "[bg2][fg2]overlay=(W-w)/2:(H-h)/2,"
-                f"zoompan=z='1.025':x='(iw-iw/zoom)*0.60-(iw-iw/zoom)*0.20*on/{max(1, frame_count-1)}':"
-                f"y='ih/2-(ih/zoom/2)':d={frame_count}:s=1080x1920:fps={fps}"
-            ),
-        ]
+        # Sprint111-1 Smart Motion Director
+        # Image Pool 역할을 경로 기준으로 연결하고, 동일 모션의 연속 사용을 막습니다.
+        motion_library = {
+            "slow_zoom_in": f"zoompan=z='min(zoom+0.00018,1.022)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d={frame_count}:s=1080x1920:fps={fps}",
+            "slow_zoom_out": f"zoompan=z='if(eq(on,0),1.022,max(1.0,zoom-0.00018))':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d={frame_count}:s=1080x1920:fps={fps}",
+            "pan_left_to_right": f"zoompan=z='1.014':x='(iw-iw/zoom)*0.38+(iw-iw/zoom)*0.24*on/{max(1, frame_count-1)}':y='ih/2-(ih/zoom/2)':d={frame_count}:s=1080x1920:fps={fps}",
+            "pan_right_to_left": f"zoompan=z='1.014':x='(iw-iw/zoom)*0.62-(iw-iw/zoom)*0.24*on/{max(1, frame_count-1)}':y='ih/2-(ih/zoom/2)':d={frame_count}:s=1080x1920:fps={fps}",
+            "micro_zoom": f"zoompan=z='min(zoom+0.00011,1.014)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d={frame_count}:s=1080x1920:fps={fps}",
+            "strong_push_in": f"zoompan=z='min(zoom+0.00032,1.038)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d={frame_count}:s=1080x1920:fps={fps}",
+            "gentle_hold": f"zoompan=z='1.006':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d={frame_count}:s=1080x1920:fps={fps}",
+        }
+        role_motion_preferences = {
+            "hero": ["slow_zoom_in", "slow_zoom_out", "strong_push_in"],
+            "usage": ["pan_left_to_right", "pan_right_to_left", "slow_zoom_in"],
+            "detail": ["micro_zoom", "slow_zoom_in", "gentle_hold"],
+            "feature": ["strong_push_in", "micro_zoom", "pan_left_to_right"],
+            "review": ["gentle_hold", "slow_zoom_in", "slow_zoom_out"],
+            "comparison": ["pan_right_to_left", "pan_left_to_right", "gentle_hold"],
+            "cta": ["strong_push_in", "slow_zoom_in", "gentle_hold"],
+            "unknown": ["slow_zoom_in", "slow_zoom_out", "pan_left_to_right", "pan_right_to_left"],
+        }
+
+        def normalize_path_key(value):
+            try:
+                return str(Path(str(value)).resolve()).lower()
+            except Exception:
+                return str(value or "").replace("\\", "/").lower()
+
+        path_role_scores = {}
+        pool_payload = image_pool_result if isinstance(image_pool_result, dict) else {}
+        for role_name, role_items in (pool_payload.get("image_pool") or {}).items():
+            for role_item in list(role_items or []):
+                if not isinstance(role_item, dict):
+                    continue
+                role_path = str(role_item.get("path") or role_item.get("output_path") or "").strip()
+                if not role_path:
+                    continue
+                key = normalize_path_key(role_path)
+                score = float(role_item.get("score", 0) or 0)
+                if key not in path_role_scores or score >= path_role_scores[key][1]:
+                    path_role_scores[key] = (str(role_name or "unknown").lower(), score)
+
+        role_payload = image_role_result if isinstance(image_role_result, dict) else {}
+        for role_item in list(role_payload.get("images") or []):
+            if not isinstance(role_item, dict):
+                continue
+            role_path = str(role_item.get("output_path") or role_item.get("path") or "").strip()
+            role_name = str(role_item.get("image_type") or role_item.get("role") or "unknown").lower()
+            if role_path and normalize_path_key(role_path) not in path_role_scores:
+                path_role_scores[normalize_path_key(role_path)] = (role_name, float(role_item.get("score", 0) or 0))
+
+        # Sprint111-2 Role Recovery
+        # selected_07_comparison.png처럼 파일명에 명확한 역할이 있으면
+        # 이전 분류 결과가 detail/unknown이어도 안전하게 복구합니다.
+        filename_role_tokens = (
+            "comparison", "cta", "review", "hero", "usage", "feature", "detail"
+        )
+
+        def infer_filename_role(value):
+            filename = Path(str(value or "")).stem.lower()
+            normalized = filename.replace("-", "_").replace(" ", "_")
+            for token in filename_role_tokens:
+                if token in normalized:
+                    return token
+            return ""
+
+        motion_plan = []
+        previous_motion = ""
+        for index, image_path in enumerate(valid_images):
+            original_role, role_score = path_role_scores.get(
+                normalize_path_key(image_path), ("unknown", 0.0)
+            )
+            role = str(original_role or "unknown").lower()
+            filename_role = infer_filename_role(image_path)
+            recovery_reason = ""
+
+            if filename_role and filename_role != role:
+                # 명시적 파일명은 최종 선택 단계에서 부여된 역할이므로 우선합니다.
+                role = filename_role
+                recovery_reason = f"filename({filename_role})"
+                recovery_item = {
+                    "scene": index + 1,
+                    "image": str(image_path),
+                    "original_role": str(original_role or "unknown").lower(),
+                    "recovered_role": role,
+                    "reason": recovery_reason,
+                }
+                result["role_recoveries"].append(recovery_item)
+                print(
+                    f"[Sprint111-2 Role Recovery] Scene{index + 1:02d} "
+                    f"original={recovery_item['original_role']} "
+                    f"recovered={role} reason={recovery_reason}",
+                    flush=True,
+                )
+
+            preferences = list(role_motion_preferences.get(role, role_motion_preferences["unknown"]))
+            selected_motion = next((name for name in preferences if name != previous_motion), preferences[0])
+            reason_parts = [
+                f"role={role}",
+                f"consecutive_motion_avoided={selected_motion != previous_motion}",
+            ]
+            if recovery_reason:
+                reason_parts.append(f"role_recovered={recovery_reason}")
+            motion_plan.append({
+                "scene": index + 1,
+                "image": str(image_path),
+                "role": role,
+                "original_role": str(original_role or "unknown").lower(),
+                "role_score": role_score,
+                "motion": selected_motion,
+                "reason": "; ".join(reason_parts),
+            })
+            previous_motion = selected_motion
+
+        result["role_recovery_count"] = len(result["role_recoveries"])
+        print("[Sprint111-2 Role Recovery] Version: role-recovery-111-2", flush=True)
+        print("[Sprint111-2 Role Recovery] Recovered:", result["role_recovery_count"], flush=True)
+
+        result["motion_plan"] = motion_plan
+        result["smart_motion_ready"] = bool(motion_plan)
+        for plan_item in motion_plan:
+            motion_name = plan_item["motion"]
+            role_name = plan_item["role"]
+            result["motion_counts"][motion_name] = result["motion_counts"].get(motion_name, 0) + 1
+            result["role_counts"][role_name] = result["role_counts"].get(role_name, 0) + 1
+            print(
+                f"[Sprint111-2 Smart Motion Director] Scene{plan_item['scene']:02d} "
+                f"role={role_name} motion={motion_name} image={plan_item['image']}",
+                flush=True,
+            )
+        print("[Sprint111-2 Smart Motion Director] Version: smart-motion-director-111-2", flush=True)
+        print("[Sprint111-2 Smart Motion Director] Ready:", result["smart_motion_ready"], flush=True)
+        print("[Sprint111-2 Smart Motion Director] Role Counts:", result["role_counts"], flush=True)
+        print("[Sprint111-2 Smart Motion Director] Motion Counts:", result["motion_counts"], flush=True)
 
         try:
             for index, image_path in enumerate(valid_images):
                 segment_path = temp_dir / f"segment_{index + 1:02d}.mp4"
-                motion = motion_filters[index % len(motion_filters)]
-                video_filter = (
+                plan_item = motion_plan[index]
+                motion_name = plan_item.get("motion", "slow_zoom_in")
+                motion = motion_library[motion_name]
+                # 전경 이미지는 비율을 보존하고, 배경만 화면 전체로 채웁니다.
+                filter_complex = (
+                    "split=2[bg][fg];"
+                    "[bg]scale=1080:1920:force_original_aspect_ratio=increase,"
+                    "crop=1080:1920,gblur=sigma=24,eq=brightness=-0.06:saturation=0.82[bg2];"
+                    "[fg]scale=972:1728:force_original_aspect_ratio=decrease[fg2];"
+                    "[bg2][fg2]overlay=(W-w)/2:(H-h)/2,"
                     f"{motion},setsar=1,"
                     f"fade=t=in:st=0:d={fade_duration:.3f},"
                     f"fade=t=out:st={max(0.0, duration-fade_duration):.3f}:d={fade_duration:.3f},"
                     "format=yuv420p"
                 )
                 command = [
-                    "ffmpeg", "-y", "-loop", "1",
-                    "-i", str(image_path),
-                    "-t", f"{duration:.3f}",
-                    "-vf", video_filter,
-                    "-an", "-r", str(fps),
-                    "-c:v", "libx264", "-preset", "medium", "-crf", "20",
+                    "ffmpeg", "-y", "-loop", "1", "-i", str(image_path),
+                    "-t", f"{duration:.3f}", "-vf", filter_complex,
+                    "-an", "-r", str(fps), "-c:v", "libx264",
+                    "-preset", "medium", "-crf", "20",
                     "-pix_fmt", "yuv420p", "-movflags", "+faststart",
                     str(segment_path),
                 ]
                 completed = subprocess.run(
-                    command,
-                    capture_output=True,
-                    text=True,
-                    encoding="utf-8",
-                    errors="replace",
-                    check=False,
+                    command, capture_output=True, text=True, encoding="utf-8",
+                    errors="replace", check=False,
                 )
                 if completed.returncode != 0 or not segment_path.is_file():
                     result["errors"].append(
@@ -414,6 +785,19 @@ class WorkflowEngine:
                     )
                     continue
                 segment_paths.append(segment_path)
+                timeline_item = {
+                    "scene": index + 1,
+                    "image": str(image_path),
+                    "segment": str(segment_path),
+                    "role": plan_item.get("role", "unknown"),
+                    "motion": motion_name,
+                    "motion_reason": plan_item.get("reason", ""),
+                }
+                result["timeline"].append(timeline_item)
+                print(
+                    f"[Sprint103-7 Timeline] Scene{index + 1:02d} -> {image_path}",
+                    flush=True,
+                )
 
             if not segment_paths:
                 result["status"] = "ffmpeg_segments_failed"
@@ -424,23 +808,17 @@ class WorkflowEngine:
                 return normalized.replace("'", "'\\''")
 
             concat_path.write_text(
-                "\n".join(
-                    f"file '{concat_quote(path)}'" for path in segment_paths
-                ) + "\n",
+                "\n".join(f"file '{concat_quote(path)}'" for path in segment_paths) + "\n",
                 encoding="utf-8",
             )
-            merge_command = [
-                "ffmpeg", "-y", "-f", "concat", "-safe", "0",
-                "-i", str(concat_path),
-                "-c", "copy", "-movflags", "+faststart", str(target),
-            ]
             merged = subprocess.run(
-                merge_command,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                check=False,
+                [
+                    "ffmpeg", "-y", "-f", "concat", "-safe", "0",
+                    "-i", str(concat_path), "-c", "copy",
+                    "-movflags", "+faststart", str(target),
+                ],
+                capture_output=True, text=True, encoding="utf-8",
+                errors="replace", check=False,
             )
             if merged.returncode != 0 or not target.is_file():
                 result.update(
@@ -453,21 +831,16 @@ class WorkflowEngine:
 
             project_id = str(getattr(project, "id", "") or "")
             if project_id and project_id not in target.name:
+                target.unlink(missing_ok=True)
                 result.update(
                     status="blocked_project_mismatch",
-                    errors=[
-                        f"Fallback path does not contain project id {project_id}: {target}"
-                    ],
+                    errors=[f"Fallback path does not contain project id {project_id}: {target}"],
                 )
-                target.unlink(missing_ok=True)
                 return result
 
             result.update(
-                ok=True,
-                status="motion_created",
-                output_path=str(target),
-                motion_count=len(segment_paths),
-                errors=result["errors"],
+                ok=True, status="motion_created", output_path=str(target),
+                motion_count=len(segment_paths), errors=result["errors"],
             )
             return result
         except Exception as exc:
@@ -477,10 +850,7 @@ class WorkflowEngine:
             )
             return result
         finally:
-            try:
-                shutil.rmtree(temp_dir, ignore_errors=True)
-            except Exception:
-                pass
+            shutil.rmtree(temp_dir, ignore_errors=True)
 
     def _normalize_youtube_privacy_status(self, value):
         """YouTube 공개 설정을 API 허용값으로 통일합니다."""
@@ -759,11 +1129,11 @@ class WorkflowEngine:
 
         return merged
 
-    def _run_review_image_ocr(self, image_paths, project):
+    def _run_review_image_ocr(self, image_paths, project, multi_image_mode=False):
         """설치된 ReviewImageOCR 공개 메서드를 찾아 안전하게 실행합니다."""
         result = {
             "ok": False,
-            "status": "not_run",
+            "status": "bypassed_multi_image" if multi_image_mode else "not_run",
             "image_count": len(image_paths),
             "review_count": 0,
             "image_paths": list(image_paths),
@@ -1487,6 +1857,145 @@ class WorkflowEngine:
 
         return result
 
+
+    def _sprint112_1_clean_render_text(self, value, stats):
+        """Sprint112-1: 화면 자막에서 내부 장면 연출 문구를 제거합니다."""
+        if not isinstance(value, str):
+            return value
+
+        blocked_prefixes = (
+            "장면연출", "장면 연출", "연출:", "연출 :",
+            "scene goal", "scene_goal", "visual direction",
+            "visual_direction", "must show", "must_show",
+            "camera instruction", "camera_instruction",
+            "director note", "director_note", "purpose:",
+        )
+
+        kept = []
+        removed = 0
+        for raw_line in value.replace("\\r\\n", "\n").splitlines():
+            line = raw_line.strip()
+            lowered = line.lower()
+            if any(lowered.startswith(prefix) for prefix in blocked_prefixes):
+                removed += 1
+                continue
+            if line:
+                kept.append(line)
+
+        if removed:
+            stats["director_prompt_removed"] += removed
+        return "\n".join(kept).strip()
+
+    def _sprint112_1_render_guard(self, payload):
+        """
+        Sprint112-1 Final Render Input Guard.
+
+        - 리뷰/댓글 장면의 이미지 목록은 장면당 한 장만 유지
+        - 내부 Director 지시 필드는 최종 렌더 입력에서 제거
+        - subtitle/caption은 narration 또는 spoken_text가 있으면 그 값을 우선 사용
+        """
+        stats = {
+            "review_images_removed": 0,
+            "review_scenes_checked": 0,
+            "director_fields_removed": 0,
+            "director_prompt_removed": 0,
+            "subtitle_source": "narration_only",
+        }
+
+        director_keys = {
+            "scene_goal", "visual_direction", "must_show",
+            "camera_instruction", "director_note", "director_prompt",
+            "camera_prompt", "shot_instruction", "motion_instruction",
+            "generation_prompt", "veo_prompt", "prompt_for_video",
+        }
+        text_keys = {
+            "subtitle", "subtitles", "caption", "caption_text",
+            "narration", "spoken_text", "voiceover", "voice_over",
+            "script", "text", "display_text",
+        }
+        image_key_tokens = (
+            "image", "images", "image_path", "image_paths",
+            "review_image", "review_images", "media", "assets",
+            "reference_images", "selected_images",
+        )
+
+        def role_text(node):
+            values = []
+            for key in ("role", "image_role", "scene_role", "purpose", "type", "scene_type"):
+                value = node.get(key)
+                if value is not None:
+                    values.append(str(value).lower())
+            return " ".join(values)
+
+        def unique_items(items):
+            seen = set()
+            result = []
+            for item in items:
+                marker = str(item)
+                if marker in seen:
+                    continue
+                seen.add(marker)
+                result.append(item)
+            return result
+
+        def walk(value, review_context=False):
+            if isinstance(value, dict):
+                local_review = review_context or any(
+                    token in role_text(value)
+                    for token in ("review", "comment", "후기", "댓글")
+                )
+                if local_review:
+                    stats["review_scenes_checked"] += 1
+
+                result = {}
+                preferred_spoken = ""
+                for source_key in ("narration", "spoken_text", "voiceover", "voice_over", "script"):
+                    source_value = value.get(source_key)
+                    if isinstance(source_value, str) and source_value.strip():
+                        preferred_spoken = self._sprint112_1_clean_render_text(source_value, stats)
+                        if preferred_spoken:
+                            break
+
+                for key, child in value.items():
+                    key_lower = str(key).lower()
+                    if key_lower in director_keys or any(
+                        token in key_lower
+                        for token in ("scene_goal", "visual_direction", "must_show", "camera_instruction", "director_note")
+                    ):
+                        stats["director_fields_removed"] += 1
+                        continue
+
+                    if key_lower in text_keys and isinstance(child, str):
+                        if key_lower in {"subtitle", "subtitles", "caption", "caption_text", "display_text"} and preferred_spoken:
+                            result[key] = preferred_spoken
+                        else:
+                            result[key] = self._sprint112_1_clean_render_text(child, stats)
+                        continue
+
+                    if local_review and isinstance(child, list) and any(
+                        token in key_lower for token in image_key_tokens
+                    ):
+                        deduped = unique_items(child)
+                        if len(deduped) > 1:
+                            stats["review_images_removed"] += len(deduped) - 1
+                            deduped = deduped[:1]
+                        result[key] = [walk(item, True) for item in deduped]
+                        continue
+
+                    result[key] = walk(child, local_review)
+                return result
+
+            if isinstance(value, list):
+                return [walk(item, review_context) for item in value]
+
+            if isinstance(value, tuple):
+                return tuple(walk(item, review_context) for item in value)
+
+            return value
+
+        guarded = walk(payload)
+        return guarded, stats
+
     def run_project(
         self,
         project,
@@ -1612,15 +2121,52 @@ class WorkflowEngine:
             else ""
         )
 
-        image_strip_result = {
+        image_extractor_result = {
             "ok": False,
+            "ready": False,
+            "version": (
+                getattr(ImageExtractor, "VERSION", "image-selector-unavailable")
+                if ImageExtractor is not None
+                else "image-selector-unavailable"
+            ),
+            "status": "waiting_for_image_input",
+            "source_count": 0,
+            "selected_count": 0,
+            "images": [],
+            "rejections": [],
+            "warnings": [],
+            "errors": [],
+        }
+        extractor_applied = False
+
+        # Sprint106-1 Multi Product Image Pipeline
+        # - 입력 1장: 긴 상세페이지일 수 있으므로 Smart Strip 실행
+        # - 입력 2장 이상: 각 이미지를 독립 상품 이미지로 간주하고 Strip 완전 우회
+        # 이후 모든 후보를 Image Role Classifier로 전달합니다.
+        multi_image_input_count = len(manual_product_image_paths)
+        multi_image_mode = multi_image_input_count >= 2
+        input_mode = (
+            "multi_image_direct"
+            if multi_image_mode
+            else "single_image_smart_strip"
+            if multi_image_input_count == 1
+            else "no_image"
+        )
+
+        image_strip_result = {
+            "ok": bool(multi_image_mode),
             "ready": False,
             "version": ImageStripSplitter.VERSION,
             "status": "not_run",
             "image_count": 0,
             "images": [],
             "strip_detected": False,
-            "source_summaries": [],
+            "bypassed": bool(multi_image_mode),
+            "input_mode": input_mode,
+            "source_summaries": [
+                {"path": str(path), "mode": "direct_original"}
+                for path in manual_product_image_paths
+            ] if multi_image_mode else [],
             "warnings": [],
             "errors": [],
         }
@@ -1633,7 +2179,6 @@ class WorkflowEngine:
                     / "products"
                     / f"project_{getattr(project, 'id', '')}"
                 )
-
                 image_strip_result = ImageStripSplitter().process(
                     uploaded_images=[strip_source_path],
                     project_id=getattr(project, "id", ""),
@@ -1648,52 +2193,121 @@ class WorkflowEngine:
                     preserve_original=False,
                     clear_previous=False,
                 )
-
                 if image_strip_result.get("strip_detected"):
-                    split_images = list(
-                        image_strip_result.get("images", []) or []
-                    )
                     split_paths = [
                         str(item.get("path") or "")
-                        for item in split_images
+                        for item in list(image_strip_result.get("images", []) or [])
                         if str(item.get("path") or "").strip()
                     ]
-
                     if split_paths:
                         manual_product_image_paths = split_paths
                         manual_product_image_path = split_paths[0]
-
             except Exception as exc:
                 image_strip_result.update(
                     status="failed",
                     errors=[f"{type(exc).__name__}: {exc}"],
                 )
 
-        print(
-            "[Sprint98-5 Image Strip] Version:",
-            image_strip_result.get("version", ""),
-            flush=True,
-        )
-        print(
-            "[Sprint98-5 Image Strip] Status:",
-            image_strip_result.get("status", ""),
-            flush=True,
-        )
-        print(
-            "[Sprint98-5 Image Strip] Detected:",
-            image_strip_result.get("strip_detected", False),
-            flush=True,
-        )
-        print(
-            "[Sprint98-5 Image Strip] Count:",
-            image_strip_result.get("image_count", 0),
-            flush=True,
-        )
-        print(
-            "[Sprint98-5 Image Strip] Errors:",
-            image_strip_result.get("errors", []),
-            flush=True,
-        )
+        print("[Sprint106-1 Multi Image] Input Mode:", input_mode, flush=True)
+        print("[Sprint106-1 Multi Image] Original Count:", multi_image_input_count, flush=True)
+        print("[Sprint106-1 Multi Image] Strip Bypassed:", multi_image_mode, flush=True)
+        for input_index, input_path in enumerate(
+            manual_product_image_paths if multi_image_mode else [],
+            start=1,
+        ):
+            print(
+                f"[Sprint106-1 Multi Image] ORIGINAL {input_index:02d}: {input_path}",
+                flush=True,
+            )
+
+        print("[Sprint98-5 Image Strip] Version:", image_strip_result.get("version", ""), flush=True)
+        print("[Sprint98-5 Image Strip] Status:", image_strip_result.get("status", ""), flush=True)
+        print("[Sprint98-5 Image Strip] Detected:", image_strip_result.get("strip_detected", False), flush=True)
+        print("[Sprint98-5 Image Strip] Count:", image_strip_result.get("image_count", 0), flush=True)
+        print("[Sprint98-5 Image Strip] Errors:", image_strip_result.get("errors", []), flush=True)
+        print("[Sprint106-1 Image Input] Source Count:", len(image_strip_result.get("source_summaries", []) or []), flush=True)
+        print("[Sprint106-1 Image Input] Detected Segments:", image_strip_result.get("image_count", 0), flush=True)
+        for trace_index, trace_item in enumerate(image_strip_result.get("images", []) or [], start=1):
+            print(
+                f"[Sprint106-1 Image Input] {trace_index:02d}: {trace_item.get('path', '')}",
+                flush=True,
+            )
+
+        selector_sources = list(manual_product_image_paths)
+        if selector_sources and ImageExtractor is not None:
+            try:
+                selector_output_dir = (
+                    Path("assets")
+                    / "products"
+                    / f"project_{getattr(project, 'id', '')}"
+                    / "selected_106_1"
+                )
+                selector = ImageExtractor(
+                    max_images=10,
+                    min_images=2,
+                    min_width=64,
+                    min_height=64,
+                    min_area=4096,
+                    min_score=24.0,
+                )
+                if hasattr(selector, "select_from_candidates"):
+                    image_extractor_result = selector.select_from_candidates(
+                        candidate_images=selector_sources,
+                        output_dir=selector_output_dir,
+                        project_id=getattr(project, "id", ""),
+                        product_name=(
+                            getattr(project, "product_name", "")
+                            or getattr(project, "title", "")
+                            or "선택 상품"
+                        ),
+                        max_images=10,
+                        clean_output=True,
+                    )
+                else:
+                    image_extractor_result.update(
+                        status="selector_method_missing",
+                        errors=["ImageExtractor.select_from_candidates가 없습니다."],
+                    )
+                selected_paths = [
+                    str(item.get("output_path") or item.get("path") or "")
+                    for item in list(image_extractor_result.get("images", []) or [])
+                    if str(item.get("output_path") or item.get("path") or "").strip()
+                ]
+                if image_extractor_result.get("ready") and selected_paths:
+                    manual_product_image_paths = selected_paths
+                    manual_product_image_path = selected_paths[0]
+                    extractor_applied = True
+            except Exception as exc:
+                image_extractor_result.update(
+                    status="failed",
+                    errors=[f"{type(exc).__name__}: {exc}"],
+                )
+
+        print("[Sprint106-1 Image Role Classifier] Version:", image_extractor_result.get("version", ""), flush=True)
+        print("[Sprint106-1 Image Role Classifier] Status:", image_extractor_result.get("status", ""), flush=True)
+        print("[Sprint106-1 Image Role Classifier] Ready:", image_extractor_result.get("ready", False), flush=True)
+        print("[Sprint106-1 Image Role Classifier] Applied:", extractor_applied, flush=True)
+        print("[Sprint106-1 Image Role Classifier] Input Count:", image_extractor_result.get("source_count", 0), flush=True)
+        print("[Sprint106-1 Image Role Classifier] Selected Count:", image_extractor_result.get("selected_count", 0), flush=True)
+        print("[Sprint106-1 Image Role Classifier] Rejected Count:", image_extractor_result.get("rejected_count", 0), flush=True)
+        for rejected_item in list(image_extractor_result.get("rejections", []) or []):
+            print(
+                f"[Sprint106-1 Image Role Classifier] REJECT: {rejected_item.get('path') or rejected_item.get('source_path', '')} "
+                f"reason={rejected_item.get('reason', '')}",
+                flush=True,
+            )
+        for selected_index, selected_item in enumerate(image_extractor_result.get("images", []) or [], start=1):
+            print(
+                f"[Sprint106-1 Image Role Classifier] {selected_index:02d}: "
+                f"{selected_item.get('output_path') or selected_item.get('path', '')} "
+                f"({selected_item.get('width', 0)}x{selected_item.get('height', 0)}) "
+                f"score={selected_item.get('score', 0)} type={selected_item.get('image_type', '')}",
+                flush=True,
+            )
+        print("[Sprint106-1 Image Role Classifier] Output:", image_extractor_result.get("output_dir", ""), flush=True)
+        print("[Sprint106-1 Image Role Classifier] Errors:", image_extractor_result.get("errors", []), flush=True)
+        print("[Sprint106-1 Image Role Classifier] Role Counts:", image_extractor_result.get("role_counts", {}), flush=True)
+        print("[Sprint106-1 Image Role Classifier] Role Sequence:", image_extractor_result.get("role_sequence", []), flush=True)
 
         print(
             "[Sprint94-1 Manual Images] Count:",
@@ -1720,6 +2334,7 @@ class WorkflowEngine:
             "workflow_version": self.WORKFLOW_VERSION,
             "auto_connected": auto_connected,
             "youtube_privacy_status": youtube_privacy_status,
+            "image_extractor": image_extractor_result,
             "image_strip_splitter": image_strip_result,
         }
 
@@ -1806,7 +2421,8 @@ class WorkflowEngine:
         # 1-1. Sprint93-1 Multi Image Collector
         if manual_product_image_paths:
             if (
-                image_strip_result.get("strip_detected")
+                not extractor_applied
+                and image_strip_result.get("strip_detected")
                 and image_strip_result.get("images")
             ):
                 multi_image_result = image_strip_result
@@ -2312,6 +2928,7 @@ class WorkflowEngine:
             pre_story_review_ocr = self._run_review_image_ocr(
                 pre_story_image_paths,
                 project,
+                multi_image_mode=multi_image_mode,
             )
             pre_story_ocr_reviews = self._normalize_reviews(
                 pre_story_review_ocr.get("reviews", []),
@@ -3488,7 +4105,7 @@ class WorkflowEngine:
             flush=True,
         )
 
-        # Sprint103-4: Veo 장면이 없거나 병합하지 못하면 현재 프로젝트의
+        # Sprint103-7: Veo 장면이 없거나 병합하지 못하면 현재 프로젝트의
         # 상품 이미지에 9:16 커버·줌·패닝 모션을 적용한 fallback MP4를 생성합니다.
         image_fallback_result = {
             "ok": False,
@@ -3507,35 +4124,47 @@ class WorkflowEngine:
                 project=project,
                 image_paths=manual_product_image_paths,
                 output_path=fallback_path,
+                image_pool_result=image_pool_result,
+                image_role_result=image_extractor_result,
             )
             print(
-                "[Sprint103-5 Product Framing Fallback] Status:",
+                "[Sprint103-7 Quality Fallback] Status:",
                 image_fallback_result.get("status", ""),
                 flush=True,
             )
             print(
-                "[Sprint103-5 Product Framing Fallback] Images:",
+                "[Sprint103-7 Quality Fallback] Images:",
                 image_fallback_result.get("image_count", 0),
                 flush=True,
             )
             print(
-                "[Sprint103-5 Product Framing Fallback] Motions:",
+                "[Sprint103-7 Quality Fallback] Motions:",
                 image_fallback_result.get("motion_count", 0),
                 flush=True,
             )
             print(
-                "[Sprint103-5 Product Framing Fallback] Rejected:",
+                "[Sprint103-7 Quality Fallback] Rejected:",
                 len(image_fallback_result.get("rejected_images", []) or []),
                 flush=True,
             )
             print(
-                "[Sprint103-5 Product Framing Fallback] Output:",
+                "[Sprint103-7 Quality Fallback] Output:",
                 image_fallback_result.get("output_path", ""),
                 flush=True,
             )
             print(
-                "[Sprint103-5 Product Framing Fallback] Errors:",
+                "[Sprint103-7 Quality Fallback] Errors:",
                 image_fallback_result.get("errors", []),
+                flush=True,
+            )
+            print(
+                "[Sprint111-2 Smart Motion Director] Plan Count:",
+                len(image_fallback_result.get("motion_plan", []) or []),
+                flush=True,
+            )
+            print(
+                "[Sprint111-2 Smart Motion Director] Ready:",
+                image_fallback_result.get("smart_motion_ready", False),
                 flush=True,
             )
 
@@ -4546,6 +5175,7 @@ class WorkflowEngine:
             review_ocr_result = self._run_review_image_ocr(
                 resolved_review_image_paths,
                 project,
+                multi_image_mode=multi_image_mode,
             )
             ocr_reviews = self._normalize_reviews(
                 review_ocr_result.get("reviews", []),
@@ -5075,6 +5705,45 @@ class WorkflowEngine:
                 "viral_pattern": outputs.get("viral_pattern", {}),
                 "auto_editor": outputs.get("auto_editor", {}),
             }
+
+            content_pack, render_guard_stats = self._sprint112_1_render_guard(
+                content_pack
+            )
+            outputs["render_guard"] = {
+                "ok": True,
+                "version": "final-render-input-guard-112-1",
+                **render_guard_stats,
+            }
+
+            print(
+                "[Sprint112-1 Render Guard] Version: final-render-input-guard-112-1",
+                flush=True,
+            )
+            print(
+                "[Sprint112-1 Render Guard] Review Images Removed:",
+                render_guard_stats.get("review_images_removed", 0),
+                flush=True,
+            )
+            print(
+                "[Sprint112-1 Render Guard] Review Scenes Checked:",
+                render_guard_stats.get("review_scenes_checked", 0),
+                flush=True,
+            )
+            print(
+                "[Sprint112-1 Render Guard] Subtitle Source:",
+                render_guard_stats.get("subtitle_source", "narration_only"),
+                flush=True,
+            )
+            print(
+                "[Sprint112-1 Render Guard] Director Fields Removed:",
+                render_guard_stats.get("director_fields_removed", 0),
+                flush=True,
+            )
+            print(
+                "[Sprint112-1 Render Guard] Director Prompt Lines Removed:",
+                render_guard_stats.get("director_prompt_removed", 0),
+                flush=True,
+            )
 
             content_factory_result = ContentFactory().apply_edit_assistant(
                 content_pack,

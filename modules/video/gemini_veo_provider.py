@@ -29,7 +29,7 @@ class GeminiVeoProvider:
     - GEMINI_VEO_TIMEOUT_SECONDS: 선택, 기본 420
     """
 
-    VERSION = "gemini-veo-provider-92-1"
+    VERSION = "gemini-veo-provider-109-3"
     PROVIDER_NAME = "gemini_veo"
     DEFAULT_MODEL = "veo-3.1-fast-generate-preview"
     DEFAULT_RESOLUTION = "720p"
@@ -80,9 +80,25 @@ class GeminiVeoProvider:
             timeout_seconds or os.getenv("GEMINI_VEO_TIMEOUT_SECONDS"),
             self.DEFAULT_TIMEOUT_SECONDS,
         )
+        self.disabled = self._truthy(os.getenv("GEMINI_VEO_DISABLED"))
 
     def readiness(self) -> Dict[str, Any]:
         errors: List[str] = []
+        if self.disabled:
+            return {
+                "ok": False,
+                "ready": False,
+                "provider": self.PROVIDER_NAME,
+                "provider_version": self.VERSION,
+                "model": self.model,
+                "resolution": self.resolution,
+                "api_key_configured": bool(self.api_key),
+                "supports_text_to_video": True,
+                "supports_image_to_video": True,
+                "disabled": True,
+                "status": "disabled",
+                "errors": ["Gemini Veo disabled by GEMINI_VEO_DISABLED"],
+            }
         if not self.api_key:
             errors.append("GEMINI_API_KEY is not configured")
         try:
@@ -100,11 +116,31 @@ class GeminiVeoProvider:
             "api_key_configured": bool(self.api_key),
             "supports_text_to_video": True,
             "supports_image_to_video": True,
+            "disabled": False,
+            "status": "ready" if not errors else "not_ready",
             "errors": errors,
         }
 
     def generate(self, request: Mapping[str, Any]) -> Dict[str, Any]:
         normalized_request = copy.deepcopy(dict(request or {}))
+        request_disabled = self._request_disables_veo(normalized_request)
+        if self.disabled or request_disabled:
+            disabled_by = (
+                "GEMINI_VEO_DISABLED"
+                if self.disabled
+                else "request.veo_enabled=false"
+            )
+            print(
+                f"[Sprint109-3 Veo Guard] Status: disabled ({disabled_by})",
+                flush=True,
+            )
+            return self._result(
+                request=normalized_request,
+                ok=False,
+                status="disabled",
+                errors=[f"Gemini Veo disabled by {disabled_by}"],
+            )
+
         readiness = self.readiness()
         if not readiness["ready"]:
             return self._result(
@@ -473,6 +509,26 @@ class GeminiVeoProvider:
     def _normalize_aspect_ratio(self, value: Any) -> str:
         ratio = self._clean_text(value) or "9:16"
         return ratio if ratio in self.SUPPORTED_ASPECT_RATIOS else "9:16"
+
+    @classmethod
+    def _request_disables_veo(cls, request: Mapping[str, Any]) -> bool:
+        if "veo_enabled" not in request:
+            return False
+        value = request.get("veo_enabled")
+        if isinstance(value, bool):
+            return not value
+        text = cls._clean_text(value).lower()
+        return text in {"0", "false", "no", "off", "disabled"}
+
+    @staticmethod
+    def _truthy(value: Any) -> bool:
+        return str(value or "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+            "enabled",
+        }
 
     @staticmethod
     def _positive_int(value: Any, default: int) -> int:
