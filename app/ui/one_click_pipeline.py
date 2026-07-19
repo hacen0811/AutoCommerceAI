@@ -1,5 +1,6 @@
 import json
 import re
+import threading
 from pathlib import Path
 from urllib.parse import quote_plus
 
@@ -35,7 +36,7 @@ except Exception:
     SearchKeywordEngine = None
 
 
-UI_VERSION = "sprint94-1-manual-multi-image-ui"
+UI_VERSION = "sprint102-3-duplicate-run-guard"
 RESULT_DIR = Path("exports/one_click_results")
 REVIEW_IMAGE_ROOT = Path("assets/review_images")
 PRODUCT_IMAGE_ROOT = Path("assets/products")
@@ -47,6 +48,11 @@ SUPPORTED_REVIEW_IMAGE_SUFFIXES = {
     ".webp",
     ".bmp",
 }
+
+
+# Sprint102-3: 한 Streamlit 프로세스에서 동일 프로젝트 중복 실행을 차단합니다.
+_PIPELINE_RUN_GUARD = threading.RLock()
+_ACTIVE_PIPELINE_PROJECTS = set()
 
 
 def read_json(path, default=None):
@@ -579,6 +585,68 @@ def run_project_pipeline(
     product_image_path="",
     youtube_privacy_status="private",
 ):
+    """Sprint102-3: UI에서 동일 프로젝트의 중복 원클릭 진입을 차단합니다."""
+    project_key = str(safe_project_id(project))
+
+    with _PIPELINE_RUN_GUARD:
+        if project_key in _ACTIVE_PIPELINE_PROJECTS:
+            print(
+                "[Sprint102-3 One Click Guard] SKIPPED:",
+                project_key,
+                flush=True,
+            )
+            cached = st.session_state.get(
+                f"one_click_result_{project_key}",
+                {},
+            )
+            if isinstance(cached, dict) and cached:
+                return cached
+            return {
+                "job_id": "",
+                "state": {},
+                "outputs": {
+                    "duplicate_execution_skipped": True,
+                    "project_key": project_key,
+                },
+                "summary": "동일 프로젝트가 이미 실행 중이어서 중복 실행을 건너뛰었습니다.",
+                "duplicate_execution_skipped": True,
+            }
+
+        _ACTIVE_PIPELINE_PROJECTS.add(project_key)
+
+    print(
+        "[Sprint102-3 One Click Guard] ACQUIRED:",
+        project_key,
+        flush=True,
+    )
+
+    try:
+        return _run_project_pipeline_impl(
+            project=project,
+            sample_count=sample_count,
+            review_image_paths=review_image_paths,
+            product_image_paths=product_image_paths,
+            product_image_path=product_image_path,
+            youtube_privacy_status=youtube_privacy_status,
+        )
+    finally:
+        with _PIPELINE_RUN_GUARD:
+            _ACTIVE_PIPELINE_PROJECTS.discard(project_key)
+        print(
+            "[Sprint102-3 One Click Guard] RELEASED:",
+            project_key,
+            flush=True,
+        )
+
+
+def _run_project_pipeline_impl(
+    project,
+    sample_count,
+    review_image_paths=None,
+    product_image_paths=None,
+    product_image_path="",
+    youtube_privacy_status="private",
+):
     print(
         "[Sprint72-1] run_project_pipeline entered",
         flush=True,
@@ -992,7 +1060,7 @@ def show_one_click_pipeline():
 
     auto_run = st.checkbox(
         "프로젝트 생성 후 바로 원클릭 실행",
-        value=True,
+        value=False,
     )
 
     if st.button(

@@ -4,6 +4,7 @@ import hashlib
 import json
 import mimetypes
 import shutil
+import threading
 
 from modules.product.product_engine import ProductEngine
 from modules.source.source_video_engine import SourceVideoEngine
@@ -37,6 +38,7 @@ from modules.video.ai_video_engine import AIVideoEngine
 from modules.video.gemini_veo_provider import GeminiVeoProvider
 from modules.video.ai_scene_merger import AISceneMerger
 from modules.story import StoryIntelligenceEngine
+from modules.image_ai.image_pool_builder import ImagePoolBuilder
 from modules.image_ai import (
     ImageStripSplitter,
     ImageVisionAnalyzer,
@@ -64,7 +66,7 @@ from modules.video.download_utils import (
 )
 
 
-print("######## WORKFLOW_ENGINE SPRINT101-4 LOADED ########", flush=True)
+print("######## WORKFLOW_ENGINE SPRINT102-4 LOADED ########", flush=True)
 
 
 class WorkflowEngine:
@@ -89,7 +91,11 @@ class WorkflowEngine:
     → CapCutExport
     """
 
-    WORKFLOW_VERSION = "workflow-engine-101-4"
+    WORKFLOW_VERSION = "workflow-engine-102-4"
+
+    # Sprint102-3: 동일 프로젝트의 WorkflowEngine 중복 진입을 차단합니다.
+    _RUN_GUARD = threading.RLock()
+    _ACTIVE_PROJECT_KEYS = set()
 
     STEP_NAMES = [
         "product_plan",
@@ -1232,6 +1238,63 @@ class WorkflowEngine:
         product_image_path="",
         youtube_privacy_status="private",
     ):
+        """Sprint102-3: 동일 프로젝트의 동시 원클릭 실행을 한 번만 허용합니다."""
+        project_key = str(getattr(project, "id", "") or id(project))
+
+        with self._RUN_GUARD:
+            if project_key in self._ACTIVE_PROJECT_KEYS:
+                print(
+                    "[Sprint102-3 Duplicate Guard] SKIPPED:",
+                    project_key,
+                    flush=True,
+                )
+                return {
+                    "job_id": "",
+                    "state": {},
+                    "outputs": {
+                        "workflow_version": self.WORKFLOW_VERSION,
+                        "duplicate_execution_skipped": True,
+                        "project_key": project_key,
+                    },
+                    "summary": "동일 프로젝트가 이미 실행 중이어서 중복 실행을 건너뛰었습니다.",
+                    "duplicate_execution_skipped": True,
+                }
+
+            self._ACTIVE_PROJECT_KEYS.add(project_key)
+
+        print(
+            "[Sprint102-3 Duplicate Guard] ACQUIRED:",
+            project_key,
+            flush=True,
+        )
+
+        try:
+            return self._run_project_impl(
+                project=project,
+                sample_count=sample_count,
+                review_image_paths=review_image_paths,
+                product_image_paths=product_image_paths,
+                product_image_path=product_image_path,
+                youtube_privacy_status=youtube_privacy_status,
+            )
+        finally:
+            with self._RUN_GUARD:
+                self._ACTIVE_PROJECT_KEYS.discard(project_key)
+            print(
+                "[Sprint102-3 Duplicate Guard] RELEASED:",
+                project_key,
+                flush=True,
+            )
+
+    def _run_project_impl(
+        self,
+        project,
+        sample_count=6,
+        review_image_paths=None,
+        product_image_paths=None,
+        product_image_path="",
+        youtube_privacy_status="private",
+    ):
         review_image_paths = review_image_paths or []
         product_image_paths = product_image_paths or []
         youtube_privacy_status = (
@@ -1240,7 +1303,7 @@ class WorkflowEngine:
             )
         )
         print(
-            "######## RUN_PROJECT SPRINT100-4 START ########",
+            "######## RUN_PROJECT SPRINT102-4 START ########",
             flush=True,
         )
         print(
@@ -1759,6 +1822,70 @@ class WorkflowEngine:
         print(
             "[Sprint93-3 Image Tagger] Errors:",
             image_tags_result.get("errors", []),
+            flush=True,
+        )
+
+        # Sprint102-1: 이미지 태그/분석/원본을 장면 목적별 Image Pool로 정규화합니다.
+        image_pool_result = {
+            "ok": False,
+            "ready": False,
+            "version": ImagePoolBuilder.VERSION,
+            "status": "not_run",
+            "image_count": 0,
+            "pool_count": 0,
+            "image_pool": {},
+            "pool_counts": {},
+            "top_candidates": {},
+            "errors": [],
+        }
+
+        try:
+            image_pool_result = ImagePoolBuilder().build(
+                tag_result=image_tags_result,
+                vision_result=vision_analysis_result,
+                image_input=multi_image_result,
+                manifest_path=multi_image_result.get("manifest_path", ""),
+                output_dir=director_output_dir,
+                product_name=product_name_for_director,
+                project_id=project_id_for_director,
+                save_result=True,
+                max_per_pool=40,
+            )
+        except Exception as exc:
+            image_pool_result.update(
+                status="failed",
+                errors=[f"{type(exc).__name__}: {exc}"],
+            )
+
+        outputs["image_pool"] = image_pool_result
+        print(
+            "[Sprint102-1 Image Pool] Version:",
+            image_pool_result.get("version", ""),
+            flush=True,
+        )
+        print(
+            "[Sprint102-1 Image Pool] Status:",
+            image_pool_result.get("status", ""),
+            flush=True,
+        )
+        print(
+            "[Sprint102-1 Image Pool] Image Count:",
+            image_pool_result.get("image_count", 0),
+            flush=True,
+        )
+        print(
+            "[Sprint102-1 Image Pool] Pool Counts:",
+            image_pool_result.get("pool_counts", {}),
+            flush=True,
+        )
+        print(
+            "[Sprint102-1 Image Pool] Path:",
+            image_pool_result.get("image_pool_path", ""),
+            flush=True,
+        )
+        print(
+            "[Sprint102-1 Image Pool] Errors:",
+            image_pool_result.get("errors", []),
             flush=True,
         )
 
@@ -2355,6 +2482,186 @@ class WorkflowEngine:
             scene_selection_result.update(
                 status="failed",
                 errors=[f"{type(exc).__name__}: {exc}"],
+            )
+
+        # Sprint102-2: Story 장면 목적에 맞춰 Image Pool 후보를 최종 참조 이미지로 연결합니다.
+        pool_by_type = (
+            image_pool_result.get("image_pool", {})
+            if isinstance(image_pool_result, dict)
+            else {}
+        )
+        pool_scene_map = {
+            "main_product": ("hero", "cta", "feature"),
+            "problem_context": ("comparison", "usage", "review"),
+            "detail_proof": ("detail", "feature", "review"),
+            "usage_benefit": ("usage", "feature", "detail"),
+        }
+        pool_selected_paths = set()
+        pool_bridge_items = []
+        raw_selection_scenes = list(
+            scene_selection_result.get("scenes", []) or []
+        )
+        planned_for_pool = list(scene_plan_result.get("scenes", []) or [])
+
+        for pool_index, selected_scene in enumerate(raw_selection_scenes):
+            if not isinstance(selected_scene, dict):
+                continue
+
+            planned_scene = (
+                planned_for_pool[pool_index]
+                if pool_index < len(planned_for_pool)
+                and isinstance(planned_for_pool[pool_index], dict)
+                else {}
+            )
+            recommended_type = str(
+                planned_scene.get("recommended_image_type")
+                or selected_scene.get("recommended_image_type")
+                or "usage_benefit"
+            ).strip()
+            preferred_pools = pool_scene_map.get(
+                recommended_type,
+                ("usage", "feature", "detail"),
+            )
+
+            pool_candidates = []
+            seen_candidate_paths = set()
+            for pool_name in preferred_pools:
+                for candidate in list(pool_by_type.get(pool_name, []) or []):
+                    if not isinstance(candidate, dict):
+                        continue
+                    candidate_path = str(candidate.get("path") or "").strip()
+                    if not candidate_path or candidate_path in seen_candidate_paths:
+                        continue
+                    if not Path(candidate_path).is_file():
+                        continue
+                    seen_candidate_paths.add(candidate_path)
+                    copied_candidate = dict(candidate)
+                    copied_candidate["pool_type"] = pool_name
+                    pool_candidates.append(copied_candidate)
+
+            allow_reuse = any(
+                token in str(planned_scene.get("story_purpose") or "").lower()
+                for token in ("hook", "intro", "cta", "close", "ending")
+            )
+            if not allow_reuse:
+                unused_candidates = [
+                    item for item in pool_candidates
+                    if str(item.get("path") or "") not in pool_selected_paths
+                ]
+                if unused_candidates:
+                    pool_candidates = unused_candidates
+
+            chosen = pool_candidates[:4]
+            chosen_paths = [
+                str(item.get("path") or "").strip()
+                for item in chosen
+                if str(item.get("path") or "").strip()
+            ]
+
+            if chosen_paths:
+                primary = chosen[0]
+                selected_scene["selected_image_path"] = chosen_paths[0]
+                selected_scene["selected_image_paths"] = chosen_paths
+                selected_scene["primary_reference_image"] = chosen_paths[0]
+                selected_scene["reference_images"] = chosen_paths
+                selected_scene["reference_image_count"] = len(chosen_paths)
+                selected_scene["selected_image_filename"] = Path(chosen_paths[0]).name
+                selected_scene["selected_reference_images"] = chosen
+                selected_scene["image_pool_type"] = primary.get("pool_type", "")
+                selected_scene["image_pool_score"] = primary.get("score", 0)
+                selected_scene["image_pool_reason"] = primary.get("reason", "")
+                selected_scene["image_pool_bridge_status"] = "applied"
+                selected_scene["selection_status"] = "selected"
+                selected_scene["selection_reason"] = (
+                    f"Sprint102 Image Pool {primary.get('pool_type', '')} 우선 선택 | "
+                    f"{primary.get('reason', '')}"
+                )
+                if not allow_reuse:
+                    pool_selected_paths.add(chosen_paths[0])
+            else:
+                selected_scene["image_pool_bridge_status"] = "fallback_existing_selection"
+
+            pool_bridge_items.append({
+                "scene_id": str(selected_scene.get("scene_id") or f"scene_{pool_index + 1:02d}"),
+                "recommended_image_type": recommended_type,
+                "preferred_pools": list(preferred_pools),
+                "status": selected_scene.get("image_pool_bridge_status", ""),
+                "selected_path": str(selected_scene.get("selected_image_path") or ""),
+                "reference_count": len(selected_scene.get("selected_image_paths") or []),
+                "pool_type": str(selected_scene.get("image_pool_type") or ""),
+            })
+
+        scene_selection_result["scenes"] = raw_selection_scenes
+        scene_selection_result["image_pool_bridge"] = {
+            "version": "image-pool-scene-bridge-102-2",
+            "ready": bool(raw_selection_scenes) and all(
+                str(item.get("selected_image_path") or "").strip()
+                for item in raw_selection_scenes
+                if isinstance(item, dict)
+            ),
+            "scene_count": len(raw_selection_scenes),
+            "applied_count": sum(
+                1 for item in raw_selection_scenes
+                if isinstance(item, dict)
+                and item.get("image_pool_bridge_status") == "applied"
+            ),
+            "unique_primary_count": len(pool_selected_paths),
+            "items": pool_bridge_items,
+        }
+        scene_selection_result["total_reference_image_count"] = sum(
+            len(item.get("selected_image_paths") or [])
+            for item in raw_selection_scenes
+            if isinstance(item, dict)
+        )
+
+        selection_path_for_pool = str(
+            scene_selection_result.get("scene_selection_path") or ""
+        ).strip()
+        if selection_path_for_pool:
+            try:
+                Path(selection_path_for_pool).write_text(
+                    json.dumps(
+                        scene_selection_result,
+                        ensure_ascii=False,
+                        indent=2,
+                        default=str,
+                    ),
+                    encoding="utf-8",
+                )
+            except Exception as exc:
+                scene_selection_result.setdefault("warnings", []).append(
+                    f"Sprint102 Image Pool selection save failed: "
+                    f"{type(exc).__name__}: {exc}"
+                )
+
+        print(
+            "[Sprint102-2 Image Pool Bridge] Ready:",
+            scene_selection_result.get("image_pool_bridge", {}).get("ready", False),
+            flush=True,
+        )
+        print(
+            "[Sprint102-2 Image Pool Bridge] Applied:",
+            scene_selection_result.get("image_pool_bridge", {}).get("applied_count", 0),
+            "/",
+            scene_selection_result.get("image_pool_bridge", {}).get("scene_count", 0),
+            flush=True,
+        )
+        print(
+            "[Sprint102-2 Image Pool Bridge] Unique Primary:",
+            scene_selection_result.get("image_pool_bridge", {}).get("unique_primary_count", 0),
+            flush=True,
+        )
+        for bridge_item in pool_bridge_items:
+            print(
+                "[Sprint102-2 Pool Scene]",
+                bridge_item.get("scene_id", ""),
+                "->",
+                bridge_item.get("pool_type", "fallback"),
+                "| refs=",
+                bridge_item.get("reference_count", 0),
+                "|",
+                bridge_item.get("selected_path", ""),
+                flush=True,
             )
 
         # Sprint101-3: Scene Image Selector 결과에 Story/Evidence 연출 문맥을 주입합니다.
@@ -4577,324 +4884,144 @@ class WorkflowEngine:
                 flush=True,
             )
 
-            publisher_store_result = PublisherResultStore().save(
-                orchestrator_result=publisher_orchestrator_result,
-                project_id=getattr(project, "id", ""),
-                project_name=(
-                    getattr(project, "product_name", "")
-                    or getattr(project, "title", "")
-                    or "project"
-                ),
-                run_id=job_id,
-            )
+            # Sprint102-4: 제작 엔진이 완성될 때까지 저장·큐·실제 업로드를 잠시 중지합니다.
+            publisher_store_result = {
+                "ok": True,
+                "version": "publisher-result-store-82-7",
+                "status": "skipped_upload_paused",
+                "stored": False,
+                "manifest_path": "",
+                "latest_pointer_path": "",
+                "platform_paths": {},
+            }
             outputs["publisher_store"] = publisher_store_result
 
-            print(
-                "[Sprint83-3 Store] Stored:",
-                bool(publisher_store_result.get("stored")),
-                flush=True,
-            )
-            print(
-                "[Sprint83-3 Store] Manifest:",
-                publisher_store_result.get("manifest_path", ""),
-                flush=True,
-            )
-            print(
-                "[Sprint83-3 Store] Latest:",
-                publisher_store_result.get("latest_pointer_path", ""),
-                flush=True,
-            )
-
-            upload_queue_result = UploadQueueEngine().enqueue(
-                store_result=publisher_store_result,
-                queue_id=job_id,
-            )
+            upload_queue_result = {
+                "ok": True,
+                "version": "upload-queue-engine-82-9",
+                "status": "skipped_upload_paused",
+                "queued": False,
+                "queue_ready": False,
+                "queue_path": "",
+                "latest_pointer_path": "",
+                "jobs": {},
+                "ready_jobs": [],
+            }
             outputs["upload_queue"] = upload_queue_result
 
-            print(
-                "[Sprint83-3 Queue] Ready:",
-                bool(upload_queue_result.get("queue_ready")),
-                flush=True,
-            )
-            print(
-                "[Sprint83-3 Queue] Jobs:",
-                upload_queue_result.get("ready_jobs", []),
-                flush=True,
-            )
-            print(
-                "[Sprint83-3 Queue] Queue:",
-                upload_queue_result.get("queue_path", ""),
-                flush=True,
-            )
-            print(
-                "[Sprint83-3 Queue] Latest:",
-                upload_queue_result.get("latest_pointer_path", ""),
-                flush=True,
-            )
-
-            upload_dispatcher_result = UploadDispatcher().dispatch(
-                queue_result=upload_queue_result,
-                platforms=["youtube_shorts", "instagram_reels"],
-                max_jobs=2,
-                persist=False,
-            )
+            upload_dispatcher_result = {
+                "ok": True,
+                "version": "upload-dispatcher-83-1",
+                "status": "skipped_upload_paused",
+                "dispatch_ready": False,
+                "dispatch_count": 0,
+                "dispatch_jobs": {},
+            }
             outputs["upload_dispatcher"] = upload_dispatcher_result
 
-            youtube_dispatch_job = (
-                upload_dispatcher_result.get("dispatch_jobs", {})
-                if isinstance(
-                    upload_dispatcher_result.get("dispatch_jobs"),
-                    dict,
-                )
-                else {}
-            ).get("youtube_shorts", {})
-
-            if youtube_dispatch_job:
-                youtube_dispatch_job = dict(youtube_dispatch_job)
-                youtube_payload = youtube_dispatch_job.get("payload")
-                youtube_payload = (
-                    dict(youtube_payload)
-                    if isinstance(youtube_payload, dict)
-                    else {}
-                )
-                youtube_status = youtube_payload.get("status")
-                youtube_status = (
-                    dict(youtube_status)
-                    if isinstance(youtube_status, dict)
-                    else {}
-                )
-                youtube_status["privacyStatus"] = (
-                    youtube_privacy_status
-                )
-                youtube_status["privacy_status"] = (
-                    youtube_privacy_status
-                )
-                youtube_payload["status"] = youtube_status
-                youtube_dispatch_job["payload"] = youtube_payload
-
-                print(
-                    "[Sprint89-1 YouTube] Dispatch Privacy:",
-                    youtube_privacy_status,
-                    flush=True,
-                )
-
-                youtube_upload_result = (
-                    YouTubeUploadExecutor().execute(
-                        dispatch_job=youtube_dispatch_job,
-                        dry_run=False,
-                        credentials_file="secrets/youtube_client_secret.json",
-                        token_file="secrets/youtube_token.json",
-                    )
-                )
-            else:
-                youtube_upload_result = {
-                    "ok": False,
-                    "version": "youtube-upload-executor-83-2",
-                    "status": "dispatch_job_missing",
-                    "platform": "youtube_shorts",
-                    "dry_run": False,
-                    "upload_ready": False,
-                    "actual_upload_performed": False,
-                    "errors": [
-                        "youtube_shorts dispatch job이 없습니다"
-                    ],
-                    "warnings": [],
-                }
-
-            instagram_dispatch_job = (
-                upload_dispatcher_result.get("dispatch_jobs", {})
-                if isinstance(upload_dispatcher_result.get("dispatch_jobs"), dict)
-                else {}
-            ).get("instagram_reels", {})
-
-            if instagram_dispatch_job:
-                print(
-                    "[Sprint90-2 Instagram] Playwright Upload Start",
-                    flush=True,
-                )
-                instagram_upload_result = InstagramUploadExecutor().execute(
-                    dispatch_job=instagram_dispatch_job,
-                    dry_run=False,
-                    user_data_dir="secrets/instagram_playwright_profile",
-                    headless=False,
-                    allow_manual_login=True,
-                    keep_browser_open=False,
-                )
-            else:
-                instagram_upload_result = {
-                    "ok": False,
-                    "version": "instagram-playwright-upload-executor-90-2",
-                    "status": "dispatch_job_missing",
-                    "platform": "instagram_reels",
-                    "dry_run": False,
-                    "upload_ready": False,
-                    "actual_upload_performed": False,
-                    "errors": ["instagram_reels dispatch job이 없습니다"],
-                    "warnings": [],
-                }
-
-            outputs["instagram_upload"] = instagram_upload_result
-            instagram_summary = self._build_instagram_upload_summary(
-                instagram_upload_result
-            )
-            outputs["instagram"] = instagram_summary
-            instagram_manifest_result = self._persist_instagram_upload_metadata(
-                publisher_store_result,
-                instagram_summary,
-            )
-            outputs["instagram_manifest"] = instagram_manifest_result
-            instagram_project_result = self._update_instagram_project(
-                project,
-                instagram_summary,
-                instagram_manifest_result,
-            )
-            outputs["instagram_project"] = instagram_project_result
-
-            print(
-                "[Sprint90-2 Instagram] Status:",
-                instagram_summary.get("status", ""),
-                flush=True,
-            )
-            print(
-                "[Sprint90-2 Instagram] Post URL:",
-                instagram_summary.get("post_url", ""),
-                flush=True,
-            )
-            print(
-                "[Sprint90-2 Instagram] Actual Upload:",
-                bool(instagram_summary.get("actual_upload_performed")),
-                flush=True,
-            )
-            print(
-                "[Sprint90-2 Instagram Manifest] Saved:",
-                bool(instagram_manifest_result.get("ok")),
-                flush=True,
-            )
-            print(
-                "[Sprint90-2 Instagram Project DB] Status:",
-                instagram_project_result.get("status", ""),
-                flush=True,
-            )
-
+            youtube_upload_result = {
+                "ok": True,
+                "version": "youtube-upload-executor-83-2",
+                "status": "skipped_upload_paused",
+                "platform": "youtube_shorts",
+                "dry_run": False,
+                "upload_ready": False,
+                "actual_upload_performed": False,
+                "errors": [],
+                "warnings": ["Sprint102-4에서 실제 업로드를 잠시 중지했습니다."],
+            }
             outputs["youtube_upload"] = youtube_upload_result
-
-            youtube_summary = self._build_youtube_upload_summary(
+            outputs["youtube"] = self._build_youtube_upload_summary(
                 youtube_upload_result
             )
-            outputs["youtube"] = youtube_summary
+            outputs["youtube_manifest"] = {
+                "ok": True,
+                "version": "youtube-manifest-store-85-1",
+                "status": "skipped_upload_paused",
+                "manifest_path": "",
+                "video_id": "",
+                "watch_url": "",
+                "uploaded_at": "",
+            }
+            outputs["youtube_project"] = {
+                "ok": True,
+                "version": "project-repository-86-1",
+                "status": "skipped_upload_paused",
+                "project_id": getattr(project, "id", ""),
+                "video_id": "",
+                "watch_url": "",
+                "uploaded_at": "",
+                "manifest_path": "",
+            }
 
-            youtube_manifest_result = (
-                self._persist_youtube_upload_metadata(
-                    publisher_store_result,
-                    youtube_summary,
-                )
+            instagram_upload_result = {
+                "ok": True,
+                "version": "instagram-playwright-upload-executor-90-2",
+                "status": "skipped_upload_paused",
+                "platform": "instagram_reels",
+                "dry_run": False,
+                "upload_ready": False,
+                "actual_upload_performed": False,
+                "errors": [],
+                "warnings": ["Sprint102-4에서 실제 업로드를 잠시 중지했습니다."],
+            }
+            outputs["instagram_upload"] = instagram_upload_result
+            outputs["instagram"] = self._build_instagram_upload_summary(
+                instagram_upload_result
             )
-            outputs["youtube_manifest"] = youtube_manifest_result
+            outputs["instagram_manifest"] = {
+                "ok": True,
+                "version": "instagram-manifest-store-90-2",
+                "status": "skipped_upload_paused",
+                "manifest_path": "",
+                "post_url": "",
+                "uploaded_at": "",
+            }
+            outputs["instagram_project"] = {
+                "ok": True,
+                "version": "project-repository-90-2",
+                "status": "skipped_upload_paused",
+                "project_id": getattr(project, "id", ""),
+                "post_url": "",
+                "uploaded_at": "",
+                "manifest_path": "",
+            }
 
-            youtube_project_result = (
-                ProjectRepository().update_youtube_upload(
-                    project_id=getattr(project, "id", ""),
-                    upload_result=youtube_summary,
-                    manifest_result=youtube_manifest_result,
-                )
-            )
-            outputs["youtube_project"] = youtube_project_result
-
-            print(
-                "[Sprint86-2 Project DB] Saved:",
-                bool(youtube_project_result.get("ok")),
-                flush=True,
-            )
-            print(
-                "[Sprint86-2 Project DB] Status:",
-                youtube_project_result.get("status", ""),
-                flush=True,
-            )
-            print(
-                "[Sprint86-2 Project DB] Video ID:",
-                youtube_project_result.get("video_id", ""),
-                flush=True,
-            )
-            print(
-                "[Sprint86-2 Project DB] Watch URL:",
-                youtube_project_result.get("watch_url", ""),
-                flush=True,
-            )
-
-            print(
-                "[Sprint85-1 YouTube] Status:",
-                youtube_summary.get("status", ""),
-                flush=True,
-            )
-            print(
-                "[Sprint85-1 YouTube] Video ID:",
-                youtube_summary.get("video_id", ""),
-                flush=True,
-            )
-            print(
-                "[Sprint85-1 YouTube] Watch URL:",
-                youtube_summary.get("watch_url", ""),
-                flush=True,
-            )
-            print(
-                "[Sprint85-1 YouTube] Uploaded At:",
-                youtube_summary.get("uploaded_at", ""),
-                flush=True,
-            )
-            print(
-                "[Sprint85-1 YouTube Manifest] Saved:",
-                bool(youtube_manifest_result.get("ok")),
-                flush=True,
-            )
-            print(
-                "[Sprint85-1 YouTube Manifest] Path:",
-                youtube_manifest_result.get("manifest_path", ""),
-                flush=True,
-            )
+            outputs["upload_pause"] = {
+                "ok": True,
+                "version": "upload-pause-102-4",
+                "status": "disabled",
+                "publisher_payload": "ready",
+                "publisher_store": "skipped",
+                "queue": "skipped",
+                "dispatcher": "skipped",
+                "youtube": "skipped",
+                "instagram": "skipped",
+                "tiktok": "skipped",
+            }
 
             print(
-                "[Sprint83-3 Dispatcher] Ready:",
-                bool(
-                    upload_dispatcher_result.get(
-                        "dispatch_ready"
-                    )
-                ),
+                "[Sprint102-4 Upload Pause] Status: disabled",
                 flush=True,
             )
             print(
-                "[Sprint83-3 Dispatcher] Jobs:",
-                upload_dispatcher_result.get(
-                    "dispatch_platforms",
-                    [],
-                ),
+                "[Sprint102-4 Upload Pause] Publisher Payload: ready",
                 flush=True,
             )
             print(
-                "[Sprint83-3 YouTube] Status:",
-                youtube_upload_result.get("status", ""),
+                "[Sprint102-4 Upload Pause] Store/Queue/Dispatcher: skipped",
                 flush=True,
             )
             print(
-                "[Sprint83-3 YouTube] Dry Run:",
-                bool(youtube_upload_result.get("dry_run")),
+                "[Sprint102-4 Upload Pause] YouTube: skipped",
                 flush=True,
             )
             print(
-                "[Sprint83-3 YouTube] Ready:",
-                bool(
-                    youtube_upload_result.get(
-                        "upload_ready"
-                    )
-                ),
+                "[Sprint102-4 Upload Pause] Instagram: skipped",
                 flush=True,
             )
             print(
-                "[Sprint83-3 YouTube] Actual Upload:",
-                bool(
-                    youtube_upload_result.get(
-                        "actual_upload_performed"
-                    )
-                ),
+                "[Sprint102-4 Upload Pause] TikTok: skipped",
                 flush=True,
             )
 
@@ -5024,7 +5151,7 @@ class WorkflowEngine:
         final_state = state.load(job_id)
 
         print(
-            "######## RUN_PROJECT SPRINT94-1 END ########",
+            "######## RUN_PROJECT SPRINT102-4 END ########",
             flush=True,
         )
 
