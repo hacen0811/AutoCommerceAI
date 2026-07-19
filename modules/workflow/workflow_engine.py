@@ -4,6 +4,7 @@ import hashlib
 import json
 import mimetypes
 import shutil
+import subprocess
 import threading
 import time
 
@@ -67,7 +68,7 @@ from modules.video.download_utils import (
 )
 
 
-print("######## WORKFLOW_ENGINE SPRINT103-1 LOADED ########", flush=True)
+print("######## WORKFLOW_ENGINE SPRINT103-5 LOADED ########", flush=True)
 
 
 class WorkflowEngine:
@@ -92,7 +93,7 @@ class WorkflowEngine:
     → CapCutExport
     """
 
-    WORKFLOW_VERSION = "workflow-engine-103-1"
+    WORKFLOW_VERSION = "workflow-engine-103-5"
 
     # Sprint102-3: 동일 프로젝트의 WorkflowEngine 중복 진입을 차단합니다.
     _RUN_GUARD = threading.RLock()
@@ -224,6 +225,262 @@ class WorkflowEngine:
             flush=True,
         )
         return result
+
+    def _build_product_image_fallback_video(
+        self,
+        project,
+        image_paths,
+        output_path,
+        seconds_per_image=2.8,
+    ):
+        """Veo 장면이 없을 때 현재 프로젝트 이미지로 9:16 모션 영상을 만듭니다."""
+        result = {
+            "ok": False,
+            "status": "not_created",
+            "output_path": "",
+            "image_count": 0,
+            "selected_images": [],
+            "rejected_images": [],
+            "motion_count": 0,
+            "errors": [],
+        }
+
+        def probe_size(path):
+            try:
+                completed = subprocess.run(
+                    [
+                        "ffprobe", "-v", "error",
+                        "-select_streams", "v:0",
+                        "-show_entries", "stream=width,height",
+                        "-of", "json",
+                        str(path),
+                    ],
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    check=False,
+                )
+                payload = json.loads(completed.stdout or "{}")
+                stream = (payload.get("streams") or [{}])[0]
+                return int(stream.get("width") or 0), int(stream.get("height") or 0)
+            except Exception:
+                return 0, 0
+
+        candidates = []
+        seen = set()
+        rejected = []
+        for raw_path in image_paths or []:
+            path = Path(str(raw_path or ""))
+            try:
+                resolved = path.resolve()
+            except Exception:
+                resolved = path
+            key = str(resolved).lower()
+            if not path.is_file() or key in seen:
+                continue
+            if path.suffix.lower() not in {
+                ".png", ".jpg", ".jpeg", ".webp", ".bmp"
+            }:
+                continue
+            seen.add(key)
+            width, height = probe_size(path)
+            ratio = (width / height) if height else 0.0
+            # 지나치게 긴 썸네일 스트립/콜라주와 너무 작은 이미지는 제외합니다.
+            if width < 420 or height < 420 or ratio > 2.15 or ratio < 0.38:
+                rejected.append({
+                    "path": str(path),
+                    "width": width,
+                    "height": height,
+                    "reason": "small_or_extreme_ratio",
+                })
+                continue
+            # 세로 이미지와 해상도가 큰 이미지를 우선합니다.
+            portrait_bonus = 1 if height >= width else 0
+            area = width * height
+            candidates.append((portrait_bonus, area, path, width, height))
+
+        # 필터 때문에 전부 제외된 경우에는 유효한 원본 이미지를 다시 허용합니다.
+        if not candidates:
+            # 모든 이미지가 1차 기준에서 제외되면 원본을 안전 프레이밍 방식으로 재허용합니다.
+            # 재허용된 이미지는 최종 rejected 집계에서 제외합니다.
+            rejected = []
+            for raw_path in image_paths or []:
+                path = Path(str(raw_path or ""))
+                if path.is_file() and path.suffix.lower() in {
+                    ".png", ".jpg", ".jpeg", ".webp", ".bmp"
+                }:
+                    width, height = probe_size(path)
+                    candidates.append((0, width * height, path, width, height))
+
+        candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
+        valid_images = [item[2] for item in candidates[:12]]
+        result["image_count"] = len(valid_images)
+        result["selected_images"] = [str(item) for item in valid_images]
+        result["rejected_images"] = rejected
+
+        if not valid_images:
+            result.update(
+                status="skipped_no_product_images",
+                errors=["No valid product images for motion fallback video"],
+            )
+            return result
+
+        target = Path(str(output_path))
+        target.parent.mkdir(parents=True, exist_ok=True)
+        temp_dir = target.parent / f".{target.stem}_motion_parts"
+        temp_dir.mkdir(parents=True, exist_ok=True)
+        concat_path = temp_dir / "concat.txt"
+        duration = max(1.8, float(seconds_per_image or 2.8))
+        fps = 30
+        frame_count = max(54, int(duration * fps))
+        fade_duration = min(0.35, duration / 5.0)
+        segment_paths = []
+
+        # Sprint103-5: 원본 비율을 보존한 선명한 전경과 흐린 배경을 합성합니다.
+        # 세로 화면을 억지로 cover-crop하지 않아 제품이 과도하게 확대되지 않습니다.
+        motion_filters = [
+            (
+                "split=2[bg][fg];"
+                "[bg]scale=1080:1920:force_original_aspect_ratio=increase,"
+                "crop=1080:1920,gblur=sigma=28,eq=brightness=-0.08:saturation=0.78[bg2];"
+                "[fg]scale=972:1728:force_original_aspect_ratio=decrease[fg2];"
+                "[bg2][fg2]overlay=(W-w)/2:(H-h)/2,"
+                f"zoompan=z='min(zoom+0.00035,1.04)':x='iw/2-(iw/zoom/2)':"
+                f"y='ih/2-(ih/zoom/2)':d={frame_count}:s=1080x1920:fps={fps}"
+            ),
+            (
+                "split=2[bg][fg];"
+                "[bg]scale=1080:1920:force_original_aspect_ratio=increase,"
+                "crop=1080:1920,gblur=sigma=28,eq=brightness=-0.08:saturation=0.78[bg2];"
+                "[fg]scale=972:1728:force_original_aspect_ratio=decrease[fg2];"
+                "[bg2][fg2]overlay=(W-w)/2:(H-h)/2,"
+                f"zoompan=z='if(eq(on,0),1.04,max(1.0,zoom-0.00035))':"
+                f"x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
+                f"d={frame_count}:s=1080x1920:fps={fps}"
+            ),
+            (
+                "split=2[bg][fg];"
+                "[bg]scale=1080:1920:force_original_aspect_ratio=increase,"
+                "crop=1080:1920,gblur=sigma=28,eq=brightness=-0.08:saturation=0.78[bg2];"
+                "[fg]scale=972:1728:force_original_aspect_ratio=decrease[fg2];"
+                "[bg2][fg2]overlay=(W-w)/2:(H-h)/2,"
+                f"zoompan=z='1.025':x='(iw-iw/zoom)*0.40+(iw-iw/zoom)*0.20*on/{max(1, frame_count-1)}':"
+                f"y='ih/2-(ih/zoom/2)':d={frame_count}:s=1080x1920:fps={fps}"
+            ),
+            (
+                "split=2[bg][fg];"
+                "[bg]scale=1080:1920:force_original_aspect_ratio=increase,"
+                "crop=1080:1920,gblur=sigma=28,eq=brightness=-0.08:saturation=0.78[bg2];"
+                "[fg]scale=972:1728:force_original_aspect_ratio=decrease[fg2];"
+                "[bg2][fg2]overlay=(W-w)/2:(H-h)/2,"
+                f"zoompan=z='1.025':x='(iw-iw/zoom)*0.60-(iw-iw/zoom)*0.20*on/{max(1, frame_count-1)}':"
+                f"y='ih/2-(ih/zoom/2)':d={frame_count}:s=1080x1920:fps={fps}"
+            ),
+        ]
+
+        try:
+            for index, image_path in enumerate(valid_images):
+                segment_path = temp_dir / f"segment_{index + 1:02d}.mp4"
+                motion = motion_filters[index % len(motion_filters)]
+                video_filter = (
+                    f"{motion},setsar=1,"
+                    f"fade=t=in:st=0:d={fade_duration:.3f},"
+                    f"fade=t=out:st={max(0.0, duration-fade_duration):.3f}:d={fade_duration:.3f},"
+                    "format=yuv420p"
+                )
+                command = [
+                    "ffmpeg", "-y", "-loop", "1",
+                    "-i", str(image_path),
+                    "-t", f"{duration:.3f}",
+                    "-vf", video_filter,
+                    "-an", "-r", str(fps),
+                    "-c:v", "libx264", "-preset", "medium", "-crf", "20",
+                    "-pix_fmt", "yuv420p", "-movflags", "+faststart",
+                    str(segment_path),
+                ]
+                completed = subprocess.run(
+                    command,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    check=False,
+                )
+                if completed.returncode != 0 or not segment_path.is_file():
+                    result["errors"].append(
+                        f"segment_{index + 1:02d}: "
+                        + (completed.stderr or completed.stdout or "ffmpeg failed")[-1200:]
+                    )
+                    continue
+                segment_paths.append(segment_path)
+
+            if not segment_paths:
+                result["status"] = "ffmpeg_segments_failed"
+                return result
+
+            def concat_quote(path):
+                normalized = str(path.resolve()).replace("\\", "/")
+                return normalized.replace("'", "'\\''")
+
+            concat_path.write_text(
+                "\n".join(
+                    f"file '{concat_quote(path)}'" for path in segment_paths
+                ) + "\n",
+                encoding="utf-8",
+            )
+            merge_command = [
+                "ffmpeg", "-y", "-f", "concat", "-safe", "0",
+                "-i", str(concat_path),
+                "-c", "copy", "-movflags", "+faststart", str(target),
+            ]
+            merged = subprocess.run(
+                merge_command,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                check=False,
+            )
+            if merged.returncode != 0 or not target.is_file():
+                result.update(
+                    status="ffmpeg_merge_failed",
+                    errors=result["errors"] + [
+                        (merged.stderr or merged.stdout or "ffmpeg merge failed")[-2000:]
+                    ],
+                )
+                return result
+
+            project_id = str(getattr(project, "id", "") or "")
+            if project_id and project_id not in target.name:
+                result.update(
+                    status="blocked_project_mismatch",
+                    errors=[
+                        f"Fallback path does not contain project id {project_id}: {target}"
+                    ],
+                )
+                target.unlink(missing_ok=True)
+                return result
+
+            result.update(
+                ok=True,
+                status="motion_created",
+                output_path=str(target),
+                motion_count=len(segment_paths),
+                errors=result["errors"],
+            )
+            return result
+        except Exception as exc:
+            result.update(
+                status="exception",
+                errors=result["errors"] + [f"{type(exc).__name__}: {exc}"],
+            )
+            return result
+        finally:
+            try:
+                shutil.rmtree(temp_dir, ignore_errors=True)
+            except Exception:
+                pass
 
     def _normalize_youtube_privacy_status(self, value):
         """YouTube 공개 설정을 API 허용값으로 통일합니다."""
@@ -1304,7 +1561,7 @@ class WorkflowEngine:
             )
         )
         print(
-            "######## RUN_PROJECT SPRINT103-1 START ########",
+            "######## RUN_PROJECT SPRINT103-2 START ########",
             flush=True,
         )
         print(
@@ -1840,23 +2097,163 @@ class WorkflowEngine:
             "errors": [],
         }
 
+        # Sprint103-2: 동일한 원본 이미지라면 Image Pool 결과를 재사용합니다.
+        image_pool_cache_path = (
+            Path(director_output_dir) / "image_pool_cache_103_2.json"
+        )
+        image_pool_source_items = []
+        for raw_path in list(product_images or []):
+            try:
+                source_path = Path(str(raw_path))
+                source_stat = source_path.stat()
+                image_pool_source_items.append(
+                    {
+                        "path": str(source_path.resolve()),
+                        "size": int(source_stat.st_size),
+                        "mtime_ns": int(source_stat.st_mtime_ns),
+                    }
+                )
+            except Exception:
+                image_pool_source_items.append(
+                    {
+                        "path": str(raw_path),
+                        "size": -1,
+                        "mtime_ns": -1,
+                    }
+                )
+
+        image_pool_source_signature = hashlib.sha256(
+            json.dumps(
+                {
+                    "project_id": str(project_id_for_director),
+                    "product_name": str(product_name_for_director),
+                    "manifest_path": str(
+                        multi_image_result.get("manifest_path", "")
+                    ),
+                    "sources": image_pool_source_items,
+                    "builder_version": str(ImagePoolBuilder.VERSION),
+                    "max_per_pool": 40,
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+            ).encode("utf-8")
+        ).hexdigest()
+
+        image_pool_cache_hit = False
+        image_pool_cache_reason = "cache_missing"
+
         try:
-            image_pool_result = ImagePoolBuilder().build(
-                tag_result=image_tags_result,
-                vision_result=vision_analysis_result,
-                image_input=multi_image_result,
-                manifest_path=multi_image_result.get("manifest_path", ""),
-                output_dir=director_output_dir,
-                product_name=product_name_for_director,
-                project_id=project_id_for_director,
-                save_result=True,
-                max_per_pool=40,
-            )
+            if image_pool_cache_path.is_file():
+                cached_payload = json.loads(
+                    image_pool_cache_path.read_text(encoding="utf-8")
+                )
+                cached_result = cached_payload.get("result", {})
+                cached_signature = str(
+                    cached_payload.get("source_signature", "")
+                )
+                cached_pool = (
+                    cached_result.get("image_pool", {})
+                    if isinstance(cached_result, dict)
+                    else {}
+                )
+                cached_image_count = int(
+                    cached_result.get("image_count", 0) or 0
+                ) if isinstance(cached_result, dict) else 0
+
+                if cached_signature != image_pool_source_signature:
+                    image_pool_cache_reason = "source_changed"
+                elif not isinstance(cached_pool, dict) or not cached_pool:
+                    image_pool_cache_reason = "cached_pool_empty"
+                elif cached_image_count <= 0:
+                    image_pool_cache_reason = "cached_image_count_zero"
+                else:
+                    image_pool_result = dict(cached_result)
+                    image_pool_result["status"] = "reused_cache"
+                    image_pool_result["cache_hit"] = True
+                    image_pool_result["cache_path"] = str(
+                        image_pool_cache_path
+                    )
+                    image_pool_result["source_signature"] = (
+                        image_pool_source_signature
+                    )
+                    image_pool_cache_hit = True
+                    image_pool_cache_reason = "valid_cache"
         except Exception as exc:
-            image_pool_result.update(
-                status="failed",
-                errors=[f"{type(exc).__name__}: {exc}"],
+            image_pool_cache_reason = (
+                f"cache_read_failed:{type(exc).__name__}"
             )
+
+        if not image_pool_cache_hit:
+            try:
+                image_pool_result = ImagePoolBuilder().build(
+                    tag_result=image_tags_result,
+                    vision_result=vision_analysis_result,
+                    image_input=multi_image_result,
+                    manifest_path=multi_image_result.get(
+                        "manifest_path",
+                        "",
+                    ),
+                    output_dir=director_output_dir,
+                    product_name=product_name_for_director,
+                    project_id=project_id_for_director,
+                    save_result=True,
+                    max_per_pool=40,
+                )
+                image_pool_result["cache_hit"] = False
+                image_pool_result["cache_path"] = str(
+                    image_pool_cache_path
+                )
+                image_pool_result["source_signature"] = (
+                    image_pool_source_signature
+                )
+
+                if (
+                    image_pool_result.get("ok")
+                    and int(image_pool_result.get("image_count", 0) or 0) > 0
+                    and isinstance(image_pool_result.get("image_pool"), dict)
+                    and image_pool_result.get("image_pool")
+                ):
+                    image_pool_cache_path.parent.mkdir(
+                        parents=True,
+                        exist_ok=True,
+                    )
+                    image_pool_cache_path.write_text(
+                        json.dumps(
+                            {
+                                "version": "image-pool-cache-103-2",
+                                "source_signature": (
+                                    image_pool_source_signature
+                                ),
+                                "created_at": time.time(),
+                                "result": image_pool_result,
+                            },
+                            ensure_ascii=False,
+                            indent=2,
+                            default=str,
+                        ),
+                        encoding="utf-8",
+                    )
+            except Exception as exc:
+                image_pool_result.update(
+                    status="failed",
+                    errors=[f"{type(exc).__name__}: {exc}"],
+                )
+
+        print(
+            "[Sprint103-2 Image Pool Cache] Status:",
+            "reused" if image_pool_cache_hit else "rebuilt",
+            flush=True,
+        )
+        print(
+            "[Sprint103-2 Image Pool Cache] Reason:",
+            image_pool_cache_reason,
+            flush=True,
+        )
+        print(
+            "[Sprint103-2 Image Pool Cache] Path:",
+            str(image_pool_cache_path),
+            flush=True,
+        )
 
         outputs["image_pool"] = image_pool_result
         print(
@@ -3090,6 +3487,70 @@ class WorkflowEngine:
             scene_merge_result.get("errors", []),
             flush=True,
         )
+
+        # Sprint103-4: Veo 장면이 없거나 병합하지 못하면 현재 프로젝트의
+        # 상품 이미지에 9:16 커버·줌·패닝 모션을 적용한 fallback MP4를 생성합니다.
+        image_fallback_result = {
+            "ok": False,
+            "status": "not_needed",
+            "output_path": "",
+            "image_count": 0,
+            "errors": [],
+        }
+        if not scene_merge_result.get("ok"):
+            fallback_path = (
+                Path("exports")
+                / "videos"
+                / f"{project_id_for_director}_product_image_motion_fallback.mp4"
+            )
+            image_fallback_result = self._build_product_image_fallback_video(
+                project=project,
+                image_paths=manual_product_image_paths,
+                output_path=fallback_path,
+            )
+            print(
+                "[Sprint103-5 Product Framing Fallback] Status:",
+                image_fallback_result.get("status", ""),
+                flush=True,
+            )
+            print(
+                "[Sprint103-5 Product Framing Fallback] Images:",
+                image_fallback_result.get("image_count", 0),
+                flush=True,
+            )
+            print(
+                "[Sprint103-5 Product Framing Fallback] Motions:",
+                image_fallback_result.get("motion_count", 0),
+                flush=True,
+            )
+            print(
+                "[Sprint103-5 Product Framing Fallback] Rejected:",
+                len(image_fallback_result.get("rejected_images", []) or []),
+                flush=True,
+            )
+            print(
+                "[Sprint103-5 Product Framing Fallback] Output:",
+                image_fallback_result.get("output_path", ""),
+                flush=True,
+            )
+            print(
+                "[Sprint103-5 Product Framing Fallback] Errors:",
+                image_fallback_result.get("errors", []),
+                flush=True,
+            )
+
+            if image_fallback_result.get("ok"):
+                scene_merge_result = {
+                    **scene_merge_result,
+                    "ok": True,
+                    "ready": True,
+                    "status": "product_image_motion_fallback_created",
+                    "output_path": image_fallback_result.get("output_path", ""),
+                    "errors": [],
+                    "fallback_type": "current_project_product_image_motion",
+                }
+
+        outputs["product_image_video_fallback"] = image_fallback_result
 
         ai_video_result.update(
             {
@@ -5226,7 +5687,7 @@ class WorkflowEngine:
         final_state = state.load(job_id)
 
         print(
-            "######## RUN_PROJECT SPRINT103-1 END ########",
+            "######## RUN_PROJECT SPRINT103-2 END ########",
             flush=True,
         )
 
