@@ -21,7 +21,7 @@ class GeminiDirector:
     이 단계는 API 호출을 수행하지 않는다.
     """
 
-    VERSION = "gemini-director-93-6a"
+    VERSION = "gemini-director-122-1"
 
     ASPECT_RATIO = "9:16"
     DEFAULT_FPS = 30
@@ -173,6 +173,68 @@ class GeminiDirector:
         ),
     }
 
+
+    ROLE_DIRECTION_LIBRARY: Dict[str, Dict[str, Any]] = {
+        "hero": {
+            "motions": ["slow_push_in", "slow_pull_out", "subtle_pan"],
+            "action": "Keep the product still and premium while subtle natural light or background parallax creates immediate visual interest.",
+            "shot": "Use a clean hero composition with the product as the unmistakable focal point from the first second.",
+        },
+        "usage": {
+            "motions": ["demonstration_move", "subtle_pan", "slow_pull_out"],
+            "action": "Show only a natural, physically credible use cue already supported by the reference image. Prefer environmental movement over invented hands or mechanisms.",
+            "shot": "Frame the product in practical context so viewers can understand how it fits into everyday use.",
+        },
+        "detail": {
+            "motions": ["macro_zoom", "focus_reveal", "static_hold"],
+            "action": "Reveal visible material, texture, finish, seam, control, edge, or component detail without inventing hidden construction.",
+            "shot": "Use restrained close-up emphasis and keep the exact visible geometry sharply readable.",
+        },
+        "feature": {
+            "motions": ["focus_reveal", "demonstration_move", "slow_push_in"],
+            "action": "Guide attention toward one visible feature and communicate its benefit through composition, focus, and camera movement rather than added graphics.",
+            "shot": "Build one clear visual idea around the selected feature and avoid competing movements.",
+        },
+        "comparison": {
+            "motions": ["split_reveal", "subtle_pan", "static_hold"],
+            "action": "Clarify only differences already visible in the reference composition. Do not create a new comparison item or fake before-and-after state.",
+            "shot": "Use measured side-to-side visual emphasis that supports a trustworthy comparison.",
+        },
+        "proof": {
+            "motions": ["slow_pull_out", "focus_reveal", "subtle_pan"],
+            "action": "Emphasize visible evidence such as capacity, scale, placement, stability, or practical fit without unsupported performance claims.",
+            "shot": "Present the evidence calmly and credibly like commercial B-roll rather than a dramatic effect shot.",
+        },
+        "installation": {
+            "motions": ["step_motion", "focus_reveal", "static_hold"],
+            "action": "Visually guide the viewer through only the installation state already visible. Do not generate missing tools, hands, parts, or steps.",
+            "shot": "Use orderly step emphasis with stable framing and clear component visibility.",
+        },
+        "cta": {
+            "motions": ["slow_push_in", "static_hold", "slow_pull_out"],
+            "action": "Finish with a confident, polished product hold. Keep motion minimal and end on a clean frame suitable for editing.",
+            "shot": "Return to a premium hero presentation and make the final product silhouette easy to recognize.",
+        },
+        "problem": {
+            "motions": ["subtle_pan", "slow_push_in", "static_hold"],
+            "action": "Use the existing environment and composition to suggest the inconvenience or concern without inventing a new accident, mess, person, or failure.",
+            "shot": "Create mild tension through framing and emphasis while preserving realism.",
+        },
+    }
+
+    SCENE_ROLE_MAP: Dict[str, str] = {
+        "hook": "hero",
+        "problem": "problem",
+        "feature": "feature",
+        "detail": "detail",
+        "proof": "proof",
+        "comparison": "comparison",
+        "installation": "installation",
+        "cta": "cta",
+        "usage": "usage",
+        "hero": "hero",
+    }
+
     def build(
         self,
         scene_selection: Any = None,
@@ -263,8 +325,9 @@ class GeminiDirector:
         )
 
         directed_scenes: List[Dict[str, Any]] = []
+        previous_motion = ""
 
-        for scene in scenes:
+        for scene_order, scene in enumerate(scenes, start=1):
             if not isinstance(scene, dict):
                 continue
 
@@ -275,8 +338,12 @@ class GeminiDirector:
                 product_name=result["product_name"],
                 style=result["style"],
                 language=result["language"],
+                previous_motion=previous_motion,
+                scene_order=scene_order,
             )
             directed_scenes.append(directed_scene)
+            if directed_scene.get("ready"):
+                previous_motion = str(directed_scene.get("camera_motion") or "")
 
         ready_count = sum(
             1
@@ -358,6 +425,8 @@ class GeminiDirector:
         product_name: str,
         style: str,
         language: str,
+        previous_motion: str = "",
+        scene_order: int = 1,
     ) -> Dict[str, Any]:
         scene_id = str(scene.get("scene_id") or "").strip()
         scene_type = str(scene.get("scene_type") or "feature").strip().lower()
@@ -371,7 +440,7 @@ class GeminiDirector:
         duration = self._normalize_duration(
             scene.get("duration_seconds")
         )
-        motion_key = str(scene.get("motion") or "static_hold").strip()
+        requested_motion = str(scene.get("motion") or "").strip()
         transition_key = str(scene.get("transition") or "cut").strip()
 
         vision = self._lookup_image(
@@ -395,6 +464,14 @@ class GeminiDirector:
             str(scene.get("purpose") or "").strip()
             or self.GOAL_LIBRARY["feature"],
         )
+        director_role = self._resolve_director_role(scene, scene_type)
+        direction_plan = self._select_direction_plan(
+            director_role=director_role,
+            requested_motion=requested_motion,
+            previous_motion=previous_motion,
+            scene_order=scene_order,
+        )
+        motion_key = direction_plan["motion"]
         motion_instruction = self.MOTION_LIBRARY.get(
             motion_key,
             self.MOTION_LIBRARY["static_hold"],
@@ -414,6 +491,10 @@ class GeminiDirector:
             motion_instruction=motion_instruction,
             transition_instruction=transition_instruction,
             visual_context=visual_context,
+            director_role=director_role,
+            action_instruction=direction_plan["action"],
+            shot_instruction=direction_plan["shot"],
+            diversity_instruction=direction_plan["diversity"],
         )
 
         negative_prompt = self._compose_negative_prompt(
@@ -439,8 +520,13 @@ class GeminiDirector:
             "scene_id": scene_id,
             "scene_index": scene.get("scene_index"),
             "scene_type": scene_type,
+            "director_role": director_role,
             "title": str(scene.get("title") or "").strip(),
             "goal": goal,
+            "action_instruction": direction_plan["action"],
+            "shot_instruction": direction_plan["shot"],
+            "diversity_instruction": direction_plan["diversity"],
+            "motion_reused_prevented": bool(direction_plan["reused_prevented"]),
             "selected_image_path": image_path,
             "selected_image_filename": image_filename,
             "duration_seconds": duration,
@@ -466,6 +552,71 @@ class GeminiDirector:
             "ready": ready,
             "status": "ready" if ready else "not_ready",
             "warnings": warnings,
+        }
+
+    def _resolve_director_role(
+        self,
+        scene: Dict[str, Any],
+        scene_type: str,
+    ) -> str:
+        matched_roles = [
+            str(role).strip().lower()
+            for role in scene.get("matched_roles") or []
+            if str(role).strip()
+        ]
+        for role in matched_roles:
+            if role in self.ROLE_DIRECTION_LIBRARY:
+                return role
+
+        return self.SCENE_ROLE_MAP.get(scene_type, "feature")
+
+    def _select_direction_plan(
+        self,
+        director_role: str,
+        requested_motion: str,
+        previous_motion: str,
+        scene_order: int,
+    ) -> Dict[str, Any]:
+        role_plan = self.ROLE_DIRECTION_LIBRARY.get(
+            director_role,
+            self.ROLE_DIRECTION_LIBRARY["feature"],
+        )
+        candidates = list(role_plan.get("motions") or ["static_hold"])
+
+        if requested_motion in self.MOTION_LIBRARY:
+            candidates.insert(0, requested_motion)
+
+        unique_candidates: List[str] = []
+        for candidate in candidates:
+            if candidate in self.MOTION_LIBRARY and candidate not in unique_candidates:
+                unique_candidates.append(candidate)
+
+        if not unique_candidates:
+            unique_candidates = ["static_hold"]
+
+        selected_motion = unique_candidates[0]
+        reused_prevented = False
+        if previous_motion and selected_motion == previous_motion:
+            alternative = next(
+                (item for item in unique_candidates if item != previous_motion),
+                "",
+            )
+            if alternative:
+                selected_motion = alternative
+                reused_prevented = True
+
+        diversity_instruction = (
+            f"This is scene {max(1, int(scene_order))}. "
+            "Do not repeat the immediately previous shot's camera rhythm, framing emphasis, "
+            "or visual beat. Keep this scene distinct while preserving continuity."
+        )
+
+        return {
+            "motion": selected_motion,
+            "action": str(role_plan.get("action") or "").strip(),
+            "shot": str(role_plan.get("shot") or "").strip(),
+            "diversity": diversity_instruction,
+            "reused_prevented": reused_prevented,
         }
 
     def _lookup_image(
@@ -550,6 +701,10 @@ class GeminiDirector:
         motion_instruction: str,
         transition_instruction: str,
         visual_context: str,
+        director_role: str,
+        action_instruction: str,
+        shot_instruction: str,
+        diversity_instruction: str,
     ) -> str:
         product_line = (
             f"Product: {product_name}."
@@ -568,8 +723,12 @@ class GeminiDirector:
             self.COMPOSITION_POLICY,
             self.CONTINUITY_POLICY,
             "",
+            f"Director role: {director_role}.",
             f"Scene goal: {goal}",
+            f"Shot design: {shot_instruction}",
+            f"Natural action direction: {action_instruction}",
             f"Camera direction: {motion_instruction}",
+            f"Sequence diversity: {diversity_instruction}",
             f"Ending direction: {transition_instruction}",
             f"Reference-image context: {visual_context}",
             "",
@@ -654,12 +813,28 @@ class GeminiDirector:
             for scene in ready_scenes
         ]
 
+        motion_counts: Dict[str, int] = {}
+        role_counts: Dict[str, int] = {}
+        prevented_count = 0
+        for scene in ready_scenes:
+            motion = str(scene.get("camera_motion") or "unknown")
+            role = str(scene.get("director_role") or "unknown")
+            motion_counts[motion] = motion_counts.get(motion, 0) + 1
+            role_counts[role] = role_counts.get(role, 0) + 1
+            if scene.get("motion_reused_prevented"):
+                prevented_count += 1
+
         return {
             "scene_count": len(scenes),
             "ready_scene_count": len(ready_scenes),
             "not_ready_scene_count": len(scenes) - len(ready_scenes),
             "total_duration_seconds": round(sum(durations), 2),
             "prompt_count": len(ready_scenes),
+            "director_version": self.VERSION,
+            "motion_counts": motion_counts,
+            "role_counts": role_counts,
+            "unique_motion_count": len(motion_counts),
+            "consecutive_motion_prevented_count": prevented_count,
             "all_first_frame_locked": all(
                 bool(scene.get("first_frame_policy"))
                 for scene in ready_scenes
