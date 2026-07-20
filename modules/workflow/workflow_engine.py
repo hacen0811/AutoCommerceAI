@@ -3,6 +3,7 @@ from pathlib import Path
 import hashlib
 import json
 import mimetypes
+import re
 import shutil
 import subprocess
 import threading
@@ -77,7 +78,7 @@ from modules.video.download_utils import (
 )
 
 
-print("######## WORKFLOW_ENGINE SPRINT114-1 LOADED ########", flush=True)
+print("######## WORKFLOW_ENGINE SPRINT115-1 LOADED ########", flush=True)
 
 
 class WorkflowEngine:
@@ -102,7 +103,7 @@ class WorkflowEngine:
     → CapCutExport
     """
 
-    WORKFLOW_VERSION = "workflow-engine-114-1"
+    WORKFLOW_VERSION = "workflow-engine-115-1"
 
     # Sprint102-3: 동일 프로젝트의 WorkflowEngine 중복 진입을 차단합니다.
     _RUN_GUARD = threading.RLock()
@@ -1106,6 +1107,60 @@ class WorkflowEngine:
 
         return normalized
 
+    def _parse_manual_review_text(self, value):
+        """Sprint115-1: 붙여넣은 한글 리뷰·댓글을 리뷰 객체 목록으로 변환합니다."""
+        text = str(value or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+        if not text:
+            return []
+
+        # 빈 줄을 기본 리뷰 구분자로 사용합니다.
+        raw_blocks = [block.strip() for block in re.split(r"\n\s*\n+", text) if block.strip()]
+        reviews = []
+
+        for block in raw_blocks:
+            lines = [line.strip() for line in block.split("\n") if line.strip()]
+            cleaned_lines = []
+            for line in lines:
+                # 별점만 있는 줄은 메타데이터이므로 본문에서 제외합니다.
+                if re.fullmatch(r"[★☆⭐\s]{1,10}", line):
+                    continue
+                line = re.sub(r"^\s*(?:[-•·]|\d+[.)])\s*", "", line).strip()
+                if line:
+                    cleaned_lines.append(line)
+
+            content = " ".join(cleaned_lines).strip()
+            if content:
+                reviews.append(
+                    {
+                        "content": content,
+                        "text": content,
+                        "review_text": content,
+                        "source": "manual_review_text",
+                    }
+                )
+
+        # 빈 줄 없이 한 줄씩 붙여넣은 댓글 목록도 지원합니다.
+        if len(reviews) <= 1 and len(raw_blocks) == 1:
+            lines = [line.strip() for line in text.split("\n") if line.strip()]
+            non_rating_lines = [
+                re.sub(r"^\s*(?:[-•·]|\d+[.)])\s*", "", line).strip()
+                for line in lines
+                if not re.fullmatch(r"[★☆⭐\s]{1,10}", line)
+            ]
+            non_rating_lines = [line for line in non_rating_lines if line]
+            if len(non_rating_lines) >= 2:
+                reviews = [
+                    {
+                        "content": line,
+                        "text": line,
+                        "review_text": line,
+                        "source": "manual_review_text",
+                    }
+                    for line in non_rating_lines
+                ]
+
+        return self._merge_reviews(reviews)
+
     def _merge_reviews(self, *review_groups):
         """리뷰 본문 기준으로 중복을 제거하며 순서를 보존합니다."""
         merged = []
@@ -2001,6 +2056,7 @@ class WorkflowEngine:
         project,
         sample_count=6,
         review_image_paths=None,
+        review_text="",
         product_image_paths=None,
         product_image_path="",
         youtube_privacy_status="private",
@@ -2040,6 +2096,7 @@ class WorkflowEngine:
                 project=project,
                 sample_count=sample_count,
                 review_image_paths=review_image_paths,
+                review_text=review_text,
                 product_image_paths=product_image_paths,
                 product_image_path=product_image_path,
                 youtube_privacy_status=youtube_privacy_status,
@@ -2058,11 +2115,13 @@ class WorkflowEngine:
         project,
         sample_count=6,
         review_image_paths=None,
+        review_text="",
         product_image_paths=None,
         product_image_path="",
         youtube_privacy_status="private",
     ):
         review_image_paths = review_image_paths or []
+        review_text = str(review_text or "").strip()
         product_image_paths = product_image_paths or []
         youtube_privacy_status = (
             self._normalize_youtube_privacy_status(
@@ -5072,6 +5131,14 @@ class WorkflowEngine:
             "items": [],
             "comments": [],
         }
+        manual_review_result = {
+            "ok": False,
+            "version": "evidence-input-engine-115-1",
+            "status": "not_provided",
+            "review_count": 0,
+            "reviews": [],
+            "source": "manual_review_text",
+        }
         review_ocr_result = {
             "ok": False,
             "status": "not_run",
@@ -5172,14 +5239,45 @@ class WorkflowEngine:
                 project_data,
                 supplied_paths=review_image_paths,
             )
-            review_ocr_result = self._run_review_image_ocr(
-                resolved_review_image_paths,
-                project,
-                multi_image_mode=multi_image_mode,
+            manual_reviews = self._parse_manual_review_text(review_text)
+            manual_review_result.update(
+                {
+                    "ok": bool(manual_reviews),
+                    "status": "collected" if manual_reviews else "not_provided",
+                    "review_count": len(manual_reviews),
+                    "reviews": manual_reviews,
+                    "character_count": len(review_text),
+                }
             )
-            ocr_reviews = self._normalize_reviews(
-                review_ocr_result.get("reviews", []),
-                source="review_image_ocr",
+
+            if manual_reviews:
+                review_ocr_result.update(
+                    {
+                        "status": "bypassed_manual_review_text",
+                        "image_count": len(resolved_review_image_paths),
+                        "image_paths": list(resolved_review_image_paths),
+                        "review_count": 0,
+                        "reviews": [],
+                    }
+                )
+                ocr_reviews = []
+            else:
+                review_ocr_result = self._run_review_image_ocr(
+                    resolved_review_image_paths,
+                    project,
+                    multi_image_mode=multi_image_mode,
+                )
+                ocr_reviews = self._normalize_reviews(
+                    review_ocr_result.get("reviews", []),
+                    source="review_image_ocr",
+                )
+
+            print(
+                "[Sprint115-1 Evidence Input] Manual Reviews:",
+                len(manual_reviews),
+                "OCR Status:",
+                review_ocr_result.get("status"),
+                flush=True,
             )
             print(
                 "[DEBUG73-4] OCR Raw First:",
@@ -5211,6 +5309,7 @@ class WorkflowEngine:
             )
             merged_reviews = self._merge_reviews(
                 coupang_reviews,
+                manual_reviews,
                 ocr_reviews,
             )
 
@@ -5218,7 +5317,11 @@ class WorkflowEngine:
 
             review_clean_result = ReviewCleaner().clean(
                 reviews=raw_merged_reviews,
-                source="coupang+review_image_ocr",
+                source=(
+                    "coupang+manual_review_text"
+                    if manual_reviews
+                    else "coupang+review_image_ocr"
+                ),
             )
 
             clean_reviews = review_clean_result.get(
@@ -5236,6 +5339,7 @@ class WorkflowEngine:
             outputs["review_clean"] = review_clean_result
 
             coupang_count = len(coupang_reviews)
+            manual_count = len(manual_reviews)
             ocr_count = len(ocr_reviews)
             raw_merged_count = len(raw_merged_reviews)
             merged_count = len(merged_reviews)
@@ -5273,7 +5377,13 @@ class WorkflowEngine:
                 flush=True,
             )
 
-            if coupang_count and ocr_count:
+            if coupang_count and manual_count:
+                merged_source = "coupang+manual_review_text"
+                merged_status = "collected_manual_merged"
+            elif manual_count:
+                merged_source = "manual_review_text"
+                merged_status = "collected_manual"
+            elif coupang_count and ocr_count:
                 merged_source = "coupang+review_image_ocr"
                 merged_status = "collected_merged"
             elif ocr_count:
@@ -5299,18 +5409,21 @@ class WorkflowEngine:
                 )
 
             product_plan["coupang_reviews"] = coupang_reviews
+            product_plan["manual_reviews"] = manual_reviews
             product_plan["ocr_reviews"] = ocr_reviews
             product_plan["reviews"] = merged_reviews
             product_plan["review_data"] = merged_reviews
             product_plan["review_count"] = merged_count
             product_plan["review_source"] = merged_source
             product_plan["review_collect_status"] = merged_status
+            product_plan["manual_review_input"] = manual_review_result
             product_plan["review_ocr"] = review_ocr_result
             product_plan["review_clean"] = review_clean_result
             product_plan["raw_merged_review_count"] = raw_merged_count
             product_plan["clean_review_count"] = merged_count
 
             outputs["product_plan"] = product_plan
+            outputs["manual_review_input"] = manual_review_result
             outputs["review_ocr"] = review_ocr_result
             outputs["review_clean"] = review_clean_result
             outputs["merged_reviews"] = merged_reviews
@@ -5320,6 +5433,7 @@ class WorkflowEngine:
                 "[Sprint71-2] Review Merge:",
                 {
                     "coupang": coupang_count,
+                    "manual": manual_count,
                     "ocr": ocr_count,
                     "merged": merged_count,
                     "source": merged_source,
@@ -5328,6 +5442,7 @@ class WorkflowEngine:
                 flush=True,
             )
         except Exception as exc:
+            outputs["manual_review_input"] = manual_review_result
             outputs["review_ocr"] = review_ocr_result
             outputs["review_clean"] = review_clean_result
             outputs["merged_reviews"] = merged_reviews

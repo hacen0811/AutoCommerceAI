@@ -36,7 +36,7 @@ except Exception:
     SearchKeywordEngine = None
 
 
-UI_VERSION = "sprint102-3-duplicate-run-guard"
+UI_VERSION = "sprint115-4-unified-evidence-text"
 RESULT_DIR = Path("exports/one_click_results")
 REVIEW_IMAGE_ROOT = Path("assets/review_images")
 PRODUCT_IMAGE_ROOT = Path("assets/products")
@@ -581,6 +581,7 @@ def run_project_pipeline(
     project,
     sample_count,
     review_image_paths=None,
+    review_text="",
     product_image_paths=None,
     product_image_path="",
     youtube_privacy_status="private",
@@ -625,6 +626,7 @@ def run_project_pipeline(
             project=project,
             sample_count=sample_count,
             review_image_paths=review_image_paths,
+            review_text=review_text,
             product_image_paths=product_image_paths,
             product_image_path=product_image_path,
             youtube_privacy_status=youtube_privacy_status,
@@ -643,6 +645,7 @@ def _run_project_pipeline_impl(
     project,
     sample_count,
     review_image_paths=None,
+    review_text="",
     product_image_paths=None,
     product_image_path="",
     youtube_privacy_status="private",
@@ -653,6 +656,7 @@ def _run_project_pipeline_impl(
     )
 
     review_image_paths = list(review_image_paths or [])
+    review_text = str(review_text or "").strip()
     product_image_paths = list(product_image_paths or [])
     if product_image_path and product_image_path not in product_image_paths:
         product_image_paths.insert(0, product_image_path)
@@ -662,6 +666,14 @@ def _run_project_pipeline_impl(
         "[Sprint72-1] Review Images:",
         len(review_image_paths),
         review_image_paths,
+        flush=True,
+    )
+
+    print(
+        "[Sprint115-1 Evidence Input] Manual Review Text:",
+        bool(review_text),
+        "chars=",
+        len(review_text),
         flush=True,
     )
 
@@ -676,6 +688,7 @@ def _run_project_pipeline_impl(
         project,
         sample_count=sample_count,
         review_image_paths=review_image_paths,
+        review_text=review_text,
         product_image_paths=product_image_paths,
         product_image_path=product_image_path,
         youtube_privacy_status=youtube_privacy_status,
@@ -723,9 +736,44 @@ def show_review_upload_area(project, key_prefix):
     return uploaded_files
 
 
+def show_review_text_input_area(project, key_prefix):
+    """Sprint115-3: 리뷰 입력값을 text_area 반환값으로 직접 전달합니다."""
+    project_safe_id = safe_project_id(project)
+    state_key = f"{key_prefix}_review_text_{project_safe_id}"
+
+    st.subheader("리뷰 · 댓글 직접 입력")
+    st.caption(
+        "한글 리뷰나 댓글을 그대로 붙여넣으세요. "
+        "내용이 있으면 리뷰 이미지 OCR보다 직접 입력값을 우선 사용합니다."
+    )
+
+    review_text = st.text_area(
+        "리뷰 또는 댓글 붙여넣기",
+        height=220,
+        placeholder=(
+            "바퀴가 부드럽게 잘 굴러가요.\n\n"
+            "3박 4일 여행에 크기가 잘 맞았습니다."
+        ),
+        key=state_key,
+    )
+
+    review_text = str(review_text or "")
+
+    st.caption(f"현재 입력 글자 수: {len(review_text.strip())}")
+
+    if review_text.strip():
+        st.success(
+            f"직접 입력 리뷰가 준비됐습니다. "
+            f"({len(review_text.strip())}자)"
+        )
+
+    return review_text
+
+
 def render_project_pipeline(
     project,
     sample_count,
+    review_text="",
     youtube_privacy_status="private",
 ):
     init_selected_sources(project)
@@ -759,12 +807,21 @@ def render_project_pipeline(
         key_prefix="existing",
     )
 
+    manual_review_text = str(review_text or "")
+
     c1, c2 = st.columns(2)
 
     if c1.button(
         "현재 프로젝트 원클릭 실행",
         use_container_width=True,
+        key=f"existing_one_click_{project_safe_id}",
     ):
+        manual_review_text = str(manual_review_text or "")
+        print(
+            "[Sprint115-4 Unified Review Value] chars=",
+            len(manual_review_text.strip()),
+            flush=True,
+        )
         print(
             "[Sprint72-1] One Click button pressed",
             flush=True,
@@ -796,7 +853,9 @@ def render_project_pipeline(
                 f"상품 이미지 {len(product_image_paths)}장을 AI Director에 전달합니다."
             )
 
-        if review_paths:
+        if manual_review_text.strip():
+            st.info("직접 입력한 한글 리뷰를 우선 사용합니다. 리뷰 이미지 OCR은 건너뜁니다.")
+        elif review_paths:
             st.info(
                 f"리뷰 이미지 {len(review_paths)}장을 OCR에 전달합니다."
             )
@@ -807,6 +866,7 @@ def render_project_pipeline(
                     project,
                     sample_count,
                     review_image_paths=review_paths,
+                    review_text=manual_review_text,
                     product_image_paths=product_image_paths,
                     product_image_path=product_image_path,
                     youtube_privacy_status=youtube_privacy_status,
@@ -1012,6 +1072,29 @@ def show_one_click_pipeline():
     )
 
     st.divider()
+    st.subheader("공통 리뷰 · 댓글 직접 입력")
+    st.caption(
+        "여기에 붙여넣은 리뷰는 새 프로젝트 생성과 기존 프로젝트 원클릭 실행에 "
+        "같이 사용됩니다. 내용이 있으면 리뷰 이미지 OCR을 건너뜁니다."
+    )
+    common_review_text = st.text_area(
+        "리뷰 또는 댓글 붙여넣기",
+        height=260,
+        placeholder=(
+            "쿠팡 리뷰, 유튜브·틱톡·인스타 댓글을 그대로 붙여넣으세요.\n"
+            "리뷰 사이에는 빈 줄을 넣어주세요."
+        ),
+        key="sprint115_common_review_text",
+    )
+    common_review_text = str(common_review_text or "")
+    st.caption(f"현재 입력 글자 수: {len(common_review_text.strip())}")
+    if common_review_text.strip():
+        st.success(
+            f"공통 직접 입력 리뷰가 준비되었습니다. "
+            f"({len(common_review_text.strip())}자)"
+        )
+
+    st.divider()
     st.subheader("수동 자료로 새 프로젝트 생성")
 
     coupang_url = st.text_area(
@@ -1155,6 +1238,7 @@ def show_one_click_pipeline():
                         project,
                         sample_count,
                         review_image_paths=review_paths,
+                        review_text=common_review_text,
                         product_image_paths=product_image_paths,
                         product_image_path=product_image_path,
                         youtube_privacy_status=youtube_privacy_status,
@@ -1236,6 +1320,7 @@ def show_one_click_pipeline():
     render_project_pipeline(
         project,
         sample_count,
+        review_text=common_review_text,
         youtube_privacy_status=youtube_privacy_status,
     )
 
