@@ -78,7 +78,7 @@ from modules.video.download_utils import (
 )
 
 
-print("######## WORKFLOW_ENGINE SPRINT115-1 LOADED ########", flush=True)
+print("######## WORKFLOW_ENGINE SPRINT121-1 LOADED ########", flush=True)
 
 
 class WorkflowEngine:
@@ -103,7 +103,7 @@ class WorkflowEngine:
     → CapCutExport
     """
 
-    WORKFLOW_VERSION = "workflow-engine-115-1"
+    WORKFLOW_VERSION = "workflow-engine-121-1"
 
     # Sprint102-3: 동일 프로젝트의 WorkflowEngine 중복 진입을 차단합니다.
     _RUN_GUARD = threading.RLock()
@@ -5682,9 +5682,33 @@ class WorkflowEngine:
                     or "선택 상품"
                 ),
                 review_count=len(merged_reviews),
+                story_intelligence=outputs.get(
+                    "story_intelligence",
+                    {},
+                ),
             )
 
             outputs["review_scripts"] = review_script_result
+
+            print(
+                "[Sprint120-4 Script Bridge] Version:",
+                review_script_result.get("scene_script_bridge_version", ""),
+                flush=True,
+            )
+            print(
+                "[Sprint120-4 Script Bridge] Scene Subtitles:",
+                review_script_result.get("scene_subtitle_count", 0),
+                flush=True,
+            )
+            print(
+                "[Sprint120-4 Script Bridge] Template:",
+                {
+                    "version": review_script_result.get("story_template_version", ""),
+                    "category": review_script_result.get("story_template_category", ""),
+                    "key": review_script_result.get("story_template_key", ""),
+                },
+                flush=True,
+            )
 
             print(
                 "[Sprint73-4] Script Generator:",
@@ -5755,6 +5779,10 @@ class WorkflowEngine:
                 ),
                 "review_hooks": outputs.get(
                     "review_hooks",
+                    {},
+                ),
+                "review_scripts": outputs.get(
+                    "review_scripts",
                     {},
                 ),
                 "review_hook": (

@@ -21,6 +21,8 @@ CONTENT_PACK_DIR = Path("exports/content_packs")
 
 
 class ContentFactory:
+    VERSION = "content-factory-121-1"
+
     def __init__(self):
         CONTENT_PACK_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -169,24 +171,73 @@ class ContentFactory:
         # Sprint73 Review Pipeline
         # ===================================
 
-        review_quotes = ReviewQuoteSelector().select(
-            review_source,
-            review_insight,
-        )
+        # Sprint121-1: WorkflowEngine에서 이미 생성한 Review Pipeline 결과를
+        # 우선 재사용합니다. 값이 없거나 비정상일 때만 기존 생성기를 실행합니다.
+        existing_review_quotes = pack.get("review_quotes")
+        if isinstance(existing_review_quotes, dict) and existing_review_quotes:
+            review_quotes = existing_review_quotes
+            quote_reused = True
+        else:
+            review_quotes = ReviewQuoteSelector().select(
+                review_source,
+                review_insight,
+            )
+            quote_reused = False
 
-        review_hooks = ReviewHookGenerator().generate(
-            review_quotes=review_quotes,
-            review_insight=review_insight,
-            product_name=project_name,
-            review_count=review_ai.get("review_count", 0),
-        )
+        existing_review_hooks = pack.get("review_hooks")
+        if isinstance(existing_review_hooks, dict) and existing_review_hooks:
+            review_hooks = existing_review_hooks
+            hook_reused = True
+        else:
+            review_hooks = ReviewHookGenerator().generate(
+                review_quotes=review_quotes,
+                review_insight=review_insight,
+                product_name=project_name,
+                review_count=review_ai.get("review_count", 0),
+            )
+            hook_reused = False
 
-        review_scripts = ReviewScriptGenerator().generate(
-            review_hooks=review_hooks,
-            review_quotes=review_quotes,
-            review_insight=review_insight,
-            product_name=project_name,
-            review_count=review_ai.get("review_count", 0),
+        existing_review_scripts = pack.get("review_scripts")
+        if isinstance(existing_review_scripts, dict) and existing_review_scripts:
+            review_scripts = existing_review_scripts
+            script_reused = True
+        else:
+            review_scripts = ReviewScriptGenerator().generate(
+                review_hooks=review_hooks,
+                review_quotes=review_quotes,
+                review_insight=review_insight,
+                product_name=project_name,
+                review_count=review_ai.get("review_count", 0),
+            )
+            script_reused = False
+
+        pack["review_pipeline_reuse"] = {
+            "ok": True,
+            "version": "review-pipeline-reuse-121-1",
+            "quote_reused": quote_reused,
+            "hook_reused": hook_reused,
+            "script_reused": script_reused,
+        }
+
+        print(
+            "[Sprint121-1 Review Pipeline Reuse] Version:",
+            "review-pipeline-reuse-121-1",
+            flush=True,
+        )
+        print(
+            "[Sprint121-1 Review Pipeline Reuse] Quote Reused:",
+            quote_reused,
+            flush=True,
+        )
+        print(
+            "[Sprint121-1 Review Pipeline Reuse] Hook Reused:",
+            hook_reused,
+            flush=True,
+        )
+        print(
+            "[Sprint121-1 Review Pipeline Reuse] Script Reused:",
+            script_reused,
+            flush=True,
         )
 
         pack["review_quotes"] = review_quotes
