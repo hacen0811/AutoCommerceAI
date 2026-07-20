@@ -5,6 +5,7 @@ from typing import Any, Dict, List
 
 
 class ReviewScriptGenerator:
+    _STORY_CACHE: Dict[str, Dict[str, Any]] = {}
     """
     Sprint75-1 Review Script Rewriter
 
@@ -15,7 +16,7 @@ class ReviewScriptGenerator:
     - 외부 AI API 없이 규칙 기반으로 동작
     """
 
-    VERSION = "review-script-generator-81-10"
+    VERSION = "review-script-generator-120-7"
 
     def _build_analysis_bundle(
         self,
@@ -129,6 +130,7 @@ class ReviewScriptGenerator:
 
         before_after_story = self._build_before_after_story(
             product_name=product_name,
+            product_type=product_type,
             pain_summary=pain_summary,
             benefit_summary=benefit_summary,
             evidence_summary=evidence_summary,
@@ -286,6 +288,18 @@ class ReviewScriptGenerator:
             ),
         )
 
+        # Sprint120-6: product category must override stale review-type wording.
+        contaminated_choice_tokens = (
+            "수납공간", "내부 구성", "내부 정리", "짐의 양", "캐리어", "여행 기간",
+        )
+        if product_type_text in ("electronics", "seasonal") and any(
+            token in decision for token in contaminated_choice_tokens
+        ):
+            if product_type_text == "seasonal":
+                decision = f"그래서 휴대성과 사용 방식을 기준으로 {self._with_object_particle(product)} 선택했습니다"
+            else:
+                decision = f"그래서 성능과 실제 사용 조건을 기준으로 {self._with_object_particle(product)} 선택했습니다"
+
         if product_type_text == "travel" and "3박 4일" in evidence_summary:
             problem = "3박 4일 여행인데 20인치와 24인치 중 어떤 크기를 골라야 할지 고민하게 됩니다"
             emotion = "너무 작으면 짐이 부족하고 너무 크면 이동이 부담스러울 수 있습니다"
@@ -390,6 +404,340 @@ class ReviewScriptGenerator:
             "satisfaction": self._clean_text(satisfaction),
         }
 
+    def _build_scene_script_bridge(
+        self,
+        story_intelligence: Dict[str, Any],
+        product_name: str,
+        best_hook: str,
+        pain_summary: str,
+        benefit_summary: str,
+        evidence_summary: str,
+        story_context: Dict[str, str],
+    ) -> Dict[str, Any]:
+        """Convert Story Intelligence goals into complete, concrete scene subtitles."""
+        story = story_intelligence if isinstance(story_intelligence, dict) else {}
+        goals = story.get("scene_goals", [])
+        if not isinstance(goals, list):
+            goals = []
+
+        category = self._clean_text(
+            story.get("story_template_category")
+            or story.get("product_type")
+            or "general"
+        ).lower()
+        product = self._clean_text(product_name)
+        selling_points = story.get("selling_points", [])
+        if not isinstance(selling_points, list):
+            selling_points = []
+        selling_points = [
+            self._clean_text(item)
+            for item in selling_points
+            if self._clean_text(item)
+        ]
+
+        combined = " ".join(
+            [product, pain_summary, benefit_summary, evidence_summary, *selling_points]
+        )
+        is_neck_fan = any(
+            token in combined
+            for token in ("목걸이", "넥밴드", "선풍기", "쿨링", "각도 조절", "탁상")
+        )
+
+        if category in ("electronics", "seasonal") and is_neck_fan:
+            concrete = {
+                "hook": "목에만 거는 선풍기인 줄 알았는데, 책상에서도 사용할 수 있었습니다",
+                "pain": "손이 자유롭지 않거나 바람 방향을 맞추기 어려운 점이 불편합니다",
+                "feature": "목에 걸고 각도를 조절해 탁상형으로도 사용할 수 있습니다",
+                "usage": "이동할 때는 목에 걸고 책상에서는 세워 사용할 수 있습니다",
+                "proof": "실사용 후기에서도 휴대성과 각도 조절 활용이 반복해서 확인됐습니다",
+                "cta": "무게와 사용 시간, 소음을 비교해 내 환경에 맞는지 확인해 보세요",
+            }
+        else:
+            concrete = {
+                "hook": self._first_text(best_hook, f"{product}, 실제 사용에서는 어떨까요?"),
+                "pain": self._first_text(pain_summary, story_context.get("problem")),
+                "feature": self._first_text(
+                    selling_points[0] if selling_points else "",
+                    benefit_summary,
+                ),
+                "usage": self._first_text(benefit_summary, story_context.get("change")),
+                "proof": self._first_text(evidence_summary, story_context.get("result")),
+                "cta": self._product_cta(product),
+            }
+
+        category_fallbacks = {
+            "electronics": {
+                "pain": "기능은 비슷해 보여도 무게와 소음, 사용 시간에서 차이가 납니다",
+                "feature": "사용 장소에 맞게 형태와 각도를 바꿔 활용할 수 있습니다",
+                "usage": "이동 중에는 휴대하고 책상에서는 세워 사용할 수 있습니다",
+                "proof": "실사용 후기에서는 휴대성과 활용 방식이 반복해서 언급됐습니다",
+                "cta": "무게와 사용 시간, 소음을 비교해 내 환경에 맞는지 확인해 보세요",
+            },
+            "seasonal": {
+                "pain": "더운 날 손으로 계속 들고 쓰면 움직임이 불편해집니다",
+                "feature": "필요한 장소와 자세에 맞춰 바로 사용할 수 있습니다",
+                "usage": "이동 중과 실내에서 상황에 맞게 활용할 수 있습니다",
+                "proof": "실사용 후기에서는 휴대성과 활용 방식이 반복해서 언급됐습니다",
+                "cta": "필요한 계절 전에 무게와 사용 시간을 확인해 보세요",
+            },
+            "travel": {
+                "pain": "여행 기간과 짐의 양에 맞는 크기를 고르기 어렵습니다",
+                "feature": "짐의 양에 맞춰 내부 공간을 나누어 사용할 수 있습니다",
+                "usage": "필요한 짐을 구분해 담고 이동 동선까지 확인할 수 있습니다",
+                "proof": "후기에서는 수납과 이동 편의가 반복해서 언급됐습니다",
+                "cta": "여행 기간과 짐의 양을 기준으로 크기를 비교해 보세요",
+            },
+            "storage": {
+                "pain": "물건이 섞이면 찾고 다시 정리하는 시간이 늘어납니다",
+                "feature": "자주 쓰는 물건을 구분해 정리할 수 있습니다",
+                "usage": "필요한 위치에 두고 바로 꺼내 사용할 수 있습니다",
+                "proof": "후기에서는 정리와 수납 편의가 반복해서 언급됐습니다",
+                "cta": "설치 공간과 수납량이 생활 동선에 맞는지 확인해 보세요",
+            },
+            "kitchen": {
+                "pain": "준비와 세척이 번거로우면 자주 사용하기 어렵습니다",
+                "feature": "사용과 세척, 보관 과정을 간단하게 줄일 수 있습니다",
+                "usage": "준비부터 사용 후 정리까지 한 흐름으로 사용할 수 있습니다",
+                "proof": "후기에서는 세척과 보관 편의가 반복해서 언급됐습니다",
+                "cta": "재질과 세척 방식, 보관 편의를 함께 확인해 보세요",
+            },
+        }
+        fallback = category_fallbacks.get(category, {})
+
+        def normalize_candidate(value: Any, purpose: str) -> str:
+            line = self._clean_text(value)
+            if not line:
+                return ""
+            line = re.sub(r"^[\-•·]+\s*", "", line)
+            line = re.sub(r"\s+", " ", line).strip(" ,")
+            line = line.rstrip(".… ")
+            line = re.sub(
+                r"(?:이라는|라는|다는)\s*후기가\s*가장\s*많았습니다$",
+                "라는 의견이 많았습니다",
+                line,
+            )
+            incomplete_endings = (
+                "테이", "이라", "라는", "다는", "하고", "하며", "되어", "되는",
+                "있고", "있어", "때문", "경우", "부분", "정도", "외에도",
+            )
+            generic_phrases = (
+                "기존 제품을 사용하면서 불편한 점이 있다",
+                "사용 편의성과 활용성을 높일 수 있다",
+                "편리하게 사용할 수 있다",
+                "활용도가 높다",
+            )
+            if line.endswith(incomplete_endings):
+                return ""
+            if any(phrase == line for phrase in generic_phrases):
+                return ""
+            if len(line) > 72:
+                sentence_parts = re.split(r"(?<=[.!?])\s+", line)
+                complete = next((part for part in sentence_parts if 12 <= len(part) <= 72), "")
+                if complete:
+                    line = complete
+                else:
+                    comma_parts = [part.strip() for part in re.split(r"[,，]", line) if part.strip()]
+                    line = next((part for part in comma_parts if 12 <= len(part) <= 62), "")
+                    if not line:
+                        return ""
+            if len(line) < 8:
+                return ""
+            return self._sentence(line)
+
+        purpose_alias = {
+            "problem": "pain",
+            "benefit": "feature",
+            "demonstration": "usage",
+            "review": "proof",
+            "result": "cta",
+            "comparison": "feature",
+        }
+        banned_by_category = {
+            "electronics": ("캐리어", "여행 기간", "짐의 양", "수납 구조"),
+            "seasonal": ("캐리어", "여행 기간", "짐의 양", "수납 구조"),
+            "travel": ("세척", "조리", "주방"),
+            "kitchen": ("캐리어", "여행", "짐의 양"),
+        }
+
+        scene_lines: List[Dict[str, Any]] = []
+        purpose_lines: Dict[str, str] = {}
+        used_keys: set[str] = set()
+
+        for index, raw_goal in enumerate(goals, start=1):
+            if not isinstance(raw_goal, dict):
+                continue
+            raw_purpose = self._clean_text(raw_goal.get("purpose") or "feature").lower()
+            canonical = purpose_alias.get(raw_purpose, raw_purpose)
+            evidence_text = self._first_text(
+                raw_goal.get("evidence_text"),
+                raw_goal.get("review_evidence"),
+                raw_goal.get("evidence"),
+            )
+            primary_point = self._first_text(
+                raw_goal.get("primary_selling_point"),
+                selling_points[0] if selling_points else "",
+            )
+
+            candidates: List[str] = []
+            if canonical == "hook":
+                candidates = [concrete.get("hook", ""), best_hook]
+            elif canonical == "pain":
+                candidates = [concrete.get("pain", ""), evidence_text, pain_summary]
+            elif canonical == "feature":
+                candidates = [concrete.get("feature", ""), primary_point, benefit_summary]
+            elif canonical == "usage":
+                candidates = [concrete.get("usage", ""), primary_point, benefit_summary]
+            elif canonical == "proof":
+                candidates = [concrete.get("proof", ""), evidence_text, evidence_summary]
+            elif canonical == "cta":
+                candidates = [concrete.get("cta", ""), fallback.get("cta", "")]
+            else:
+                candidates = [concrete.get(canonical, ""), evidence_text, primary_point]
+
+            line = ""
+            for candidate in candidates:
+                checked = normalize_candidate(candidate, canonical)
+                if not checked:
+                    continue
+                if any(token in checked for token in banned_by_category.get(category, ())):
+                    continue
+                key = re.sub(r"[^0-9A-Za-z가-힣]", "", checked.lower())
+                if key in used_keys:
+                    continue
+                line = checked
+                break
+
+            if not line:
+                line = normalize_candidate(
+                    concrete.get(canonical) or fallback.get(canonical),
+                    canonical,
+                )
+            if not line:
+                continue
+
+            key = re.sub(r"[^0-9A-Za-z가-힣]", "", line.lower())
+            if key in used_keys:
+                continue
+            used_keys.add(key)
+            purpose_lines.setdefault(raw_purpose, line)
+            purpose_lines.setdefault(canonical, line)
+            scene_lines.append({
+                "scene_id": self._first_text(raw_goal.get("scene_id"), f"scene_{index:02d}"),
+                "order": self._safe_int(raw_goal.get("order") or index),
+                "purpose": raw_purpose,
+                "goal": self._clean_text(raw_goal.get("goal")),
+                "subtitle": line,
+                "source": "story_intelligence_scene_goal",
+            })
+
+        return {
+            "version": "scene-script-bridge-120-7",
+            "enabled": bool(scene_lines),
+            "story_version": self._clean_text(story.get("version")),
+            "story_type": self._clean_text(story.get("story_type")),
+            "product_type": self._clean_text(story.get("product_type")),
+            "template_version": self._clean_text(story.get("story_template_version")),
+            "template_category": category,
+            "template_key": self._clean_text(story.get("story_template_key")),
+            "scene_count": len(scene_lines),
+            "scene_lines": scene_lines,
+            "purpose_lines": purpose_lines,
+        }
+
+    def _apply_scene_script_bridge(
+        self,
+        sections: Dict[str, str],
+        scene_script_bridge: Dict[str, Any],
+        section_purpose_map: Dict[str, tuple],
+    ) -> Dict[str, str]:
+        result = dict(sections)
+        bridge = scene_script_bridge if isinstance(scene_script_bridge, dict) else {}
+        purpose_lines = bridge.get("purpose_lines", {})
+        if not isinstance(purpose_lines, dict):
+            return result
+
+        for section_name, purposes in section_purpose_map.items():
+            for purpose in purposes:
+                value = self._clean_text(purpose_lines.get(purpose))
+                if value:
+                    result[section_name] = self._sentence(value)
+                    break
+        return result
+
+    def _finalize_script_sections(
+        self,
+        sections: Dict[str, str],
+        product_type: str,
+        scene_script_bridge: Dict[str, Any],
+    ) -> Dict[str, str]:
+        """Remove category contamination and repeated scene meanings."""
+        result = dict(sections)
+        category = self._clean_text(product_type).lower()
+        bridge = scene_script_bridge if isinstance(scene_script_bridge, dict) else {}
+        purpose_lines = bridge.get("purpose_lines", {})
+        if not isinstance(purpose_lines, dict):
+            purpose_lines = {}
+
+        banned = {
+            "electronics": ("수납공간", "내부 구성", "내부 정리", "짐의 양", "여행 기간", "캐리어"),
+            "seasonal": ("수납공간", "내부 구성", "내부 정리", "짐의 양", "여행 기간", "캐리어"),
+            "travel": ("세척 방식", "조리", "주방"),
+            "kitchen": ("여행 기간", "짐의 양", "캐리어"),
+        }.get(category, ())
+
+        replacements = {
+            "electronics": "그래서 성능과 실제 사용 조건을 기준으로 선택했습니다.",
+            "seasonal": "그래서 휴대성과 사용 방식을 기준으로 선택했습니다.",
+            "travel": "그래서 여행 기간과 짐의 양을 기준으로 선택했습니다.",
+            "kitchen": "그래서 사용과 세척 편의를 기준으로 선택했습니다.",
+        }
+        for key, value in list(result.items()):
+            text = self._clean_text(value)
+            if text and banned and any(token in text for token in banned):
+                if key in ("choice", "strategy"):
+                    result[key] = replacements.get(category, "그래서 실제 사용 목적을 기준으로 선택했습니다.")
+                else:
+                    result[key] = ""
+
+        # If Story Bridge already supplied usage, remove the legacy long-usage sentence.
+        bridge_usage = self._clean_text(purpose_lines.get("usage") or purpose_lines.get("demonstration"))
+        if bridge_usage and self._clean_text(result.get("after")):
+            usage = self._clean_text(result.get("usage"))
+            if usage and (
+                self._meaning_overlap(bridge_usage, usage)
+                or self._meaning_overlap(usage, bridge_usage)
+                or any(token in usage and token in bridge_usage for token in ("목에", "책상", "세워", "이동"))
+            ):
+                result["usage"] = ""
+
+        # Recommendation mapped from CTA must not repeat the final CTA.
+        recommendation = self._clean_text(result.get("recommendation"))
+        cta = self._clean_text(result.get("cta"))
+        if recommendation and cta and (
+            self._meaning_overlap(recommendation, cta)
+            or self._meaning_overlap(cta, recommendation)
+            or ("확인해 보세요" in recommendation and "확인해 보세요" in cta)
+        ):
+            result["recommendation"] = ""
+
+        # Keep the first meaningful sentence when later sections repeat it.
+        seen: List[str] = []
+        protected = {"hook", "problem", "cta"}
+        for key in list(result.keys()):
+            text = self._clean_text(result.get(key))
+            if not text:
+                continue
+            duplicate = any(
+                self._meaning_overlap(previous, text)
+                and self._meaning_overlap(text, previous)
+                for previous in seen
+            )
+            if duplicate and key not in protected:
+                result[key] = ""
+                continue
+            seen.append(text)
+        return result
+
     def generate(
         self,
         review_hooks: Any = None,
@@ -397,14 +745,24 @@ class ReviewScriptGenerator:
         review_insight: Any = None,
         product_name: str = "",
         review_count: int = 0,
+        story_intelligence: Any = None,
     ) -> Dict[str, Any]:
         hooks = review_hooks if isinstance(review_hooks, dict) else {}
         quotes = review_quotes if isinstance(review_quotes, dict) else {}
         insight = review_insight if isinstance(review_insight, dict) else {}
+        story_intelligence_data = (
+            story_intelligence if isinstance(story_intelligence, dict) else {}
+        )
 
         product_name = self._clean_product_name(
             product_name
         )
+
+        cache_key = self._clean_text(product_name).lower()
+        if story_intelligence_data:
+            self._STORY_CACHE[cache_key] = dict(story_intelligence_data)
+        elif cache_key in self._STORY_CACHE:
+            story_intelligence_data = dict(self._STORY_CACHE[cache_key])
 
         bundle = self._build_analysis_bundle(
             hooks=hooks,
@@ -497,6 +855,16 @@ class ReviewScriptGenerator:
             shorts_strategy=shorts_strategy,
         )
 
+        scene_script_bridge = self._build_scene_script_bridge(
+            story_intelligence=story_intelligence_data,
+            product_name=product_name,
+            best_hook=best_hook,
+            pain_summary=pain_summary,
+            benefit_summary=benefit_summary,
+            evidence_summary=evidence_summary,
+            story_context=story_context,
+        )
+
         short_script = self._build_short_script(
             product_name=product_name,
             best_hook=best_hook,
@@ -515,6 +883,7 @@ class ReviewScriptGenerator:
             psychology_type=psychology_type,
             story_context=story_context,
             emotion_curve=emotion_curve,
+            scene_script_bridge=scene_script_bridge,
         )
 
         medium_script = self._build_medium_script(
@@ -537,6 +906,7 @@ class ReviewScriptGenerator:
             psychology_type=psychology_type,
             story_context=story_context,
             emotion_curve=emotion_curve,
+            scene_script_bridge=scene_script_bridge,
         )
 
         long_script = self._build_long_script(
@@ -558,6 +928,7 @@ class ReviewScriptGenerator:
             psychology_type=psychology_type,
             story_context=story_context,
             emotion_curve=emotion_curve,
+            scene_script_bridge=scene_script_bridge,
         )
 
         scripts = [
@@ -903,6 +1274,54 @@ class ReviewScriptGenerator:
             flush=True,
         )
         print(
+            "[Sprint120-7 Scene Script Bridge] Version:",
+            scene_script_bridge.get("version", ""),
+            flush=True,
+        )
+        print(
+            "[Sprint120-7 Scene Script Bridge] Enabled:",
+            scene_script_bridge.get("enabled", False),
+            flush=True,
+        )
+        print(
+            "[Sprint120-7 Scene Script Bridge] Story Version:",
+            scene_script_bridge.get("story_version", ""),
+            flush=True,
+        )
+        print(
+            "[Sprint120-7 Scene Script Bridge] Template:",
+            {
+                "version": scene_script_bridge.get("template_version", ""),
+                "category": scene_script_bridge.get("template_category", ""),
+                "key": scene_script_bridge.get("template_key", ""),
+            },
+            flush=True,
+        )
+        print(
+            "[Sprint120-7 Scene Script Bridge] Scene Count:",
+            scene_script_bridge.get("scene_count", 0),
+            flush=True,
+        )
+        for scene_line in scene_script_bridge.get("scene_lines", []):
+            print(
+                "[Sprint120-7 Scene Subtitle]",
+                scene_line.get("scene_id", ""),
+                scene_line.get("purpose", ""),
+                "->",
+                scene_line.get("subtitle", ""),
+                flush=True,
+            )
+
+        print(
+            "[Sprint119-1 Length Planner] Targets:",
+            {
+                "short": "16-21s",
+                "medium": "43-50s",
+                "long": "55-65s",
+            },
+            flush=True,
+        )
+        print(
             "[Sprint81-10 Script] Short:",
             short_script.get("estimated_seconds", 0),
             "s",
@@ -1179,6 +1598,20 @@ class ReviewScriptGenerator:
             "shorts_strategy": shorts_strategy,
             "product_strategy": product_strategy,
             "analysis_bundle_version": "analysis-bundle-80-1",
+            "length_planner_version": "script-length-planner-119-1",
+            "scene_script_bridge_version": "scene-script-bridge-120-7",
+            "scene_script_bridge": scene_script_bridge,
+            "scene_subtitles": scene_script_bridge.get("scene_lines", []),
+            "scene_subtitle_count": scene_script_bridge.get("scene_count", 0),
+            "story_intelligence_version": scene_script_bridge.get("story_version", ""),
+            "story_template_version": scene_script_bridge.get("template_version", ""),
+            "story_template_category": scene_script_bridge.get("template_category", ""),
+            "story_template_key": scene_script_bridge.get("template_key", ""),
+            "length_targets": {
+                "short": {"min_seconds": 16, "target_seconds": 18, "max_seconds": 21},
+                "medium": {"min_seconds": 43, "target_seconds": 47, "max_seconds": 50},
+                "long": {"min_seconds": 55, "target_seconds": 60, "max_seconds": 65},
+            },
             "bridge_library_version": "bridge-library-80-2a",
             "story_library_version": "story-library-81-1",
             "story_context": story_context,
@@ -1373,53 +1806,31 @@ class ReviewScriptGenerator:
         psychology_type: str,
         story_context: Dict[str, str],
         emotion_curve: Dict[str, str],
+        scene_script_bridge: Dict[str, Any],
     ) -> Dict[str, Any]:
         sections = {
+            "hook": self._sentence(self._shorten_natural(best_hook, 42)),
             "problem": self._sentence(
-                story_context.get(
-                    "problem",
-                    psychology_story.get(
-                        "problem",
-                        before_after_story.get("before", ""),
-                    ),
-                )
+                story_context.get("problem", psychology_story.get("problem", ""))
             ),
-            "hook": self._sentence(
-                self._shorten(
-                    best_hook,
-                    72,
-                )
-            ),
-            "target": self._sentence(
-                target_bridge
-            ),
-            "strategy": self._sentence(
-                strategy_bridge
-            ),
-            "evidence": self._sentence(
-                self._shorten(
-                    evidence_hook,
-                    88,
-                )
-            ),
+            "strategy": self._sentence(strategy_bridge),
             "after": self._sentence(
-                emotion_curve.get(
-                    "relief",
-                    story_context.get(
-                        "change",
-                        before_after_story.get(
-                            "after",
-                            benefit_summary,
-                        ),
-                    ),
-                )
+                emotion_curve.get("relief", story_context.get("change", benefit_summary))
             ),
-            "cta": self._sentence(
-                self._short_cta(
-                    product_name
-                )
-            ),
+            "cta": self._sentence(self._short_cta(product_name)),
         }
+
+        sections = self._apply_scene_script_bridge(
+            sections=sections,
+            scene_script_bridge=scene_script_bridge,
+            section_purpose_map={
+                "hook": ("hook",),
+                "problem": ("pain", "problem"),
+                "strategy": ("feature", "benefit", "comparison"),
+                "after": ("usage", "demonstration"),
+                "cta": ("cta", "result"),
+            },
+        )
 
         sections = self._apply_bridge_library(
             sections=sections,
@@ -1428,20 +1839,22 @@ class ReviewScriptGenerator:
             shorts_strategy=shorts_strategy,
             psychology_type=psychology_type,
         )
+        sections = self._finalize_script_sections(
+            sections=sections,
+            product_type=product_type,
+            scene_script_bridge=scene_script_bridge,
+        )
 
+        # Short는 Hook/Pain/Feature/Usage/CTA 다섯 역할만 유지합니다.
+        # 장면 근거는 scene_subtitles에 남기고 전체 대본에는 중복 삽입하지 않습니다.
         script = self._script(
             script_type="short_18s",
             sections=sections,
             score=96,
-            source="purchase_psychology_short",
+            source="purchase_psychology_short_120_7",
             target_seconds=18,
         )
-
-        return self._fit_duration(
-            script,
-            min_seconds=16,
-            max_seconds=21,
-        )
+        return self._fit_duration(script, min_seconds=16, max_seconds=21)
 
     def _build_medium_script(
         self,
@@ -1464,6 +1877,7 @@ class ReviewScriptGenerator:
         psychology_type: str,
         story_context: Dict[str, str],
         emotion_curve: Dict[str, str],
+        scene_script_bridge: Dict[str, Any],
     ) -> Dict[str, Any]:
         sections = {
             "hook": self._sentence(
@@ -1536,12 +1950,32 @@ class ReviewScriptGenerator:
             ),
         }
 
+        sections = self._apply_scene_script_bridge(
+            sections=sections,
+            scene_script_bridge=scene_script_bridge,
+            section_purpose_map={
+                "hook": ("hook",),
+                "empathy": ("pain", "problem"),
+                "strategy": ("feature", "comparison", "benefit"),
+                "evidence": ("proof", "review"),
+                "choice": ("comparison", "feature"),
+                "after": ("usage", "demonstration", "benefit"),
+                "recommendation": ("result", "cta"),
+                "cta": ("cta", "result"),
+            },
+        )
+
         sections = self._apply_bridge_library(
             sections=sections,
             script_length="medium",
             product_type=product_type,
             shorts_strategy=shorts_strategy,
             psychology_type=psychology_type,
+        )
+        sections = self._finalize_script_sections(
+            sections=sections,
+            product_type=product_type,
+            scene_script_bridge=scene_script_bridge,
         )
 
         script = self._script(
@@ -1578,6 +2012,7 @@ class ReviewScriptGenerator:
         psychology_type: str,
         story_context: Dict[str, str],
         emotion_curve: Dict[str, str],
+        scene_script_bridge: Dict[str, Any],
     ) -> Dict[str, Any]:
         sections = {
             "hook": self._sentence(
@@ -1666,12 +2101,51 @@ class ReviewScriptGenerator:
                     ),
                 )
             ),
+            "usage": self._sentence(
+                self._long_usage_sentence(
+                    product_name=product_name,
+                    product_type=product_type,
+                    benefit_summary=benefit_summary,
+                    evidence_summary=evidence_summary,
+                )
+            ),
+            "selection_tip": self._sentence(
+                self._long_selection_tip(
+                    product_name=product_name,
+                    product_type=product_type,
+                    shorts_strategy=shorts_strategy,
+                    target_bridge=target_bridge,
+                )
+            ),
+            "trust": self._sentence(
+                self._long_trust_sentence(
+                    review_count=review_count,
+                    evidence_summary=evidence_summary,
+                )
+            ),
             "cta": self._sentence(
                 self._product_cta(
                     product_name
                 )
             ),
         }
+
+        sections = self._apply_scene_script_bridge(
+            sections=sections,
+            scene_script_bridge=scene_script_bridge,
+            section_purpose_map={
+                "hook": ("hook",),
+                "problem": ("pain", "problem"),
+                "empathy": ("pain", "problem"),
+                "risk": ("comparison", "pain"),
+                "strategy": ("feature", "benefit", "comparison"),
+                "evidence": ("proof", "review"),
+                "choice": ("comparison", "feature"),
+                "after": ("usage", "demonstration", "benefit"),
+                "recommendation": ("result", "cta"),
+                "cta": ("cta", "result"),
+            },
+        )
 
         sections = self._apply_bridge_library(
             sections=sections,
@@ -1680,20 +2154,120 @@ class ReviewScriptGenerator:
             shorts_strategy=shorts_strategy,
             psychology_type=psychology_type,
         )
+        sections = self._finalize_script_sections(
+            sections=sections,
+            product_type=product_type,
+            scene_script_bridge=scene_script_bridge,
+        )
 
         script = self._script(
-            script_type="long_46s",
+            script_type="long_60s",
             sections=sections,
             score=95,
             source="purchase_psychology_long",
-            target_seconds=46,
+            target_seconds=60,
         )
 
         return self._fit_duration(
             script,
-            min_seconds=41,
-            max_seconds=50,
+            min_seconds=55,
+            max_seconds=65,
         )
+
+    def _long_usage_sentence(
+        self,
+        product_name: str,
+        product_type: str,
+        benefit_summary: str,
+        evidence_summary: str,
+    ) -> str:
+        product = self._clean_text(product_name)
+        product_type_text = self._clean_text(product_type)
+        benefit = self._clean_text(benefit_summary)
+        evidence = self._clean_text(evidence_summary)
+
+        if product_type_text == "seasonal":
+            if any(keyword in product for keyword in ("선풍기", "쿨링")):
+                return "목에 걸거나 손에 들고, 책상 위에 세워 상황에 맞게 사용할 수 있습니다"
+            return "필요한 장소에 두고 바로 사용할 수 있어 계절 불편을 빠르게 줄일 수 있습니다"
+
+        if product_type_text == "travel":
+            return "짐의 양에 맞춰 내부를 나누어 담고 이동 동선까지 함께 확인하면 활용도가 높아집니다"
+
+        if product_type_text == "household":
+            return "자주 쓰는 위치에 두고 생활 동선에 맞춰 사용하면 정리 시간을 더 줄일 수 있습니다"
+
+        if product_type_text == "kitchen":
+            return "준비부터 사용 후 정리까지 한 흐름으로 확인하면 실제 편의성을 판단하기 쉽습니다"
+
+        if product_type_text == "electronics":
+            return "짧게 시험하는 것보다 실제 사용 시간과 장소를 기준으로 성능을 확인하는 것이 좋습니다"
+
+        if evidence:
+            return f"실제 사용에서는 {evidence}는 점이 활용도를 높여줍니다"
+
+        return f"실제 사용에서는 {benefit}을 여러 상황에서 체감할 수 있습니다"
+
+    def _long_selection_tip(
+        self,
+        product_name: str,
+        product_type: str,
+        shorts_strategy: str,
+        target_bridge: str,
+    ) -> str:
+        product = self._clean_text(product_name)
+        product_type_text = self._clean_text(product_type)
+        strategy = self._clean_text(shorts_strategy)
+
+        if product_type_text == "seasonal":
+            return "구매 전에는 무게와 사용 시간, 소음처럼 오래 사용할 때 체감되는 요소도 함께 확인해야 합니다"
+
+        if product_type_text == "travel":
+            return "크기만 보지 말고 수납 구조와 바퀴 움직임, 실제 짐의 양까지 함께 비교해야 합니다"
+
+        if product_type_text == "household":
+            return "설치 공간과 고정 방식, 자주 꺼내 쓰기 편한지도 함께 확인하는 것이 좋습니다"
+
+        if product_type_text == "kitchen":
+            return "재질과 세척 방식, 보관 편의성까지 확인해야 오래 편하게 사용할 수 있습니다"
+
+        if product_type_text == "electronics":
+            return "표시된 사양뿐 아니라 배터리와 발열, 소음 같은 실사용 조건도 확인해야 합니다"
+
+        if strategy == "comparison":
+            return "비슷한 제품끼리는 가격보다 내 사용 목적에 맞는 기준을 먼저 비교해야 합니다"
+
+        target = self._clean_text(target_bridge)
+        if target:
+            return target
+
+        return f"{product}를 고를 때는 실제 사용 조건과 반복 후기까지 함께 확인하는 것이 좋습니다"
+
+    def _long_trust_sentence(
+        self,
+        review_count: int,
+        evidence_summary: str,
+    ) -> str:
+        """Build trust copy only from a complete evidence summary."""
+        evidence = self._clean_text(evidence_summary).rstrip(".!? ")
+        count = self._safe_int(review_count)
+
+        incomplete_endings = (
+            "테이", "이라", "라는", "다는", "하고", "하며", "되어", "되는",
+            "있고", "있어", "때문", "경우", "부분", "정도", "외에도",
+        )
+        if evidence.endswith(incomplete_endings):
+            evidence = ""
+
+        if evidence:
+            clause = self._evidence_clause(evidence)
+            if count > 0:
+                return f"후기 {count}개를 함께 보면 {clause} 의견이 반복해서 확인됩니다"
+            return f"여러 실사용 후기에서도 {clause} 의견이 반복됩니다"
+
+        if count > 0:
+            return f"후기 {count}개에서 반복해서 언급된 사용 경험을 함께 확인하는 것이 좋습니다"
+        return "한두 개의 광고 문구보다 여러 실사용 후기에서 반복되는 내용을 기준으로 보는 것이 안전합니다"
 
     def _classify_product_strategy(
         self,
@@ -2165,15 +2739,52 @@ class ReviewScriptGenerator:
     def _build_before_after_story(
         self,
         product_name: str,
+        product_type: str,
         pain_summary: str,
         benefit_summary: str,
         evidence_summary: str,
         dominant_review_type: str,
     ) -> Dict[str, str]:
+        """Build category-safe before/choice/after copy.
+
+        Sprint120-7: product category takes precedence over a stale or
+        misclassified review type. This prevents electronics/seasonal items
+        from inheriting travel/storage wording such as 수납공간 or 내부 구성.
+        """
         product = self._clean_text(product_name)
+        product_type_text = self._clean_text(product_type).lower()
         pain = self._clean_text(pain_summary)
+        benefit = self._clean_text(benefit_summary)
         review_type = self._clean_text(dominant_review_type)
         evidence = self._clean_text(evidence_summary)
+
+        is_neck_fan = any(
+            token in " ".join((product, pain, benefit, evidence))
+            for token in ("선풍기", "목걸이", "넥밴드", "쿨링", "탁상", "각도 조절")
+        )
+
+        # Category-first stories. Review type is only a fallback inside a category.
+        if product_type_text in ("electronics", "seasonal"):
+            if is_neck_fan:
+                return {
+                    "before": "사용 전에는 손으로 계속 들고 있거나 바람 방향을 맞추기 어려웠습니다",
+                    "choice": f"그래서 휴대성과 사용 방식을 기준으로 {self._with_object_particle(product)} 선택했습니다",
+                    "after": "사용 후에는 이동할 때는 목에 걸고 책상에서는 세워 상황에 맞게 사용할 수 있었습니다",
+                    "recommendation": "손을 자유롭게 쓰면서 이동과 탁상 사용을 함께 원하는 분께 잘 맞습니다",
+                }
+            if product_type_text == "seasonal":
+                return {
+                    "before": f"필요한 계절마다 {pain or '같은 불편'} 때문에 준비가 늦어지곤 했습니다",
+                    "choice": f"그래서 휴대성과 사용 방식을 기준으로 {self._with_object_particle(product)} 선택했습니다",
+                    "after": f"사용 후에는 {benefit or '계절 불편이 줄어드는 점'}을 실제로 체감할 수 있었습니다",
+                    "recommendation": "필요한 시기에 바로 사용할 수 있는 제품을 찾는 분께 잘 맞습니다",
+                }
+            return {
+                "before": f"사용 전에는 {pain or '실제 성능과 사용감'} 때문에 선택이 쉽지 않았습니다",
+                "choice": f"그래서 성능과 실제 사용 조건을 기준으로 {self._with_object_particle(product)} 선택했습니다",
+                "after": f"사용 후에는 {benefit or '실제 사용 편의'}을 체감할 수 있었습니다",
+                "recommendation": "표시된 사양보다 실제 사용감과 성능을 중요하게 보는 분께 잘 맞습니다",
+            }
 
         before_map = {
             "storage": "여행 전에는 짐이 많아질수록 수납과 정리가 가장 고민이었습니다",
@@ -2182,7 +2793,6 @@ class ReviewScriptGenerator:
             "value": "구매 전에는 가격과 필요한 기능 사이에서 선택하기가 어려웠습니다",
             "design": "구매 전에는 실용성과 디자인을 함께 만족시키는 제품을 찾기 어려웠습니다",
         }
-
         choice_map = {
             "storage": f"그래서 수납공간과 내부 구성을 기준으로 {self._with_object_particle(product)} 선택했습니다",
             "mobility": f"그래서 바퀴 움직임과 무게를 기준으로 {self._with_object_particle(product)} 선택했습니다",
@@ -2190,7 +2800,6 @@ class ReviewScriptGenerator:
             "value": f"그래서 가격 대비 구성과 기능을 비교해 {self._with_object_particle(product)} 선택했습니다",
             "design": f"그래서 실용성과 디자인을 함께 보고 {self._with_object_particle(product)} 선택했습니다",
         }
-
         after_map = {
             "storage": "사용 후에는 필요한 짐을 넉넉히 담으면서도 내부 정리가 한결 쉬워졌습니다",
             "mobility": "사용 후에는 바퀴가 부드럽게 움직여 장거리 이동 부담이 줄었습니다",
@@ -2198,7 +2807,6 @@ class ReviewScriptGenerator:
             "value": "사용 후에는 필요한 기능을 충분히 활용하면서 구매 부담도 줄었습니다",
             "design": "사용 후에는 깔끔한 디자인과 실용성을 함께 만족할 수 있었습니다",
         }
-
         recommendation_map = {
             "storage": "짐이 많거나 내부 정리를 중요하게 보는 분께 특히 잘 맞습니다",
             "mobility": "공항이나 이동 구간이 길어 바퀴 사용감을 중요하게 보는 분께 잘 맞습니다",
@@ -2207,18 +2815,9 @@ class ReviewScriptGenerator:
             "design": "실용성과 깔끔한 디자인을 함께 원하는 분께 잘 맞습니다",
         }
 
-        before = before_map.get(
-            review_type,
-            f"사용 전에는 {pain} 때문에 선택이 쉽지 않았습니다",
-        )
-        choice = choice_map.get(
-            review_type,
-            f"그래서 실제 후기와 사용 목적을 기준으로 {self._with_object_particle(product)} 선택했습니다",
-        )
-        after = after_map.get(
-            review_type,
-            f"사용 후에는 {benefit_summary}을 실제로 체감할 수 있었습니다",
-        )
+        before = before_map.get(review_type, f"사용 전에는 {pain} 때문에 선택이 쉽지 않았습니다")
+        choice = choice_map.get(review_type, f"그래서 실제 후기와 사용 목적을 기준으로 {self._with_object_particle(product)} 선택했습니다")
+        after = after_map.get(review_type, f"사용 후에는 {benefit}을 실제로 체감할 수 있었습니다")
         recommendation = recommendation_map.get(
             review_type,
             self._recommendation_sentence(
@@ -2228,15 +2827,8 @@ class ReviewScriptGenerator:
             ),
         )
 
-        if (
-            "3박 4일" in evidence
-            and "24인치" in evidence
-            and review_type == "storage"
-        ):
-            choice = (
-                "그래서 3박 4일 여행에 필요한 짐의 양을 기준으로 "
-                f"{self._with_object_particle(product)} 선택했습니다"
-            )
+        if "3박 4일" in evidence and "24인치" in evidence and review_type == "storage":
+            choice = f"그래서 3박 4일 여행에 필요한 짐의 양을 기준으로 {self._with_object_particle(product)} 선택했습니다"
 
         return {
             "before": before,
@@ -2764,14 +3356,15 @@ class ReviewScriptGenerator:
             )
         elif script_type.startswith("long_"):
             priority_order = (
-                "risk",
-                "common_pattern",
-                "target",
-                "strategy",
-                "recommendation",
+                "final_check",
                 "support",
                 "detail",
                 "trust",
+                "target",
+                "strategy",
+                "common_pattern",
+                "risk",
+                "recommendation",
             )
         else:
             priority_order = (
@@ -2895,20 +3488,55 @@ class ReviewScriptGenerator:
                         0,
                     )
 
-            expansion_candidates = (
-                (
-                    "support",
-                    "실사용 후기를 기준으로 선택하면 실패를 줄일 수 있습니다.",
-                ),
-                (
-                    "detail",
-                    "수납 구조와 이동 편의성도 함께 확인해 보세요.",
-                ),
-                (
-                    "trust",
-                    "구매 전 실제 사용 후기를 비교하는 것이 좋습니다.",
-                ),
-            )
+            if script_type.startswith("long_"):
+                expansion_candidates = (
+                    (
+                        "support",
+                        "실제 사용 환경을 떠올리며 필요한 기능의 우선순위를 정하면 선택이 쉬워집니다.",
+                    ),
+                    (
+                        "detail",
+                        "무게와 사용 시간, 관리 편의성처럼 오래 쓸 때 체감되는 조건도 함께 확인해 보세요.",
+                    ),
+                    (
+                        "trust",
+                        "한두 문장보다 여러 후기에서 반복되는 장점과 아쉬움을 함께 보는 것이 좋습니다.",
+                    ),
+                    (
+                        "final_check",
+                        "마지막으로 내 사용 장소와 빈도에 맞는지 확인하면 구매 후 아쉬움을 줄일 수 있습니다.",
+                    ),
+                )
+            elif script_type.startswith("medium_"):
+                expansion_candidates = (
+                    (
+                        "support",
+                        "실사용 후기를 기준으로 선택하면 실패를 줄일 수 있습니다.",
+                    ),
+                    (
+                        "detail",
+                        "사용 목적과 관리 편의성도 함께 확인해 보세요.",
+                    ),
+                    (
+                        "trust",
+                        "구매 전 실제 사용 후기를 비교하는 것이 좋습니다.",
+                    ),
+                )
+            else:
+                expansion_candidates = (
+                    (
+                        "support",
+                        "실사용 후기를 기준으로 선택하면 실패를 줄일 수 있습니다.",
+                    ),
+                    (
+                        "detail",
+                        "사용 목적에 맞는지도 함께 확인해 보세요.",
+                    ),
+                    (
+                        "trust",
+                        "구매 전 실제 사용 후기를 비교하는 것이 좋습니다.",
+                    ),
+                )
 
             for key, sentence in expansion_candidates:
                 if estimated >= min_seconds:
@@ -2938,6 +3566,7 @@ class ReviewScriptGenerator:
 
         if estimated > max_seconds:
             optional_keys = (
+                "final_check",
                 "trust",
                 "detail",
                 "support",
@@ -3390,34 +4019,32 @@ class ReviewScriptGenerator:
         quote: str,
         benefit: str,
     ) -> str:
+        """Summarize evidence without cutting a Korean word or clause in half."""
         text = self._clean_text(quote)
+        fallback = self._clean_text(benefit)
 
         if not text:
-            return f"{benefit}이 만족스럽다"
+            return f"{fallback}이 만족스럽다"
 
         text = re.sub(r"\b3\s*박\s*4\s*일\b", "3박 4일", text)
         text = re.sub(r"\b(\d{2})\s*인치\b", r"\1인치", text)
 
-        if (
-            "3박 4일" in text
-            and "24인치" in text
-            and any(word in text for word in ("적당", "딱", "알맞"))
-        ):
+        if "3박 4일" in text and "24인치" in text and any(word in text for word in ("적당", "딱", "알맞")):
             return "3박 4일 여행에는 24인치가 딱 적당하다"
-
-        if (
-            "2박 3일" in text
-            and "20인치" in text
-            and any(word in text for word in ("적당", "딱", "알맞"))
-        ):
+        if "2박 3일" in text and "20인치" in text and any(word in text for word in ("적당", "딱", "알맞")):
             return "2박 3일 여행에는 20인치가 딱 적당하다"
+
+        # Product-specific completed summaries must run before generic keyword rules.
+        if any(token in text for token in ("목걸이", "넥밴드", "선풍기", "탁상용")):
+            if any(token in text for token in ("각도", "책상", "테이블", "세워")):
+                return "목에 걸고 각도를 조절해 탁상형으로도 활용할 수 있다"
+            if any(token in text for token in ("손이 자유", "핸즈프리", "목에 걸")):
+                return "손에 들지 않고 목에 걸어 사용할 수 있다"
 
         if any(keyword in text for keyword in ("섞이지", "분리", "지퍼", "메쉬 포켓")):
             return "짐이 섞이지 않아 정리하기 편하다"
-
         if any(keyword in text for keyword in ("가볍", "이동", "끌기")):
             return "가볍고 이동이 편하다"
-
         if any(keyword in text for keyword in ("튼튼", "오래", "내구성")):
             return "튼튼해서 오래 사용할 수 있다"
 
@@ -3431,10 +4058,21 @@ class ReviewScriptGenerator:
         for before, after in replacements:
             text = text.replace(before, after)
 
-        text = re.sub(r"\s+", " ", text).strip()
-        text = text.rstrip(".!? ")
+        text = re.sub(r"\s+", " ", text).strip().rstrip(".!? ")
+        if len(text) <= 54:
+            return text
 
-        return self._shorten(text, 38).rstrip("…")
+        # Prefer a complete sentence or comma-delimited clause; never hard-cut a word.
+        for part in re.split(r"(?<=[.!?])\s+", text):
+            part = self._clean_text(part).rstrip(".!? ")
+            if 12 <= len(part) <= 54:
+                return part
+        for part in re.split(r"[,，]", text):
+            part = self._clean_text(part).rstrip(".!? ")
+            if 12 <= len(part) <= 50 and not part.endswith(("외에도", "그리고", "하지만", "때문")):
+                return part
+
+        return fallback or "실사용 만족도가 높다"
 
     def _evidence_clause(
         self,
@@ -5186,6 +5824,7 @@ def generate_review_scripts(
     review_insight: Any = None,
     product_name: str = "",
     review_count: int = 0,
+    story_intelligence: Any = None,
 ) -> Dict[str, Any]:
     return ReviewScriptGenerator().generate(
         review_hooks=review_hooks,
@@ -5193,4 +5832,5 @@ def generate_review_scripts(
         review_insight=review_insight,
         product_name=product_name,
         review_count=review_count,
+        story_intelligence=story_intelligence,
     )
