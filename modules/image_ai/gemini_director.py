@@ -21,7 +21,7 @@ class GeminiDirector:
     이 단계는 API 호출을 수행하지 않는다.
     """
 
-    VERSION = "gemini-director-122-1"
+    VERSION = "gemini-director-123-1"
 
     ASPECT_RATIO = "9:16"
     DEFAULT_FPS = 30
@@ -222,6 +222,33 @@ class GeminiDirector:
         },
     }
 
+    EMOTION_DIRECTION_LIBRARY: Dict[str, str] = {
+        "curiosity": (
+            "Create immediate visual curiosity with a clear focal reveal, but do not hide, "
+            "distort, or replace the product."
+        ),
+        "empathy": (
+            "Use restrained pacing and practical context so the viewer recognizes the real-life "
+            "inconvenience without exaggerated acting or invented events."
+        ),
+        "tension": (
+            "Build mild purchase tension through tighter emphasis and deliberate pacing while "
+            "keeping the product and environment stable and realistic."
+        ),
+        "solution": (
+            "Shift the visual rhythm toward clarity and relief by making the visible benefit easy "
+            "to understand in one continuous action."
+        ),
+        "relief": (
+            "Use smoother, calmer motion and more open visual breathing room to communicate that "
+            "the practical problem has been reduced."
+        ),
+        "satisfaction": (
+            "Finish with confident, polished product presentation and a stable final composition "
+            "that feels complete rather than overly dramatic."
+        ),
+    }
+
     SCENE_ROLE_MAP: Dict[str, str] = {
         "hook": "hero",
         "problem": "problem",
@@ -266,6 +293,8 @@ class GeminiDirector:
             "scene_selection_path": str(scene_selection_path or "").strip(),
             "vision_analysis_path": str(vision_analysis_path or "").strip(),
             "image_tags_path": str(image_tags_path or "").strip(),
+            "story_aware": True,
+            "story_context_count": 0,
             "scenes": [],
             "summary": {},
             "warnings": [],
@@ -352,6 +381,9 @@ class GeminiDirector:
         )
 
         result["scenes"] = directed_scenes
+        result["story_context_count"] = sum(
+            1 for item in directed_scenes if item.get("story_context_used")
+        )
         result["summary"] = self._build_summary(directed_scenes)
         result["ok"] = ready_count > 0
         result["ready"] = ready_count == len(directed_scenes)
@@ -459,6 +491,7 @@ class GeminiDirector:
             tags=tags,
             scene=scene,
         )
+        story_context = self._build_story_context(scene)
         goal = self.GOAL_LIBRARY.get(
             scene_type,
             str(scene.get("purpose") or "").strip()
@@ -495,6 +528,7 @@ class GeminiDirector:
             action_instruction=direction_plan["action"],
             shot_instruction=direction_plan["shot"],
             diversity_instruction=direction_plan["diversity"],
+            story_context=story_context,
         )
 
         negative_prompt = self._compose_negative_prompt(
@@ -523,6 +557,14 @@ class GeminiDirector:
             "director_role": director_role,
             "title": str(scene.get("title") or "").strip(),
             "goal": goal,
+            "story_goal": story_context.get("story_goal", ""),
+            "story_purpose": story_context.get("story_purpose", ""),
+            "emotion_stage": story_context.get("emotion_stage", ""),
+            "emotion_instruction": story_context.get("emotion_instruction", ""),
+            "primary_selling_point": story_context.get("primary_selling_point", ""),
+            "review_evidence": story_context.get("review_evidence", ""),
+            "must_show": story_context.get("must_show", ""),
+            "story_context_used": bool(story_context.get("used")),
             "action_instruction": direction_plan["action"],
             "shot_instruction": direction_plan["shot"],
             "diversity_instruction": direction_plan["diversity"],
@@ -553,6 +595,76 @@ class GeminiDirector:
             "status": "ready" if ready else "not_ready",
             "warnings": warnings,
         }
+
+    def _build_story_context(self, scene: Dict[str, Any]) -> Dict[str, Any]:
+        raw_context = scene.get("director_context")
+        raw_context = raw_context if isinstance(raw_context, dict) else {}
+
+        story_goal = self._first_non_empty(
+            scene.get("story_goal"),
+            raw_context.get("scene_goal"),
+            raw_context.get("story_goal"),
+        )
+        story_purpose = self._first_non_empty(
+            scene.get("story_purpose"),
+            raw_context.get("scene_purpose"),
+            raw_context.get("story_purpose"),
+        )
+        emotion_stage = self._first_non_empty(
+            scene.get("emotion_stage"),
+            raw_context.get("emotion_stage"),
+        )
+        primary_selling_point = self._first_non_empty(
+            scene.get("primary_selling_point"),
+            raw_context.get("primary_selling_point"),
+        )
+        review_evidence = self._first_non_empty(
+            scene.get("review_evidence"),
+            raw_context.get("review_evidence"),
+            raw_context.get("evidence_text"),
+        )
+        must_show = self._first_non_empty(
+            scene.get("must_show"),
+            raw_context.get("must_show"),
+            primary_selling_point,
+            story_goal,
+        )
+
+        normalized_emotion = self._normalize_emotion_stage(emotion_stage)
+        emotion_instruction = self.EMOTION_DIRECTION_LIBRARY.get(
+            normalized_emotion,
+            "Keep the emotional tone natural, credible, and visually restrained.",
+        )
+
+        return {
+            "story_goal": story_goal,
+            "story_purpose": story_purpose,
+            "emotion_stage": emotion_stage,
+            "normalized_emotion": normalized_emotion,
+            "emotion_instruction": emotion_instruction,
+            "primary_selling_point": primary_selling_point,
+            "review_evidence": review_evidence,
+            "must_show": must_show,
+            "used": any(
+                (story_goal, story_purpose, emotion_stage, primary_selling_point,
+                 review_evidence, must_show)
+            ),
+        }
+
+    def _normalize_emotion_stage(self, value: Any) -> str:
+        text = str(value or "").strip().lower()
+        mappings = (
+            (("curiosity", "hook", "궁금", "호기심"), "curiosity"),
+            (("empathy", "공감"), "empathy"),
+            (("tension", "긴장", "불안", "문제"), "tension"),
+            (("solution", "decision", "해결", "전환"), "solution"),
+            (("relief", "안도", "편안"), "relief"),
+            (("satisfaction", "만족", "cta", "완료"), "satisfaction"),
+        )
+        for tokens, normalized in mappings:
+            if any(token in text for token in tokens):
+                return normalized
+        return ""
 
     def _resolve_director_role(
         self,
@@ -705,6 +817,7 @@ class GeminiDirector:
         action_instruction: str,
         shot_instruction: str,
         diversity_instruction: str,
+        story_context: Dict[str, Any],
     ) -> str:
         product_line = (
             f"Product: {product_name}."
@@ -722,6 +835,15 @@ class GeminiDirector:
             self.PRODUCT_IDENTITY_POLICY,
             self.COMPOSITION_POLICY,
             self.CONTINUITY_POLICY,
+            "",
+            f"Story goal: {story_context.get('story_goal') or goal}",
+            f"Story purpose: {story_context.get('story_purpose') or scene_type}.",
+            f"Emotion stage: {story_context.get('emotion_stage') or 'natural commercial clarity'}.",
+            f"Emotion direction: {story_context.get('emotion_instruction')}",
+            f"Must show: {story_context.get('must_show') or 'the visible product benefit supported by the reference image'}.",
+            f"Primary selling point: {story_context.get('primary_selling_point') or 'use only visible, supportable product value'}.",
+            f"Review evidence context: {story_context.get('review_evidence') or 'No unsupported review claim; show only visible evidence'}.",
+            "Do not render these story notes as text. Express them only through camera rhythm, emphasis, and visible action.",
             "",
             f"Director role: {director_role}.",
             f"Scene goal: {goal}",
@@ -816,6 +938,8 @@ class GeminiDirector:
         motion_counts: Dict[str, int] = {}
         role_counts: Dict[str, int] = {}
         prevented_count = 0
+        story_context_count = 0
+        emotion_counts: Dict[str, int] = {}
         for scene in ready_scenes:
             motion = str(scene.get("camera_motion") or "unknown")
             role = str(scene.get("director_role") or "unknown")
@@ -823,6 +947,11 @@ class GeminiDirector:
             role_counts[role] = role_counts.get(role, 0) + 1
             if scene.get("motion_reused_prevented"):
                 prevented_count += 1
+            if scene.get("story_context_used"):
+                story_context_count += 1
+            emotion = str(scene.get("emotion_stage") or "").strip()
+            if emotion:
+                emotion_counts[emotion] = emotion_counts.get(emotion, 0) + 1
 
         return {
             "scene_count": len(scenes),
@@ -835,6 +964,9 @@ class GeminiDirector:
             "role_counts": role_counts,
             "unique_motion_count": len(motion_counts),
             "consecutive_motion_prevented_count": prevented_count,
+            "story_aware": True,
+            "story_context_count": story_context_count,
+            "emotion_counts": emotion_counts,
             "all_first_frame_locked": all(
                 bool(scene.get("first_frame_policy"))
                 for scene in ready_scenes
