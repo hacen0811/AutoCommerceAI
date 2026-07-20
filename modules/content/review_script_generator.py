@@ -16,7 +16,7 @@ class ReviewScriptGenerator:
     - 외부 AI API 없이 규칙 기반으로 동작
     """
 
-    VERSION = "review-script-generator-120-7"
+    VERSION = "review-script-generator-120-9"
 
     def _build_analysis_bundle(
         self,
@@ -1313,6 +1313,27 @@ class ReviewScriptGenerator:
             )
 
         print(
+            "[Sprint120-8 Final Script Dedupe] Version:",
+            "final-script-dedupe-120-8",
+            flush=True,
+        )
+        print(
+            "[Sprint120-8 Final Script Dedupe] Applied:",
+            True,
+            flush=True,
+        )
+        print(
+            "[Sprint120-9 Medium Expander] Version:",
+            medium_script.get("medium_expander_version", "medium-expander-120-9"),
+            flush=True,
+        )
+        print(
+            "[Sprint120-9 Medium Expander] Applied:",
+            medium_script.get("medium_expander_applied", False),
+            flush=True,
+        )
+
+        print(
             "[Sprint119-1 Length Planner] Targets:",
             {
                 "short": "16-21s",
@@ -1599,6 +1620,9 @@ class ReviewScriptGenerator:
             "product_strategy": product_strategy,
             "analysis_bundle_version": "analysis-bundle-80-1",
             "length_planner_version": "script-length-planner-119-1",
+            "final_script_dedupe_version": "final-script-dedupe-120-8",
+            "medium_expander_version": medium_script.get("medium_expander_version", "medium-expander-120-9"),
+            "medium_expander_applied": medium_script.get("medium_expander_applied", False),
             "scene_script_bridge_version": "scene-script-bridge-120-7",
             "scene_script_bridge": scene_script_bridge,
             "scene_subtitles": scene_script_bridge.get("scene_lines", []),
@@ -1851,7 +1875,7 @@ class ReviewScriptGenerator:
             script_type="short_18s",
             sections=sections,
             score=96,
-            source="purchase_psychology_short_120_7",
+            source="purchase_psychology_short_120_8",
             target_seconds=18,
         )
         return self._fit_duration(script, min_seconds=16, max_seconds=21)
@@ -1986,8 +2010,16 @@ class ReviewScriptGenerator:
             target_seconds=47,
         )
 
-        return self._fit_duration(
+        fitted_script = self._fit_duration(
             script,
+            min_seconds=43,
+            max_seconds=50,
+        )
+
+        return self._expand_medium_with_unique_context(
+            script=fitted_script,
+            product_type=product_type,
+            product_name=product_name,
             min_seconds=43,
             max_seconds=50,
         )
@@ -3327,6 +3359,138 @@ class ReviewScriptGenerator:
 
         return "구매 전에 후기를 확인해 보세요"
 
+    def _is_repeated_tail_sentence(
+        self,
+        candidate: str,
+        sections: Dict[str, str],
+    ) -> bool:
+        """Reject duration-fill copy that repeats an existing buying checklist or CTA."""
+        text = self._clean_text(candidate)
+        if not text:
+            return True
+
+        topic_groups = (
+            ("무게", "가볍", "초경량"),
+            ("사용 시간", "배터리", "충전"),
+            ("소음", "조용", "소리"),
+            ("관리", "세척", "보관"),
+            ("사용 환경", "사용 장소", "내 환경", "장소"),
+            ("후기", "실사용", "리뷰"),
+            ("확인", "비교", "선택"),
+        )
+
+        def topics(value: str) -> set[int]:
+            cleaned = self._clean_text(value)
+            return {
+                index
+                for index, group in enumerate(topic_groups)
+                if any(token in cleaned for token in group)
+            }
+
+        candidate_topics = topics(text)
+        for existing in sections.values():
+            current = self._clean_text(existing)
+            if not current:
+                continue
+            if (
+                self._meaning_overlap(current, text)
+                and self._meaning_overlap(text, current)
+            ):
+                return True
+            shared = candidate_topics & topics(current)
+            if len(shared) >= 2:
+                return True
+            if (
+                "확인해 보세요" in text
+                and "확인해 보세요" in current
+                and shared
+            ):
+                return True
+        return False
+
+    def _expand_medium_with_unique_context(
+        self,
+        script: Dict[str, Any],
+        product_type: str,
+        product_name: str,
+        min_seconds: int,
+        max_seconds: int,
+    ) -> Dict[str, Any]:
+        """Sprint120-9: 중복 없이 Medium 길이를 목표 범위로 보강합니다."""
+        result = dict(script or {})
+        result["medium_expander_version"] = "medium-expander-120-9"
+        result["medium_expander_applied"] = False
+
+        estimated = self._safe_int(result.get("estimated_seconds"))
+        if estimated >= min_seconds:
+            return result
+
+        sections = dict(result.get("sections", {}))
+        product_type_text = self._clean_text(product_type).lower()
+        product_text = self._clean_text(product_name).lower()
+
+        if (
+            product_type_text in {"seasonal", "electronics", "electronic"}
+            or any(keyword in product_text for keyword in ("선풍기", "쿨링", "냉각", "충전"))
+        ):
+            candidates = (
+                "충전 단자와 풍량 단계 구성도 미리 살펴보는 편이 좋습니다.",
+                "보관할 때 부피가 얼마나 줄어드는지도 살펴보세요.",
+                "배터리 충전 방식과 풍량 단계 구성도 미리 살펴보세요.",
+            )
+        elif product_type_text in {"kitchen", "주방"}:
+            candidates = (
+                "재질과 세척 방식도 자주 사용하는 환경에 맞는지 확인해 보세요.",
+                "위생 관리와 보관 편의성까지 비교하면 선택이 더 쉬워집니다.",
+            )
+        elif product_type_text in {"travel", "여행"}:
+            candidates = (
+                "이동 방식과 전체 크기도 실제 여행 일정에 맞는지 비교해 보세요.",
+                "보관 크기와 이동 편의성까지 살펴보면 선택이 더 쉬워집니다.",
+            )
+        else:
+            candidates = (
+                "관리 방식과 사용 빈도도 실제 생활 환경에 맞는지 확인해 보세요.",
+                "보관 위치와 관리 편의성까지 비교하면 선택이 더 쉬워집니다.",
+            )
+
+        for index, candidate in enumerate(candidates, start=1):
+            if estimated >= min_seconds:
+                break
+
+            if self._is_repeated_tail_sentence(
+                candidate=candidate,
+                sections=sections,
+            ):
+                continue
+
+            trial_sections = dict(sections)
+            trial_sections[f"medium_context_{index}"] = self._sentence(candidate)
+            trial_script = self._script(
+                script_type=result.get("type", "medium_47s"),
+                sections=trial_sections,
+                score=result.get("score", 100),
+                source=result.get("source", "purchase_psychology_medium"),
+                target_seconds=result.get("target_seconds", 47),
+            )
+
+            trial_estimated = self._safe_int(trial_script.get("estimated_seconds"))
+            if trial_estimated > max_seconds:
+                continue
+
+            sections = trial_sections
+            result.update(trial_script)
+            result["medium_expander_version"] = "medium-expander-120-9"
+            result["medium_expander_applied"] = True
+            result["expansion_applied"] = True
+            estimated = trial_estimated
+
+        result["duration_error"] = estimated - self._safe_int(result.get("target_seconds"))
+        result["duration_status"] = (
+            "ok" if min_seconds <= estimated <= max_seconds else "out_of_range"
+        )
+        return result
+
     def _fit_duration(
         self,
         script: Dict[str, Any],
@@ -3496,15 +3660,15 @@ class ReviewScriptGenerator:
                     ),
                     (
                         "detail",
-                        "무게와 사용 시간, 관리 편의성처럼 오래 쓸 때 체감되는 조건도 함께 확인해 보세요.",
+                        "실제 사용 장면을 떠올리면 필요한 기능과 불필요한 기능을 구분하기 쉬워집니다.",
                     ),
                     (
                         "trust",
-                        "한두 문장보다 여러 후기에서 반복되는 장점과 아쉬움을 함께 보는 것이 좋습니다.",
+                        "장점뿐 아니라 여러 후기에서 반복되는 아쉬움도 함께 보면 판단이 더 정확해집니다.",
                     ),
                     (
                         "final_check",
-                        "마지막으로 내 사용 장소와 빈도에 맞는지 확인하면 구매 후 아쉬움을 줄일 수 있습니다.",
+                        "마지막으로 사용 빈도와 보관 위치까지 맞는지 살펴보면 구매 후 아쉬움을 줄일 수 있습니다.",
                     ),
                 )
             elif script_type.startswith("medium_"):
@@ -3543,6 +3707,12 @@ class ReviewScriptGenerator:
                     break
 
                 if key in sections:
+                    continue
+
+                if self._is_repeated_tail_sentence(
+                    candidate=sentence,
+                    sections=sections,
+                ):
                     continue
 
                 sections[key] = self._sentence(
