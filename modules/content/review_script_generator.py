@@ -16,7 +16,7 @@ class ReviewScriptGenerator:
     - 외부 AI API 없이 규칙 기반으로 동작
     """
 
-    VERSION = "review-script-generator-120-9"
+    VERSION = "review-script-generator-128-15"
 
     def _build_analysis_bundle(
         self,
@@ -664,6 +664,125 @@ class ReviewScriptGenerator:
                     break
         return result
 
+    def _naturalize_korean_sentence(
+        self,
+        value: Any,
+    ) -> str:
+        """Sprint128-12: 템플릿 조각, 불완전 명사구, 최종 출력 전체를 자연스러운 쇼핑 대화체로 정리합니다."""
+        text = self._clean_text(value)
+        if not text:
+            return ""
+
+        replacements = (
+            ("계절 불편을 미리 해결하려는 분", "계절에 맞춰 미리 준비하려는 분"),
+            ("계절 불편", "더운 날의 불편"),
+            ("필요한 계절이 오기 전에", "본격적으로 더워지기 전에"),
+            ("필요한 계절 전에", "더워지기 전에"),
+            ("필요한 계절", "더운 계절"),
+            ("실제 사용 조건", "실제로 사용할 환경"),
+            ("실사용 조건", "실제로 사용할 환경"),
+            ("선택 구매 전에는", "선택이 쉬워집니다. 구매 전에는"),
+            ("세기을", "세기를"),
+            ("후기부터 확인해 보세요 실사용 조건도 함께 보세요", "후기를 먼저 확인해 보세요. 무게와 사용 시간, 소음도 함께 살펴보는 것이 좋습니다"),
+            ("후기부터 확인해 보세요. 실제로 사용할 환경도 함께 보세요", "후기를 먼저 확인하고 실제 사용할 환경에 맞는지도 살펴보세요"),
+            ("광고보다 실제 사용 성능", "광고 문구보다 실제로 써봤을 때의 성능"),
+            ("여기서 볼 건, 만족스러운 바람 세기", "후기에서 가장 만족도가 높았던 부분은 바람 세기였습니다"),
+            ("사용 후에는 이동할 때는", "이동할 때는"),
+            ("비교해 보세요 실사용 조건도 함께 보세요", "비교해 보세요"),
+            ("비교해 보세요 실제로 사용할 환경도 함께 보세요", "비교해 보세요"),
+        )
+        for before, after in replacements:
+            text = text.replace(before, after)
+
+        text = re.sub(
+            r"특히\s+이\s*계절에는\s+계절에\s*맞춰\s*미리\s*준비하려는\s*분이라면\s*본격적으로\s*더워지기\s*전에\s*준비하는\s*것이\s*좋습니다",
+            "더운 날 자주 사용할 분이라면 무게와 사용 시간, 소음을 먼저 살펴보는 것이 좋습니다",
+            text,
+        )
+        text = re.sub(
+            r"구매\s*전에는\s+.+?를\s*찾고\s*있다면\s*후기부터\s*확인해\s*보세요\s*(?:실제로\s*사용할\s*환경|실사용\s*조건)도?\s*함께\s*보세요",
+            "구매 전에는 후기를 먼저 확인하고 무게와 사용 시간, 소음도 함께 비교해 보세요",
+            text,
+        )
+        text = re.sub(r"\b특히\s+특히\b", "특히", text)
+        text = re.sub(r"\b그래서\s+그래서\b", "그래서", text)
+        text = re.sub(r"보세요\s+(실사용 조건|실제로 사용할 환경)도?\s*함께\s*보세요", "보세요", text)
+        text = re.sub(r"보세요\s+(?=[가-힣A-Za-z0-9])", "보세요. ", text)
+        text = re.sub(r"\s+", " ", text).strip()
+        text = re.sub(r"([.!?])\1+", r"\1", text)
+        return text
+
+    def _naturalize_section_flow(
+        self,
+        sections: Dict[str, str],
+    ) -> Dict[str, str]:
+        """문장별 자연화와 인접 섹션의 의미 중복을 함께 제거합니다."""
+        result = {
+            key: self._sentence(self._naturalize_korean_sentence(value))
+            if self._clean_text(value) else ""
+            for key, value in dict(sections).items()
+        }
+
+        # Sprint128-12: Scene Goal의 짧은 명사구가 choice로 들어오면
+        # 연결어만 붙은 불완전 문장(예: "이 기준으로 만족스러운 바람 세기.")이 됩니다.
+        # 이미 strategy/evidence가 같은 장점을 설명하므로 불완전하거나 중복된 choice는 제거합니다.
+        choice = self._clean_text(result.get("choice"))
+        strategy_text = self._clean_text(result.get("strategy"))
+        evidence_text = self._clean_text(result.get("evidence"))
+        if choice:
+            choice_body = choice.rstrip(".!?").strip()
+            complete_choice_markers = (
+                "했습니다", "선택했습니다", "골랐습니다", "정했습니다",
+                "확인했습니다", "느꼈습니다", "사용했습니다", "좋았습니다",
+                "도움이 됐습니다", "편해졌습니다", "줄었습니다", "가능했습니다",
+            )
+            looks_like_fragment = not any(marker in choice_body for marker in complete_choice_markers)
+            overlaps_existing = (
+                bool(strategy_text)
+                and (self._meaning_overlap(choice, strategy_text) or self._meaning_overlap(strategy_text, choice))
+            ) or (
+                bool(evidence_text)
+                and (self._meaning_overlap(choice, evidence_text) or self._meaning_overlap(evidence_text, choice))
+            )
+            short_noun_fragment = len(choice_body) <= 30 and not re.search(
+                r"(?:했|됐|였|었|았|합니다|됩니다|있습니다|없습니다|좋습니다|편합니다|가능합니다)",
+                choice_body,
+            )
+            if looks_like_fragment and (short_noun_fragment or overlaps_existing):
+                result["choice"] = ""
+
+        target = self._clean_text(result.get("target"))
+        strategy = self._clean_text(result.get("strategy"))
+        if target and strategy:
+            shared_topics = (
+                ("더워", "계절", "미리", "준비"),
+                ("무게", "사용 시간", "소음", "풍량"),
+                ("후기", "실제", "확인", "비교"),
+            )
+            repeated = any(
+                sum(token in target for token in group) >= 2
+                and sum(token in strategy for token in group) >= 2
+                for group in shared_topics
+            )
+            if repeated or (
+                self._meaning_overlap(target, strategy)
+                and self._meaning_overlap(strategy, target)
+            ):
+                # 타깃 문장은 공감 역할을 유지하고 전략 문장만 비웁니다.
+                result["strategy"] = ""
+
+        recommendation = self._clean_text(result.get("recommendation"))
+        cta = self._clean_text(result.get("cta"))
+        if recommendation and cta:
+            both_review = "후기" in recommendation and "후기" in cta
+            both_check = any(token in recommendation for token in ("확인", "비교")) and any(
+                token in cta for token in ("확인", "비교")
+            )
+            if both_review and both_check:
+                result["recommendation"] = ""
+
+        return result
+
     def _finalize_script_sections(
         self,
         sections: Dict[str, str],
@@ -671,7 +790,7 @@ class ReviewScriptGenerator:
         scene_script_bridge: Dict[str, Any],
     ) -> Dict[str, str]:
         """Remove category contamination and repeated scene meanings."""
-        result = dict(sections)
+        result = self._naturalize_section_flow(sections)
         category = self._clean_text(product_type).lower()
         bridge = scene_script_bridge if isinstance(scene_script_bridge, dict) else {}
         purpose_lines = bridge.get("purpose_lines", {})
@@ -758,6 +877,27 @@ class ReviewScriptGenerator:
             product_name
         )
 
+        print(
+            "[UTF8 TRACE RSG INPUT product_name]",
+            repr(product_name),
+            flush=True,
+        )
+        print(
+            "[UTF8 TRACE RSG INPUT review_hooks]",
+            repr(review_hooks),
+            flush=True,
+        )
+        print(
+            "[UTF8 TRACE RSG INPUT review_quotes]",
+            repr(review_quotes),
+            flush=True,
+        )
+        print(
+            "[UTF8 TRACE RSG INPUT review_insight]",
+            repr(review_insight),
+            flush=True,
+        )
+
         cache_key = self._clean_text(product_name).lower()
         if story_intelligence_data:
             self._STORY_CACHE[cache_key] = dict(story_intelligence_data)
@@ -804,16 +944,50 @@ class ReviewScriptGenerator:
             hooks.get("best_hook"),
             self._extract_hook_text(hooks),
         )
+        # Sprint128-6: 앞 단계에서 이미 만들어진 조사 결합 오류도
+        # 그대로 재사용하지 않고 현재 생성기에서 교정합니다.
+        best_hook = self._repair_generated_korean(best_hook)
 
         best_hook_type = self._first_text(
             hooks.get("best_hook_type"),
             self._extract_hook_type(hooks),
         )
 
-        evidence_hook = self._make_hook(
-            count=count,
-            evidence=evidence_summary,
+        evidence_hook = self._repair_generated_korean(
+            self._shared_evidence_sentence(
+                review_count=count,
+                evidence=evidence_summary,
+            )
         )
+        malformed_hook_tokens = (
+            "하고라는", "있고라는", "있라는", "없고라는", "좋고라는",
+            "충분하라는", "편하라는", "좋으라는", "많았습니 ", "많았습니다는",
+        )
+        if (not best_hook) or any(token in best_hook for token in malformed_hook_tokens):
+            best_hook = evidence_hook
+
+        # Sprint128-8: Hook Variation을 대본 생성 뒤가 아니라 먼저 계산하고,
+        # 실제 선택된 훅을 Short/Medium/Long 첫 문장에 사용합니다.
+        hook_variation = self._build_hook_variations(
+            original_hook=best_hook,
+            product_name=product_name,
+            product_type=product_type,
+            shorts_strategy=shorts_strategy,
+            psychology_type=psychology_type,
+            target_customer=target_customer,
+            pain_summary=pain_summary,
+            evidence_summary=evidence_summary,
+            review_count=count,
+        )
+        selected_hook = self._repair_generated_korean(
+            hook_variation.get("selected_hook", "")
+        )
+        if selected_hook:
+            best_hook = selected_hook
+            best_hook_type = self._first_text(
+                hook_variation.get("selected_hook_type"),
+                best_hook_type,
+            )
 
         strategy_bridge = self._strategy_bridge_sentence(
             product_type=product_type,
@@ -1007,6 +1181,10 @@ class ReviewScriptGenerator:
             best_script.get("text", ""),
         )
 
+        # Sprint128-15: 플랫폼 CTA를 붙이기 전에 선택 대본에 남아 있는
+        # 구매/확인 CTA 블록을 먼저 완전히 제거합니다.
+        optimized_script = self._remove_existing_cta_block(optimized_script)
+
         platform_adaptation = self._adapt_script_for_platforms(
             optimized_script=optimized_script,
             product_name=product_name,
@@ -1025,18 +1203,6 @@ class ReviewScriptGenerator:
         optimized_platform_scripts = cta_optimization.get(
             "optimized_platform_scripts",
             platform_scripts,
-        )
-
-        hook_variation = self._build_hook_variations(
-            original_hook=best_hook,
-            product_name=product_name,
-            product_type=product_type,
-            shorts_strategy=shorts_strategy,
-            psychology_type=psychology_type,
-            target_customer=target_customer,
-            pain_summary=pain_summary,
-            evidence_summary=evidence_summary,
-            review_count=count,
         )
 
         validation_result = self._validate_final_script(
@@ -1324,7 +1490,7 @@ class ReviewScriptGenerator:
         )
         print(
             "[Sprint120-9 Medium Expander] Version:",
-            medium_script.get("medium_expander_version", "medium-expander-120-9"),
+            medium_script.get("medium_expander_version", "medium-expander-128-15"),
             flush=True,
         )
         print(
@@ -1621,7 +1787,7 @@ class ReviewScriptGenerator:
             "analysis_bundle_version": "analysis-bundle-80-1",
             "length_planner_version": "script-length-planner-119-1",
             "final_script_dedupe_version": "final-script-dedupe-120-8",
-            "medium_expander_version": medium_script.get("medium_expander_version", "medium-expander-120-9"),
+            "medium_expander_version": medium_script.get("medium_expander_version", "medium-expander-128-15"),
             "medium_expander_applied": medium_script.get("medium_expander_applied", False),
             "scene_script_bridge_version": "scene-script-bridge-120-7",
             "scene_script_bridge": scene_script_bridge,
@@ -1643,7 +1809,7 @@ class ReviewScriptGenerator:
             "emotion_curve": emotion_curve,
             "score_engine_version": "story-score-engine-81-3",
             "quality_gate_version": "story-quality-gate-81-4",
-            "narrative_optimizer_version": "narrative-optimizer-81-5",
+            "narrative_optimizer_version": "narrative-optimizer-128-15",
             "optimized_script": optimized_script,
             "optimization_applied": narrative_optimization.get("applied", False),
             "optimization_changes": narrative_optimization.get("changes", []),
@@ -1922,6 +2088,12 @@ class ReviewScriptGenerator:
                     ),
                 )
             ),
+            "tension": self._sentence(
+                emotion_curve.get(
+                    "tension",
+                    psychology_story.get("risk", ""),
+                )
+            ),
             "target": self._sentence(
                 target_bridge
             ),
@@ -1980,6 +2152,7 @@ class ReviewScriptGenerator:
             section_purpose_map={
                 "hook": ("hook",),
                 "empathy": ("pain", "problem"),
+                "tension": ("pain", "problem", "comparison"),
                 "strategy": ("feature", "comparison", "benefit"),
                 "evidence": ("proof", "review"),
                 "choice": ("comparison", "feature"),
@@ -2401,7 +2574,9 @@ class ReviewScriptGenerator:
             return "광고 문구보다 실제 사용에서 성능이 유지되는지가 더 중요합니다"
 
         if strategy == "seasonal_empathy":
-            return "필요한 계절이 오기 전에 미리 준비하면 불편을 줄일 수 있습니다"
+            if any(keyword in product for keyword in ("선풍기", "냉각", "쿨링")):
+                return "더워지기 전에 무게와 풍량, 사용 시간을 미리 비교해 두는 것이 좋습니다"
+            return "본격적인 계절이 시작되기 전에 사용 환경에 맞는지 미리 살펴보는 것이 좋습니다"
 
         if review_type == "storage":
             return "실제 선택 기준은 수납공간과 내부 정리 방식입니다"
@@ -2576,9 +2751,15 @@ class ReviewScriptGenerator:
             }
 
         if product_type_text == "seasonal":
+            if any(keyword in product for keyword in ("선풍기", "냉각", "쿨링")):
+                target_customer = "더운 날 가볍게 사용할 제품을 찾는 분"
+                target_reason = "후기에서 휴대성, 풍량, 사용 시간이 주요 선택 기준으로 나타났습니다"
+            else:
+                target_customer = "계절에 맞춰 미리 준비하려는 분"
+                target_reason = "후기에서 특정 계절의 반복 불편과 해결 필요가 나타났습니다"
             return {
-                "target_customer": "계절 불편을 미리 해결하려는 분",
-                "target_reason": "후기에서 특정 계절의 반복 불편과 해결 필요가 나타났습니다",
+                "target_customer": target_customer,
+                "target_reason": target_reason,
                 "target_type": "seasonal_need",
                 "confidence": 87,
             }
@@ -2620,7 +2801,9 @@ class ReviewScriptGenerator:
             return f"{target}이라면 광고보다 실제 사용 성능을 먼저 확인해야 합니다"
 
         if product_type_text == "seasonal":
-            return f"{target}이라면 필요한 계절이 오기 전에 준비하는 것이 좋습니다"
+            if any(keyword in self._clean_text(product_name) for keyword in ("선풍기", "냉각", "쿨링")):
+                return "더운 날 자주 사용할 분이라면 무게와 풍량, 사용 시간을 먼저 확인하는 것이 좋습니다"
+            return f"{target}이라면 본격적으로 필요해지기 전에 사용 환경에 맞는지 확인하는 것이 좋습니다"
 
         return f"{target}이라면 실제 후기에서 반복되는 장점을 먼저 확인해 보세요"
 
@@ -3080,6 +3263,29 @@ class ReviewScriptGenerator:
         pain = self._clean_text(pain_summary)
         dominant_type = self._clean_text(dominant_review_type)
 
+        # Sprint128-5: "회전" 같은 단어 하나로 선풍기를 캐리어형 mobility로
+        # 오판하지 않습니다. 실제 증거/장점에 전자제품 핵심어가 있으면
+        # 해당 실사용 패턴을 우선합니다.
+        electronics_text = " ".join((combined, evidence, benefit, pain))
+        if any(keyword in electronics_text for keyword in (
+            "배터리", "충전", "잔량", "풍량", "바람", "소음",
+            "발열", "선풍기", "클립", "탁상", "목에 걸", "각도 조절",
+        )):
+            if any(keyword in electronics_text for keyword in ("배터리", "충전", "잔량")):
+                return (
+                    "고객들이 공통으로 말한 점은 "
+                    "배터리 사용 시간과 잔량 확인이 편리하다는 것입니다"
+                )
+            if any(keyword in electronics_text for keyword in ("클립", "탁상", "목에 걸", "각도 조절")):
+                return (
+                    "고객들이 공통으로 말한 점은 "
+                    "이동할 때와 탁상에서 상황에 맞게 사용할 수 있다는 것입니다"
+                )
+            return (
+                "고객들이 공통으로 말한 점은 "
+                "풍량과 사용 편의성이 실제 환경에서도 만족스럽다는 것입니다"
+            )
+
         type_patterns = {
             "storage": (
                 "고객들이 공통으로 말한 점은 "
@@ -3252,7 +3458,15 @@ class ReviewScriptGenerator:
         if "텀블러" in product:
             return "휴대하기 편하면서 원하는 온도를 오래 유지하기 때문입니다"
 
-        return f"{benefit_summary}을 실제 사용에서 체감하기 때문입니다"
+        benefit = self._clean_text(benefit_summary)
+        last_char = benefit[-1:]
+        has_batchim = bool(
+            last_char
+            and "가" <= last_char <= "힣"
+            and (ord(last_char) - ord("가")) % 28 != 0
+        )
+        particle = "을" if has_batchim else "를"
+        return f"{benefit}{particle} 실제 사용에서 체감하기 때문입니다"
 
     def _benefit_sentence(
         self,
@@ -3418,7 +3632,7 @@ class ReviewScriptGenerator:
     ) -> Dict[str, Any]:
         """Sprint120-9: 중복 없이 Medium 길이를 목표 범위로 보강합니다."""
         result = dict(script or {})
-        result["medium_expander_version"] = "medium-expander-120-9"
+        result["medium_expander_version"] = "medium-expander-128-15"
         result["medium_expander_applied"] = False
 
         estimated = self._safe_int(result.get("estimated_seconds"))
@@ -3426,6 +3640,18 @@ class ReviewScriptGenerator:
             return result
 
         sections = dict(result.get("sections", {}))
+
+        # Sprint128-15: CTA가 이미 완성된 Medium 대본에는 길이 보정 문장을
+        # 추가하지 않습니다. CTA 뒤에 확인/비교 문장이 다시 붙는 것을 차단합니다.
+        if self._clean_text(sections.get("cta")):
+            result["duration_error"] = estimated - self._safe_int(
+                result.get("target_seconds")
+            )
+            result["duration_status"] = (
+                "ok" if min_seconds <= estimated <= max_seconds else "out_of_range"
+            )
+            return result
+
         product_type_text = self._clean_text(product_type).lower()
         product_text = self._clean_text(product_name).lower()
 
@@ -3435,8 +3661,9 @@ class ReviewScriptGenerator:
         ):
             candidates = (
                 "충전 단자와 풍량 단계 구성도 미리 살펴보는 편이 좋습니다.",
-                "보관할 때 부피가 얼마나 줄어드는지도 살펴보세요.",
-                "배터리 충전 방식과 풍량 단계 구성도 미리 살펴보세요.",
+                "목걸이형과 탁상형 전환이 실제 사용 환경에 맞는지도 확인해 보세요.",
+                "배터리 잔량 표시가 외출 중 사용 시간을 판단하는 데 도움이 되는지도 살펴보세요.",
+                "오래 착용할 때의 무게감과 소음은 짧게 사용할 때보다 체감 차이가 큽니다.",
             )
         elif product_type_text in {"kitchen", "주방"}:
             candidates = (
@@ -3480,7 +3707,7 @@ class ReviewScriptGenerator:
 
             sections = trial_sections
             result.update(trial_script)
-            result["medium_expander_version"] = "medium-expander-120-9"
+            result["medium_expander_version"] = "medium-expander-128-15"
             result["medium_expander_applied"] = True
             result["expansion_applied"] = True
             estimated = trial_estimated
@@ -3532,14 +3759,16 @@ class ReviewScriptGenerator:
             )
         else:
             priority_order = (
-                "risk",
                 "common_pattern",
-                "recommendation",
                 "support",
                 "detail",
                 "trust",
+                "recommendation",
+                "choice",
                 "strategy",
                 "target",
+                "tension",
+                "risk",
             )
 
         while (
@@ -3620,14 +3849,27 @@ class ReviewScriptGenerator:
                     sections.get("cta", "")
                 ).rstrip(".!?")
 
+                # Sprint128-13: CTA 자체가 이미 비교/확인 행동을 포함하면
+                # 길이 보정을 위해 또 다른 확인 문장을 덧붙이지 않습니다.
+                has_complete_action = any(
+                    phrase in cta_text
+                    for phrase in (
+                        "비교해 보세요",
+                        "확인해 보세요",
+                        "살펴보세요",
+                        "선택해 보세요",
+                    )
+                )
+
                 suffix = (
-                    " 수납 구성도 함께 보세요"
+                    " 실제 사용 환경에 맞는지도 확인해 보세요"
                     if shortage >= 2
                     else " 꼭 확인해 보세요"
                 )
 
                 if (
-                    suffix.strip() not in cta_text
+                    not has_complete_action
+                    and suffix.strip() not in cta_text
                     and not (
                         "꼭" in cta_text
                         and "확인해 보세요" in suffix
@@ -3764,6 +4006,17 @@ class ReviewScriptGenerator:
                     0,
                 )
 
+        # Sprint128-11: 길이 보정 과정에서 추가된 문장도 최종 출력 전에 다시 자연화합니다.
+        sections = self._naturalize_section_flow(sections)
+        script = self._script(
+            script_type=script.get("type", ""),
+            sections=sections,
+            score=script.get("score", 0),
+            source=script.get("source", ""),
+            target_seconds=target,
+        )
+        estimated = script.get("estimated_seconds", 0)
+
         script["duration_error"] = (
             estimated - target
         )
@@ -3897,9 +4150,12 @@ class ReviewScriptGenerator:
         if "텀블러" in product_name:
             return "보냉력과 사용 후기를 함께 확인해 보세요"
 
+        if any(keyword in product_name for keyword in ("선풍기", "냉각", "쿨링")):
+            return "구매 전에는 후기를 먼저 확인하고 무게와 사용 시간, 소음도 함께 비교해 보세요"
+
         return (
             f"{self._with_object_particle(product_name)} "
-            f"찾고 있다면 후기부터 확인해 보세요"
+            f"찾고 있다면 후기와 실제 사용 조건을 함께 확인해 보세요"
         )
 
     def _build_review_evidence_script(
@@ -4114,75 +4370,79 @@ class ReviewScriptGenerator:
         benefit: str,
         quote: str,
     ) -> str:
-        text = self._clean_text(
-            f"{benefit} {quote}"
-        )
+        """Return a product-neutral benefit summary derived from current input only."""
+        text = self._clean_text(f"{benefit} {quote}")
 
         rules = (
-            (
-                ("분리 수납", "섞이지", "지퍼", "메쉬 포켓", "내부 공간"),
-                "분리 수납",
-            ),
-            (
-                ("가볍", "이동이 편", "끌기 편"),
-                "가벼운 이동",
-            ),
-            (
-                ("튼튼", "내구성", "오래 쓸"),
-                "튼튼한 내구성",
-            ),
-            (
-                ("깔끔", "세련", "디자인", "예쁘"),
-                "깔끔한 디자인",
-            ),
-            (
-                ("수납", "넉넉", "공간"),
-                "넉넉한 수납",
-            ),
+            (("각도 조절", "각도조절", "방향 조절"), "편리한 각도 조절"),
+            (("클립", "집게", "고정"), "안정적인 클립 고정"),
+            (("탁상", "책상", "세워", "목에 걸"), "다양한 사용 방식"),
+            (("3000mah", "배터리", "사용 시간", "오래 사용"), "충분한 배터리 사용 시간"),
+            (("잔량", "숫자로 표시", "표시창"), "편리한 배터리 잔량 확인"),
+            (("바람", "풍량", "시원"), "만족스러운 바람 세기"),
+            (("조용", "소음이 적", "저소음"), "낮은 작동 소음"),
+            (("가볍", "휴대", "들고 다니", "이동이 편"), "편리한 휴대성"),
+            (("분리 수납", "섞이지", "지퍼", "메쉬 포켓", "내부 공간"), "편리한 분리 수납"),
+            (("수납", "넉넉", "공간"), "넉넉한 수납공간"),
+            (("바퀴", "끌기 편", "부드럽게 이동"), "부드러운 이동"),
+            (("튼튼", "내구성", "오래 쓸"), "튼튼한 내구성"),
+            (("깔끔", "세련", "디자인", "예쁘"), "깔끔한 디자인"),
+            (("편리", "간편", "사용하기 쉽"), "편리한 사용성"),
         )
 
+        lowered = text.lower()
         for keywords, summary in rules:
-            if any(
-                keyword in text
-                for keyword in keywords
-            ):
+            if any(keyword in lowered for keyword in keywords):
                 return summary
 
-        return "편리한 수납"
+        cleaned_benefit = self._clean_text(benefit).rstrip(".!? " )
+        if cleaned_benefit:
+            cleaned_benefit = re.sub(
+                r"(?:이|가|은|는)?\s*(?:좋다|좋았다|만족스럽다|편하다|유용하다)$",
+                "",
+                cleaned_benefit,
+            ).strip()
+            if cleaned_benefit:
+                return self._shorten(cleaned_benefit, 28).rstrip("…")
+
+        return "실사용 편의성"
 
     def _summarize_pain(
         self,
         pain: str,
     ) -> str:
+        """Return a product-neutral pain summary derived from current input only."""
         text = self._clean_text(pain)
+        lowered = text.lower()
 
         rules = (
-            (
-                ("여행 기간", "크기", "몇 인치"),
-                "여행 기간에 맞는 크기 선택",
-            ),
-            (
-                ("짐", "섞", "정리"),
-                "여행 짐 정리",
-            ),
-            (
-                ("이동", "불편", "무거"),
-                "무거운 짐 이동",
-            ),
-            (
-                ("공간", "수납"),
-                "부족한 수납공간",
-            ),
+            (("배터리", "사용 시간", "충전"), "배터리 사용 시간과 충전"),
+            (("소음", "시끄럽"), "작동 소음"),
+            (("발열", "뜨거"), "사용 중 발열"),
+            (("바람 방향", "각도", "방향을 맞추"), "바람 방향 조절"),
+            (("고정", "클립", "집게", "흔들"), "제품 고정 안정성"),
+            (("무겁", "목이 아", "휴대"), "무게와 휴대 부담"),
+            (("여행 기간", "몇 인치"), "여행 기간에 맞는 크기 선택"),
+            (("짐이 섞", "짐 정리", "분리 수납"), "여행 짐 정리"),
+            (("바퀴", "끌기 어렵", "이동이 불편"), "무거운 짐 이동"),
+            (("수납공간", "수납 공간", "공간이 부족"), "부족한 수납공간"),
+            (("불편", "어렵", "번거"), "사용 중 불편"),
         )
 
         for keywords, summary in rules:
-            if any(
-                keyword in text
-                for keyword in keywords
-            ):
+            if any(keyword in lowered for keyword in keywords):
                 return summary
 
-        return "여행 짐 정리"
+        if text:
+            cleaned = re.sub(
+                r"(?:이|가|은|는)?\s*(?:불편하다|어렵다|번거롭다|아쉽다)$",
+                "",
+                text.rstrip(".!? "),
+            ).strip()
+            if cleaned:
+                return self._shorten(cleaned, 28).rstrip("…")
+
+        return "구매 전 확인할 실사용 조건"
 
     def _summarize_evidence(
         self,
@@ -4244,6 +4504,53 @@ class ReviewScriptGenerator:
 
         return fallback or "실사용 만족도가 높다"
 
+    def _repair_generated_korean(self, value: Any) -> str:
+        """생성 단계에서 생긴 대표적인 조사/어미 결합 오류를 교정합니다."""
+        text = self._clean_text(value)
+        if not text:
+            return ""
+
+        replacements = (
+            ("하고라는 의견", "하다는 의견"),
+            ("하고라는 후기", "하다는 후기"),
+            ("있고라는 의견", "있다는 의견"),
+            ("있고라는 후기", "있다는 후기"),
+            ("없고라는 의견", "없다는 의견"),
+            ("없고라는 후기", "없다는 후기"),
+            ("좋고라는 의견", "좋다는 의견"),
+            ("좋고라는 후기", "좋다는 후기"),
+            ("힘 있라는 의견", "힘 있다는 의견"),
+            ("힘 있라는 후기", "힘 있다는 후기"),
+            ("충분하라는 의견", "충분하다는 의견"),
+            ("충분하라는 후기", "충분하다는 후기"),
+            ("편하라는 의견", "편하다는 의견"),
+            ("편하라는 후기", "편하다는 후기"),
+            ("있라는 의견", "있다는 의견"),
+            ("있라는 후기", "있다는 후기"),
+            ("세기을", "세기를"),
+        )
+        for before, after in replacements:
+            text = text.replace(before, after)
+
+        # 실제 대본에서 반복 확인된 구어체/중복 표현을 자연스럽게 정리합니다.
+        text = text.replace(
+            "실제로 사용 중 무게감이 부담될 수 있다.",
+            "실제로 오래 사용하면 무게감이 부담될 수 있습니다.",
+        )
+        text = text.replace(
+            "특히 사용 중 무게감이 부담될 수 있다.",
+            "오래 사용하면 무게감이 부담될 수 있습니다.",
+        )
+        text = re.sub(r"특히\s+([^.!?]+?[.!?])\s+특히\s+", r"\1 특히 ", text)
+        text = re.sub(r"선택\s+구매 전에는", "선택이 쉬워집니다. 구매 전에는", text)
+
+        # 일반적인 '...하고라는' 결합도 종결형으로 복원합니다.
+        text = re.sub(r"([가-힣]+)하고라는(?=\s*(?:의견|후기))", r"\1하다는", text)
+        text = re.sub(r"([가-힣]+)있고라는(?=\s*(?:의견|후기))", r"\1있다는", text)
+        text = re.sub(r"([가-힣]+)\s+있라는(?=\s*(?:의견|후기))", r"\1 있다는", text)
+        text = re.sub(r"([가-힣]+)있라는(?=\s*(?:의견|후기))", r"\1있다는", text)
+        return text
+
     def _evidence_clause(
         self,
         evidence: str,
@@ -4259,6 +4566,12 @@ class ReviewScriptGenerator:
             return text[:-2] + "이라는"
         if text.endswith("다"):
             return text[:-1] + "다는"
+        # Sprint128-5: OCR/요약 과정에서 쉼표 앞 연결형으로 잘린 문장을
+        # 그대로 "라는"과 결합하지 않도록 종결형으로 복원합니다.
+        if text.endswith("고") and len(text) > 1:
+            return text[:-1] + "다는"
+        if text.endswith("며") and len(text) > 1:
+            return text[:-1] + "다는"
 
         return text + "라는"
 
@@ -4268,20 +4581,21 @@ class ReviewScriptGenerator:
         evidence: str,
         prefix: str = "",
     ) -> str:
-        clause = self._evidence_clause(evidence)
+        """후기 원문에 조사를 억지로 붙이지 않고 인용형 문장으로 만듭니다."""
+        quote = self._quote_style_evidence(evidence).strip().rstrip(".!? ")
+        if not quote:
+            quote = "실사용 만족도가 높다"
 
         if prefix:
-            return f"{prefix}, {clause} 의견이 가장 많았습니다"
+            return self._sentence(f'{prefix}, "{quote}"라는 반응이 많았습니다')
 
         if review_count > 0:
-            return (
-                f"리뷰 {review_count}개를 분석했더니 "
-                f"{clause} 후기가 가장 많았습니다"
+            return self._sentence(
+                f'리뷰 {review_count}개를 분석했더니 "{quote}"라는 반응이 많았습니다'
             )
 
-        return (
-            f"실사용 후기를 분석했더니 "
-            f"{clause} 후기가 가장 많았습니다"
+        return self._sentence(
+            f'실사용 후기를 분석했더니 "{quote}"라는 반응이 많았습니다'
         )
 
     def _clean_product_name(
@@ -4747,6 +5061,18 @@ class ReviewScriptGenerator:
     ) -> Dict[str, Any]:
         """Build one stable export package from already-generated results."""
         product = self._clean_text(product_name)
+
+        print(
+            "[UTF8 INPUT TRACE]",
+            {
+                "product_name": repr(product_name),
+                "product": repr(product),
+                "selected_hook": repr(hook_variation.get("selected_hook")),
+                "best_script": repr(best_script.get("text")),
+            },
+            flush=True,
+        )
+        
         target = self._clean_text(target_customer)
         evidence = self._clean_text(evidence_summary)
         selected_hook = self._first_text(
@@ -5069,7 +5395,28 @@ class ReviewScriptGenerator:
         else:
             comparison = f"비슷해 보이는 {product}, 무엇을 기준으로 골라야 할까요?"
             mistake = f"{product}를 기준 없이 고르면 구매 후 아쉬움이 남을 수 있습니다"
-            empathy = f"{pain} 때문에 제품 선택을 미루고 계신가요?"
+            pain_for_hook = pain.rstrip(".!? ")
+            ending_replacements = (
+                ("수 있습니다", "수 있어"),
+                ("수 있다", "수 있어"),
+                ("합니다", "해"),
+                ("하다", "해"),
+                ("있습니다", "있어"),
+                ("있다", "있어"),
+                ("없습니다", "없어"),
+                ("없다", "없어"),
+                ("입니다", "이라"),
+                ("이다", "이라"),
+            )
+            for before, after in ending_replacements:
+                if pain_for_hook.endswith(before):
+                    pain_for_hook = pain_for_hook[:-len(before)] + after
+                    break
+            empathy = (
+                f"{pain_for_hook} 제품 선택을 미루고 계신가요?"
+                if pain_for_hook
+                else f"{product} 선택을 미루고 계신가요?"
+            )
             curiosity = f"{product} 후기에서 가장 많이 나온 선택 기준은 무엇일까요?"
 
         review_hook = (
@@ -5164,6 +5511,90 @@ class ReviewScriptGenerator:
             },
         }
 
+    def _remove_existing_cta_block(
+        self,
+        script_text: str,
+    ) -> str:
+        """Sprint128-15: Remove every trailing purchase/check CTA sentence as one block."""
+        text = self._clean_text(script_text)
+        if not text:
+            return ""
+
+        parts = [
+            self._clean_text(item)
+            for item in re.split(r"(?<=[.!?])\s+", text)
+            if self._clean_text(item)
+        ]
+        if not parts:
+            return ""
+
+        strong_markers = (
+            "구매 전에는",
+            "구매하기 전",
+            "프로필 링크",
+            "설명란 링크",
+            "저장해 두고",
+            "댓글로 남겨",
+            "팔로우해",
+            "후기를 먼저 확인",
+            "후기부터 확인",
+            "실제 후기와 구성",
+            "제품 정보와 후기",
+            "제품 정보와 실제 후기",
+        )
+        support_markers = (
+            "충전 단자",
+            "풍량 단계",
+            "무게와 사용 시간",
+            "사용 시간, 소음",
+            "실제로 사용할 환경",
+            "실제 사용 환경",
+            "내 환경에 맞는지",
+            "구성을 확인",
+            "후기와 구성을",
+        )
+        action_endings = (
+            "확인해 보세요.",
+            "비교해 보세요.",
+            "살펴보세요.",
+            "살펴보는 것이 좋습니다.",
+            "살펴보는 편이 좋습니다.",
+            "확인하는 것이 좋습니다.",
+            "선택해 보세요.",
+        )
+
+        def is_cta_sentence(sentence: str, trailing_block_started: bool) -> bool:
+            line = self._clean_text(sentence)
+            if not line:
+                return True
+            if any(marker in line for marker in strong_markers):
+                return True
+            if any(marker in line for marker in support_markers) and (
+                trailing_block_started or line.endswith(action_endings)
+            ):
+                return True
+            if trailing_block_started and line.endswith(action_endings):
+                return True
+            return False
+
+        removed = 0
+        block_started = False
+        while parts:
+            if not is_cta_sentence(parts[-1], block_started):
+                break
+            parts.pop()
+            removed += 1
+            block_started = True
+
+        cleaned = self._clean_text(" ".join(parts))
+        if removed:
+            print(
+                "[Sprint128-15 CTA Block Cleanup] Removed:",
+                removed,
+                flush=True,
+            )
+        return cleaned
+
     def _adapt_script_for_platforms(
         self,
         optimized_script: str,
@@ -5192,23 +5623,37 @@ class ReviewScriptGenerator:
         body = " ".join(sentences[1:]).strip()
 
         def replace_last_cta(text: str, cta: str) -> str:
+            body_text = self._remove_existing_cta_block(text)
+            final_cta = self._sentence(cta)
+            return self._clean_text(
+                " ".join(item for item in (body_text, final_cta) if item)
+            )
+
+        def complete_sentences_within(text: str, limit: int) -> str:
             parts = [
                 self._clean_text(item)
-                for item in re.split(r"(?<=[.!?])\s+", text)
+                for item in re.split(r"(?<=[.!?])\s+", self._clean_text(text))
                 if self._clean_text(item)
             ]
-            if not parts:
-                return self._sentence(cta)
-            if parts[-1].endswith(("보세요.", "확인해 보세요.", "비교해 보세요.", "선택해 보세요.")):
-                parts[-1] = self._sentence(cta)
-            else:
-                parts.append(self._sentence(cta))
-            return self._clean_text(" ".join(parts))
+            selected = []
+            current_length = 0
+            for part in parts:
+                added = len(part) + (1 if selected else 0)
+                if selected and current_length + added > limit:
+                    break
+                if not selected and len(part) > limit:
+                    selected.append(self._shorten_natural(part, limit))
+                    break
+                selected.append(part)
+                current_length += added
+            return self._clean_text(" ".join(selected))
 
-        tiktok_hook = self._shorten(hook, 58).rstrip("…")
-        tiktok_body = self._shorten(body, 330).rstrip("…")
-        tiktok_text = self._clean_text(
-            " ".join(item for item in (tiktok_hook, tiktok_body) if item)
+        tiktok_hook = complete_sentences_within(hook, 58)
+        tiktok_body = complete_sentences_within(body, 330)
+        tiktok_text = self._repair_generated_korean(
+            self._clean_text(
+                " ".join(item for item in (tiktok_hook, tiktok_body) if item)
+            )
         )
         tiktok_text = replace_last_cta(
             tiktok_text,
@@ -5383,28 +5828,10 @@ class ReviewScriptGenerator:
         if not text:
             return cta
 
-        parts = [
-            self._clean_text(item)
-            for item in re.split(r"(?<=[.!?])\s+", text)
-            if self._clean_text(item)
-        ]
-        if not parts:
-            return cta
-
-        cta_markers = (
-            "확인해 보세요",
-            "비교해 보세요",
-            "저장해",
-            "프로필 링크",
-            "설명란 링크",
-            "댓글로",
-            "팔로우",
+        body_text = self._remove_existing_cta_block(text)
+        return self._clean_text(
+            " ".join(item for item in (body_text, cta) if item)
         )
-        if any(marker in parts[-1] for marker in cta_markers):
-            parts[-1] = cta
-        else:
-            parts.append(cta)
-        return self._clean_text(" ".join(parts))
 
     def _optimize_selected_narrative(
         self,
@@ -5414,7 +5841,7 @@ class ReviewScriptGenerator:
         original = self._clean_text(script.get("text", ""))
         if not original:
             return {
-                "version": "narrative-optimizer-81-5",
+                "version": "narrative-optimizer-128-15",
                 "applied": False,
                 "original_text": "",
                 "optimized_text": "",
@@ -5433,6 +5860,9 @@ class ReviewScriptGenerator:
             ("실제로 실제", "실제로"),
             ("특히 특히", "특히"),
             ("그래서 그래서", "그래서"),
+            ("계절 불편", "더운 날의 불편"),
+            ("필요한 계절이 오기 전에", "본격적으로 더워지기 전에"),
+            ("실사용 조건", "실제로 사용할 환경"),
         )
         for before, after in phrase_replacements:
             if before in optimized:
@@ -5497,7 +5927,7 @@ class ReviewScriptGenerator:
             changes = []
 
         return {
-            "version": "narrative-optimizer-81-5",
+            "version": "narrative-optimizer-128-15",
             "applied": applied,
             "original_text": original,
             "optimized_text": optimized,
@@ -5671,7 +6101,12 @@ class ReviewScriptGenerator:
             clean_sections.values()
         )
 
-        text = " ".join(lines)
+        text = self._repair_generated_korean(" ".join(lines))
+        clean_sections = {
+            key: self._repair_generated_korean(value)
+            for key, value in clean_sections.items()
+        }
+        lines = list(clean_sections.values())
 
         return {
             "type": script_type,
@@ -5885,16 +6320,43 @@ class ReviewScriptGenerator:
         text: str,
         limit: int,
     ) -> str:
-        text = self._clean_text(text).rstrip(".!?… ")
+        """문장 중간을 자르지 않고, 안전한 완결 문장만 반환합니다."""
+        text = self._repair_generated_korean(self._clean_text(text)).rstrip(".!?… ")
 
         if len(text) <= limit:
             return self._sentence(text)
 
+        # 후기 훅은 원문을 억지로 자르지 않고 핵심 기준으로 다시 씁니다.
+        count_match = re.search(r"리뷰\s*(\d+)개", text)
+        if count_match:
+            count = count_match.group(1)
+            if any(token in text for token in ("바람", "풍량", "BLDC")):
+                return self._sentence(f"리뷰 {count}개에서 바람 세기 만족도가 높았습니다")
+            if any(token in text for token in ("배터리", "충전", "사용 시간")):
+                return self._sentence(f"리뷰 {count}개에서 배터리 사용 만족도가 높았습니다")
+            if any(token in text for token in ("무게", "가볍", "휴대")):
+                return self._sentence(f"리뷰 {count}개에서 휴대성이 많이 언급됐습니다")
+            return self._sentence(f"리뷰 {count}개에서 실사용 만족도가 높았습니다")
+
+        # 문장 부호가 있는 경우 완결된 첫 문장을 우선 사용합니다.
+        for part in re.split(r"(?<=[.!?])\s+", text):
+            part = self._clean_text(part).rstrip(".!?… ")
+            if 8 <= len(part) <= limit:
+                return self._sentence(part)
+
         clipped = text[:limit].rstrip(" ,.;:!?\"'“”‘’")
         last_space = clipped.rfind(" ")
-
-        if last_space >= max(12, int(limit * 0.62)):
+        if last_space >= max(12, int(limit * 0.55)):
             clipped = clipped[:last_space].rstrip(" ,.;:!?\"'“”‘’")
+
+        incomplete = (
+            "엄청", "사용할", "확인할", "선택할", "비교할", "준비할",
+            "있", "없", "하", "되", "할", "볼", "걸", "때",
+            "그리고", "하지만", "때문", "처럼", "에서", "으로",
+        )
+        if clipped.endswith(incomplete):
+            # 잘린 문장을 내보내는 것보다 원문 완결 문장을 유지합니다.
+            return self._sentence(text)
 
         endings = (
             ("선택했", "선택했습니다"),
@@ -5903,7 +6365,6 @@ class ReviewScriptGenerator:
             ("편해졌", "편해졌습니다"),
             ("확인해", "확인해 보세요"),
         )
-
         for fragment, ending in endings:
             if clipped.endswith(fragment):
                 clipped = clipped[: -len(fragment)] + ending
