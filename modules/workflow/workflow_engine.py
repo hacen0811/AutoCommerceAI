@@ -46,6 +46,7 @@ from modules.publisher.instagram_upload_executor import InstagramUploadExecutor
 from modules.video.ai_video_engine import AIVideoEngine
 from modules.video.gemini_veo_provider import GeminiVeoProvider
 from modules.video.ai_scene_merger import AISceneMerger
+from modules.video.image_motion_generator import ImageMotionGenerator
 from modules.story import StoryIntelligenceEngine
 from modules.story.scene_image_planner import SceneImagePlanner
 from modules.image_ai.ai_image_director import AIImageDirector
@@ -81,7 +82,7 @@ from modules.video.download_utils import (
 )
 
 
-print("######## WORKFLOW_ENGINE SPRINT130-1 AI IMAGE DIRECTOR LOADED ########", flush=True)
+print("######## WORKFLOW_ENGINE SPRINT131-8 FINAL MOTION SOURCE LOCK LOADED ########", flush=True)
 
 
 class WorkflowEngine:
@@ -106,7 +107,7 @@ class WorkflowEngine:
     → CapCutExport
     """
 
-    WORKFLOW_VERSION = "workflow-engine-130-1-ai-image-director"
+    WORKFLOW_VERSION = "workflow-engine-131-8-final-motion-source-lock"
 
     # Sprint102-3: 동일 프로젝트의 WorkflowEngine 중복 진입을 차단합니다.
     _RUN_GUARD = threading.RLock()
@@ -1957,8 +1958,31 @@ class WorkflowEngine:
             "review_scenes_checked": 0,
             "director_fields_removed": 0,
             "director_prompt_removed": 0,
-            "subtitle_source": "narration_only",
+            "subtitle_source": "review_script_scene_subtitles_only",
         }
+
+        # Sprint131-8: 최종 화면 자막은 ReviewScriptGenerator가 만든
+        # scene_subtitles만 허용합니다. Director의 goal/prompt는 절대 자막으로 쓰지 않습니다.
+        canonical_by_scene_id = {}
+        canonical_by_purpose = {}
+        if isinstance(payload, dict):
+            review_scripts = payload.get("review_scripts") or {}
+            if isinstance(review_scripts, dict):
+                for item in list(review_scripts.get("scene_subtitles") or []):
+                    if not isinstance(item, dict):
+                        continue
+                    subtitle = self._sprint112_1_clean_render_text(
+                        str(item.get("subtitle") or ""),
+                        stats,
+                    )
+                    if not subtitle:
+                        continue
+                    scene_id = str(item.get("scene_id") or "").strip()
+                    purpose = str(item.get("purpose") or "").strip().lower()
+                    if scene_id:
+                        canonical_by_scene_id[scene_id] = subtitle
+                    if purpose and purpose not in canonical_by_purpose:
+                        canonical_by_purpose[purpose] = subtitle
 
         director_keys = {
             "scene_goal", "visual_direction", "must_show",
@@ -2014,6 +2038,14 @@ class WorkflowEngine:
                         if preferred_spoken:
                             break
 
+                scene_id_value = str(value.get("scene_id") or "").strip()
+                purpose_value = str(value.get("purpose") or value.get("role") or "").strip().lower()
+                canonical_subtitle = (
+                    canonical_by_scene_id.get(scene_id_value)
+                    or canonical_by_purpose.get(purpose_value)
+                    or preferred_spoken
+                )
+
                 for key, child in value.items():
                     key_lower = str(key).lower()
                     if key_lower in director_keys or any(
@@ -2024,8 +2056,10 @@ class WorkflowEngine:
                         continue
 
                     if key_lower in text_keys and isinstance(child, str):
-                        if key_lower in {"subtitle", "subtitles", "caption", "caption_text", "display_text"} and preferred_spoken:
-                            result[key] = preferred_spoken
+                        if key_lower in {"subtitle", "subtitles", "caption", "caption_text", "display_text"}:
+                            # Sprint131-8: 장면 연출/목표 문구가 들어 있더라도 무시하고
+                            # 실제 대본 장면 자막으로 교체합니다.
+                            result[key] = canonical_subtitle or ""
                         else:
                             result[key] = self._sprint112_1_clean_render_text(child, stats)
                         continue
@@ -2165,12 +2199,22 @@ class WorkflowEngine:
         resolver = VideoPathResolver()
         project = resolver.resolve_project(project)
 
-        auto_connected = self.auto_connect_latest_download(
-            project
+        # Sprint131-5: 매 실행은 새 상품 이미지와 새 텍스트 리뷰만 사용합니다.
+        # Downloads/latest.mp4 및 이전 프로젝트 video_path 자동 연결을 금지합니다.
+        auto_connected = {
+            "ok": False,
+            "status": "disabled_fresh_input_only",
+            "message": "기존 영상 자동 연결 비활성화",
+            "video_path": "",
+        }
+        try:
+            project.video_path = ""
+        except Exception:
+            pass
+        print(
+            "[Sprint131-6 Fresh Input] Legacy Video Auto Connect: DISABLED",
+            flush=True,
         )
-
-        if auto_connected.get("ok"):
-            project = resolver.resolve_project(project)
 
         project_data = self._project_data(project)
         image_path = project_data.get(
@@ -2674,6 +2718,8 @@ class WorkflowEngine:
             "status": "not_run",
             "scenes": [],
             "image_prompts": [],
+            "motion_plan": [],
+            "motion_scene_count": 0,
             "errors": [],
         }
         # 기존 반환 키 호환용입니다. Sprint130-1 기본 경로에서는 Gemini/Veo를 호출하지 않습니다.
@@ -3748,7 +3794,7 @@ class WorkflowEngine:
 
         outputs["scene_image_plan"] = scene_image_plan_result
 
-        # Sprint130-1: 장면별 기존 상품 이미지 재사용과 AI 보완 이미지 프롬프트를 분리합니다.
+        # Sprint131-3: 장면별 기존 상품 이미지 재사용, AI 보완 이미지 프롬프트, 모션 계획을 연결합니다.
         # 프롬프트는 이미지 생성 API 내부 데이터로만 저장하며 Motion/Render에는 전달하지 않습니다.
         try:
             ai_image_director_result = AIImageDirector().build(
@@ -3765,34 +3811,48 @@ class WorkflowEngine:
                 errors=[f"{type(exc).__name__}: {exc}"],
             )
             print(
-                "[Sprint130-1 AI Image Director] ERROR:",
+                "[Sprint131-3 AI Image Director] ERROR:",
                 repr(exc),
                 flush=True,
             )
 
         outputs["ai_image_director"] = ai_image_director_result
         print(
-            "[Sprint130-1 AI Image Director] Version:",
+            "[Sprint131-3 AI Image Director] Version:",
             ai_image_director_result.get("version", ""),
             flush=True,
         )
         print(
-            "[Sprint130-1 AI Image Director] Status:",
+            "[Sprint131-3 AI Image Director] Status:",
             ai_image_director_result.get("status", ""),
             flush=True,
         )
         print(
-            "[Sprint130-1 AI Image Director] AI Images:",
+            "[Sprint131-3 AI Image Director] AI Images:",
             ai_image_director_result.get("ai_image_scene_count", 0),
             flush=True,
         )
         print(
-            "[Sprint130-1 AI Image Director] Existing Images:",
+            "[Sprint131-3 AI Image Director] Existing Images:",
             ai_image_director_result.get("existing_image_scene_count", 0),
             flush=True,
         )
         print(
-            "[Sprint130-1 AI Image Director] Prompt Internal Only:",
+            "[Sprint131-3 AI Image Director] Motion Scenes:",
+            ai_image_director_result.get("motion_scene_count", 0),
+            flush=True,
+        )
+        print(
+            "[Sprint131-3 AI Image Director] Motions:",
+            [
+                item.get("recommended_motion")
+                for item in list(ai_image_director_result.get("motion_plan") or [])
+                if isinstance(item, dict) and item.get("recommended_motion")
+            ],
+            flush=True,
+        )
+        print(
+            "[Sprint131-3 AI Image Director] Prompt Internal Only:",
             all(
                 bool(item.get("prompt_internal_only"))
                 for item in list(ai_image_director_result.get("image_prompts") or [])
@@ -4334,12 +4394,17 @@ class WorkflowEngine:
                     "negative_prompt": str(item.get("negative_prompt") or ""),
                     "prompt_internal_only": True,
                     "motion_input_allowed": bool(item.get("motion_input_allowed")),
+                    "recommended_motion": str(item.get("recommended_motion") or ""),
+                    "motion_speed": str(item.get("motion_speed") or ""),
+                    "motion_reason": str(item.get("motion_reason") or ""),
+                    "camera_style": str(item.get("camera_style") or ""),
+                    "motion_source": str(item.get("motion_source") or ""),
                 })
 
             ai_manifest_payload = {
                 "ok": bool(ai_image_director_result.get("ok")),
                 "ready": bool(ai_image_director_result.get("ok")),
-                "version": "ai-image-manifest-130-1",
+                "version": "ai-image-manifest-131-3",
                 "status": str(ai_image_director_result.get("status") or "not_ready"),
                 "project_id": str(project_id_for_director or ""),
                 "product_name": str(product_name_for_director or ""),
@@ -4350,6 +4415,8 @@ class WorkflowEngine:
                 "scene_count": len(ai_manifest_scenes),
                 "ai_image_scene_count": int(ai_image_director_result.get("ai_image_scene_count") or 0),
                 "existing_image_scene_count": int(ai_image_director_result.get("existing_image_scene_count") or 0),
+                "motion_scene_count": int(ai_image_director_result.get("motion_scene_count") or 0),
+                "motion_plan": list(ai_image_director_result.get("motion_plan") or []),
                 "scenes": ai_manifest_scenes,
             }
             ai_manifest_path.parent.mkdir(parents=True, exist_ok=True)
@@ -4365,7 +4432,7 @@ class WorkflowEngine:
             director_manifest_result = {
                 "ok": bool(ai_manifest_payload.get("ok")),
                 "ready": bool(ai_manifest_payload.get("ready")),
-                "version": "ai-image-manifest-writer-130-1",
+                "version": "ai-image-manifest-writer-131-3",
                 "status": "saved" if ai_manifest_payload.get("ok") else "saved_not_ready",
                 "manifest_path": str(ai_manifest_path),
                 "manifest": ai_manifest_payload,
@@ -4400,84 +4467,500 @@ class WorkflowEngine:
             flush=True,
         )
 
-        # Sprint124-4: Planning Complete / Rendering Optional
-        # 원클릭 실행에서는 Director Manifest까지만 생성합니다.
-        # Veo 호출, 장면 병합, FFmpeg fallback 영상 생성은 실행하지 않습니다.
+        # Sprint131-4: Planning Only를 완전히 제거하고 AIImageDirector의 motion_plan을 ImageMotionGenerator로 전달합니다.
+        # AI 보완 이미지가 아직 생성되지 않은 장면은 제외하고, 실제 상품 이미지가 있는 장면만 렌더합니다.
         scene_video_result.update(
             ok=False,
             ready=False,
-            status="skipped_planning_only",
+            status="not_run",
             generated_scene_count=0,
             failed_scene_count=0,
             generated_files=[],
             errors=[],
-            warnings=[
-                "Sprint130-1 AI 이미지 Planning 모드: 이미지 생성 및 Motion 렌더는 별도 단계에서 실행됩니다."
-            ],
-            render_requested=False,
+            warnings=[],
+            render_requested=True,
             api_called=False,
-            skip_reason="Planning complete; rendering disabled in one-click workflow",
         )
         scene_merge_result.update(
             ok=False,
             ready=False,
-            status="skipped_planning_only",
+            status="not_run",
             output_path="",
             errors=[],
-            render_requested=False,
-            skip_reason="No scene videos generated in planning-only mode",
+            render_requested=True,
         )
+
+        motion_render_dir = Path(director_output_dir) / "image_motion_scenes"
+        motion_render_dir.mkdir(parents=True, exist_ok=True)
+        motion_output_path = (
+            Path("exports")
+            / "videos"
+            / f"{project_id_for_director}_image_motion.mp4"
+        )
+        motion_output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Sprint131-7: AI Director가 일부 이미지만 선택해도 이번 실행에서 업로드한
+        # 전체 상품 이미지를 장면 순서대로 직접 배정합니다.
+        # - Director가 선택한 2장 반복 제거
+        # - 업로드 이미지 전체 사용
+        # - Director 장면 수보다 이미지가 많으면 장면을 확장해 모든 이미지를 사용
+        # - 이미지가 장면 수보다 적을 때만 순환 배정
+        director_motion_scenes = [
+            item
+            for item in list(ai_image_director_result.get("scenes") or [])
+            if isinstance(item, dict)
+        ]
+        director_motion_plan = [
+            item
+            for item in list(ai_image_director_result.get("motion_plan") or [])
+            if isinstance(item, dict)
+        ]
+
+        fresh_product_images = []
+        fresh_seen_paths = set()
+        for image_value in list(manual_product_image_paths or []):
+            image_object = Path(str(image_value or ""))
+            if not image_object.is_file():
+                continue
+            try:
+                image_key = str(image_object.resolve()).lower()
+            except Exception:
+                image_key = str(image_object).replace("\\", "/").lower()
+            if image_key in fresh_seen_paths:
+                continue
+            fresh_seen_paths.add(image_key)
+            fresh_product_images.append(str(image_object))
+
+        default_motions = (
+            "slow_zoom_in",
+            "pan_left_to_right",
+            "slow_zoom_out",
+            "pan_right_to_left",
+            "micro_zoom",
+            "strong_push_in",
+        )
+
+        director_scene_count = max(
+            len(director_motion_scenes),
+            len(director_motion_plan),
+            int(scene_plan_result.get("scene_count") or 0),
+            len(list(scene_plan_result.get("scenes") or [])),
+        )
+        target_motion_scene_count = max(
+            director_scene_count,
+            len(fresh_product_images),
+        )
+
+        existing_motion_scenes = []
+        if fresh_product_images and target_motion_scene_count > 0:
+            for scene_index in range(target_motion_scene_count):
+                director_scene = (
+                    director_motion_scenes[scene_index]
+                    if scene_index < len(director_motion_scenes)
+                    else {}
+                )
+                director_plan_item = (
+                    director_motion_plan[scene_index]
+                    if scene_index < len(director_motion_plan)
+                    else {}
+                )
+                image_path_value = fresh_product_images[
+                    scene_index % len(fresh_product_images)
+                ]
+                recommended_motion = str(
+                    director_scene.get("recommended_motion")
+                    or director_plan_item.get("recommended_motion")
+                    or default_motions[scene_index % len(default_motions)]
+                )
+                existing_motion_scenes.append(
+                    {
+                        "scene_id": str(
+                            director_scene.get("scene_id")
+                            or director_plan_item.get("scene_id")
+                            or f"scene_{scene_index + 1:02d}"
+                        ),
+                        "scene_index": scene_index,
+                        "image_path": image_path_value,
+                        "recommended_motion": recommended_motion,
+                        "motion_speed": str(
+                            director_scene.get("motion_speed")
+                            or director_plan_item.get("motion_speed")
+                            or "slow"
+                        ),
+                        "motion_reason": str(
+                            director_scene.get("motion_reason")
+                            or director_plan_item.get("motion_reason")
+                            or "full_product_image_sequential_assignment"
+                        ),
+                        "camera_style": str(
+                            director_scene.get("camera_style")
+                            or director_plan_item.get("camera_style")
+                            or "product_focus"
+                        ),
+                        "motion_source": "sprint131_7_full_product_image_sequence",
+                        "duration": float(
+                            director_scene.get("duration")
+                            or director_scene.get("duration_seconds")
+                            or director_plan_item.get("duration")
+                            or 3.0
+                        ),
+                    }
+                )
+        else:
+            # 업로드 이미지가 없을 때만 기존 Director 선택 결과를 안전하게 유지합니다.
+            for scene_item in director_motion_scenes:
+                image_path_value = str(
+                    scene_item.get("resolved_image_path")
+                    or scene_item.get("selected_image_path")
+                    or ""
+                ).strip()
+                if not image_path_value:
+                    continue
+                image_path_object = Path(image_path_value)
+                if not image_path_object.is_file():
+                    continue
+                if not bool(scene_item.get("motion_input_allowed", True)):
+                    continue
+                existing_motion_scenes.append(
+                    {
+                        "scene_id": str(scene_item.get("scene_id") or ""),
+                        "scene_index": len(existing_motion_scenes),
+                        "image_path": str(image_path_object),
+                        "recommended_motion": str(
+                            scene_item.get("recommended_motion") or ""
+                        ),
+                        "motion_speed": str(scene_item.get("motion_speed") or ""),
+                        "motion_reason": str(scene_item.get("motion_reason") or ""),
+                        "camera_style": str(scene_item.get("camera_style") or ""),
+                        "motion_source": str(scene_item.get("motion_source") or ""),
+                        "duration": float(
+                            scene_item.get("duration")
+                            or scene_item.get("duration_seconds")
+                            or 3.0
+                        ),
+                    }
+                )
+
+        print(
+            "[Sprint131-7 Image Sequence] Uploaded Count:",
+            len(fresh_product_images),
+            flush=True,
+        )
+        print(
+            "[Sprint131-7 Image Sequence] Director Scene Count:",
+            director_scene_count,
+            flush=True,
+        )
+        print(
+            "[Sprint131-7 Image Sequence] Render Scene Count:",
+            len(existing_motion_scenes),
+            flush=True,
+        )
+        print(
+            "[Sprint131-7 Image Sequence] Unique Render Images:",
+            len({item["image_path"] for item in existing_motion_scenes}),
+            flush=True,
+        )
+        for sequence_index, sequence_item in enumerate(existing_motion_scenes, start=1):
+            print(
+                f"[Sprint131-7 Image Sequence] Scene{sequence_index:02d} -> "
+                f"{sequence_item.get('image_path', '')}",
+                flush=True,
+            )
+
+        motion_image_paths = [
+            item["image_path"]
+            for item in existing_motion_scenes
+        ]
+        motion_plan_for_render = [
+            {
+                "scene_id": item["scene_id"],
+                "scene_index": item["scene_index"],
+                "recommended_motion": item["recommended_motion"],
+                "motion_speed": item["motion_speed"],
+                "motion_reason": item["motion_reason"],
+                "camera_style": item["camera_style"],
+                "motion_source": item["motion_source"] or "ai_image_director",
+                "duration": item["duration"],
+            }
+            for item in existing_motion_scenes
+        ]
+
         image_fallback_result = {
             "ok": False,
             "ready": False,
-            "version": "product-image-video-fallback-124-4",
-            "status": "skipped_planning_only",
+            "version": "product-image-video-fallback-131-8",
+            "status": "not_run",
             "output_path": "",
-            "image_count": 0,
+            "image_count": len(motion_image_paths),
+            "motion_plan_count": len(motion_plan_for_render),
+            "motion_plan": motion_plan_for_render,
+            "scene_files": [],
             "errors": [],
-            "render_requested": False,
-            "skip_reason": "Fallback video rendering disabled in planning-only mode",
+            "render_requested": True,
         }
+
+        if motion_image_paths:
+            try:
+                image_motion_result = ImageMotionGenerator().generate_many(
+                    image_paths=motion_image_paths,
+                    output_dir=motion_render_dir,
+                    duration=3.0,
+                    start_index=0,
+                    overwrite=True,
+                    motion_plan=motion_plan_for_render,
+                )
+
+                scene_files = [
+                    str(value)
+                    for value in list(image_motion_result.get("scene_files") or [])
+                    if str(value or "").strip()
+                ]
+
+                scene_video_result.update(
+                    ok=bool(image_motion_result.get("ok")),
+                    ready=bool(image_motion_result.get("ready")),
+                    status=str(image_motion_result.get("status") or "failed"),
+                    version=str(
+                        image_motion_result.get("version")
+                        or ImageMotionGenerator.VERSION
+                    ),
+                    generated_scene_count=int(
+                        image_motion_result.get("generated_count") or 0
+                    ),
+                    failed_scene_count=int(
+                        image_motion_result.get("failed_count") or 0
+                    ),
+                    generated_files=scene_files,
+                    items=list(image_motion_result.get("items") or []),
+                    errors=list(image_motion_result.get("errors") or []),
+                    motion_plan_used_count=int(
+                        image_motion_result.get("motion_plan_used_count") or 0
+                    ),
+                    render_requested=True,
+                    api_called=False,
+                )
+
+                if scene_files:
+                    concat_file = motion_render_dir / "concat.txt"
+
+                    def _concat_quote(value):
+                        normalized = str(Path(value).resolve()).replace("\\", "/")
+                        return normalized.replace("'", "'\\''")
+
+                    concat_file.write_text(
+                        "\n".join(
+                            f"file '{_concat_quote(value)}'"
+                            for value in scene_files
+                        ) + "\n",
+                        encoding="utf-8",
+                    )
+
+                    merge_completed = subprocess.run(
+                        [
+                            "ffmpeg",
+                            "-y",
+                            "-f",
+                            "concat",
+                            "-safe",
+                            "0",
+                            "-i",
+                            str(concat_file),
+                            "-c",
+                            "copy",
+                            "-movflags",
+                            "+faststart",
+                            str(motion_output_path),
+                        ],
+                        capture_output=True,
+                        text=True,
+                        encoding="utf-8",
+                        errors="replace",
+                        check=False,
+                    )
+
+                    merge_ok = (
+                        merge_completed.returncode == 0
+                        and motion_output_path.is_file()
+                        and motion_output_path.stat().st_size > 1024
+                    )
+
+                    if merge_ok:
+                        scene_merge_result.update(
+                            ok=True,
+                            ready=True,
+                            status="merged",
+                            output_path=str(motion_output_path),
+                            scene_count=len(scene_files),
+                            errors=[],
+                            render_requested=True,
+                        )
+                        image_fallback_result.update(
+                            ok=True,
+                            ready=True,
+                            status="motion_created",
+                            output_path=str(motion_output_path),
+                            scene_files=scene_files,
+                            image_count=len(motion_image_paths),
+                            motion_plan_count=len(motion_plan_for_render),
+                            generator_result=image_motion_result,
+                            errors=[],
+                        )
+
+                        try:
+                            ProjectRepository().update_links_and_media(
+                                getattr(project, "id"),
+                                video_path=str(motion_output_path),
+                            )
+                            project.video_path = str(motion_output_path)
+                            image_fallback_result["project_video_updated"] = True
+                        except Exception as exc:
+                            image_fallback_result["project_video_updated"] = False
+                            image_fallback_result.setdefault("warnings", []).append(
+                                f"Project video_path update failed: "
+                                f"{type(exc).__name__}: {exc}"
+                            )
+
+
+                        # Sprint131-8: 하위 VideoPipeline이 관례적으로 찾는
+                        # {project_id}_merged.mp4도 새 image_motion 영상으로 강제 교체합니다.
+                        canonical_merged_path = (
+                            Path("exports")
+                            / "videos"
+                            / f"{project_id_for_director}_merged.mp4"
+                        )
+                        try:
+                            canonical_merged_path.parent.mkdir(parents=True, exist_ok=True)
+                            shutil.copy2(motion_output_path, canonical_merged_path)
+                            image_fallback_result["canonical_merged_path"] = str(canonical_merged_path)
+                            image_fallback_result["canonical_merged_updated"] = True
+                            print(
+                                "[Sprint131-8 Final Source Lock] MERGED SOURCE:",
+                                str(canonical_merged_path),
+                                "<=",
+                                str(motion_output_path),
+                                flush=True,
+                            )
+                        except Exception as exc:
+                            image_fallback_result["canonical_merged_updated"] = False
+                            image_fallback_result.setdefault("warnings", []).append(
+                                f"Canonical merged copy failed: {type(exc).__name__}: {exc}"
+                            )
+                    else:
+                        merge_error = (
+                            merge_completed.stderr
+                            or merge_completed.stdout
+                            or "ffmpeg merge failed"
+                        )[-2000:]
+                        scene_merge_result.update(
+                            status="merge_failed",
+                            errors=[merge_error],
+                            render_requested=True,
+                        )
+                        image_fallback_result.update(
+                            status="merge_failed",
+                            scene_files=scene_files,
+                            generator_result=image_motion_result,
+                            errors=[merge_error],
+                        )
+                else:
+                    image_fallback_result.update(
+                        status="scene_generation_failed",
+                        generator_result=image_motion_result,
+                        errors=list(image_motion_result.get("errors") or []),
+                    )
+            except Exception as exc:
+                error_text = f"{type(exc).__name__}: {exc}"
+                scene_video_result.update(
+                    status="failed",
+                    errors=[error_text],
+                )
+                scene_merge_result.update(
+                    status="failed",
+                    errors=[error_text],
+                )
+                image_fallback_result.update(
+                    status="failed",
+                    errors=[error_text],
+                )
+        else:
+            scene_video_result.update(
+                status="skipped_no_existing_images",
+                warnings=[
+                    "AI 이미지 생성 전이라 Motion 렌더에 사용할 기존 상품 이미지가 없습니다."
+                ],
+            )
+            scene_merge_result.update(
+                status="skipped_no_scene_videos",
+            )
+            image_fallback_result.update(
+                status="skipped_no_existing_images",
+                errors=[],
+            )
 
         outputs["scene_video_generation"] = scene_video_result
         outputs["scene_merge"] = scene_merge_result
         outputs["product_image_video_fallback"] = image_fallback_result
+        outputs["motion_plan"] = motion_plan_for_render
         outputs["render_mode"] = {
-            "version": "ai-image-planning-render-separation-130-1",
-            "mode": "ai_image_planning_only",
+            "version": "ai-image-motion-render-bridge-131-8",
+            "mode": "existing_product_image_motion",
             "planning_complete": bool(director_manifest_result.get("ready")),
-            "render_enabled": False,
+            "render_enabled": True,
             "veo_api_called": False,
-            "fallback_video_created": False,
+            "fallback_video_created": bool(image_fallback_result.get("ok")),
             "director_manifest_path": director_manifest_result.get("manifest_path", ""),
+            "motion_output_path": image_fallback_result.get("output_path", ""),
         }
 
-        print("[Sprint130-1 AI Image Planning] Mode: ai_image_planning_only", flush=True)
+        print("[Sprint131-6 Image Motion Render] Version: image-motion-render-bridge-131-6", flush=True)
         print(
-            "[Sprint130-1 AI Image Planning] Planning Complete:",
-            bool(director_manifest_result.get("ready")),
+            "[Sprint131-6 Image Motion Render] Director Motion Count:",
+            len(list(ai_image_director_result.get("motion_plan") or [])),
             flush=True,
         )
-        print("[Sprint130-1 AI Image Planning] Veo API Called: False", flush=True)
-        print("[Sprint130-1 AI Image Planning] Scene Merge: skipped", flush=True)
-        print("[Sprint130-1 AI Image Planning] Fallback Video: skipped", flush=True)
         print(
-            "[Sprint130-1 AI Image Planning] Director Manifest:",
-            director_manifest_result.get("manifest_path", ""),
+            "[Sprint131-6 Image Motion Render] Render Image Count:",
+            len(motion_image_paths),
+            flush=True,
+        )
+        print(
+            "[Sprint131-6 Image Motion Render] Motion Plan Used:",
+            scene_video_result.get("motion_plan_used_count", 0),
+            flush=True,
+        )
+        print(
+            "[Sprint131-6 Image Motion Render] Scene Status:",
+            scene_video_result.get("status", ""),
+            flush=True,
+        )
+        print(
+            "[Sprint131-6 Image Motion Render] Merge Status:",
+            scene_merge_result.get("status", ""),
+            flush=True,
+        )
+        print(
+            "[Sprint131-6 Image Motion Render] Output:",
+            image_fallback_result.get("output_path", ""),
+            flush=True,
+        )
+        print(
+            "[Sprint131-6 Image Motion Render] Errors:",
+            image_fallback_result.get("errors", []),
             flush=True,
         )
 
         ai_video_result.update(
             {
-                "ok": bool(director_manifest_result.get("ready")),
-                "ready": bool(director_manifest_result.get("ready")),
+                "ok": bool(image_fallback_result.get("ok")),
+                "ready": bool(image_fallback_result.get("ready")),
                 "status": (
-                    "planning_complete_render_pending"
-                    if director_manifest_result.get("ready")
-                    else "planning_incomplete"
+                    "image_motion_rendered"
+                    if image_fallback_result.get("ok")
+                    else "image_motion_pending"
                 ),
-                "render_mode": "ai_image_planning_only",
-                "render_enabled": False,
+                "render_mode": "existing_product_image_motion",
+                "render_enabled": True,
                 "api_called": False,
                 "director_output_dir": director_output_dir,
                 "vision_analysis_path": vision_analysis_result.get("analysis_path", ""),
@@ -4485,234 +4968,103 @@ class WorkflowEngine:
                 "scene_plan_path": scene_plan_result.get("scene_plan_path", ""),
                 "scene_selection_path": scene_selection_result.get("scene_selection_path", ""),
                 "director_manifest_path": director_manifest_result.get("manifest_path", ""),
-                "generated_scene_count": 0,
-                "failed_scene_count": 0,
-                "generated_files": [],
-                "selected_video_path": "",
-                "warnings": [
-                    "기획 결과만 저장했습니다. 영상 생성은 후속 Rendering 단계에서 실행합니다."
-                ],
+                "generated_scene_count": int(
+                    scene_video_result.get("generated_scene_count") or 0
+                ),
+                "failed_scene_count": int(
+                    scene_video_result.get("failed_scene_count") or 0
+                ),
+                "generated_files": list(
+                    scene_video_result.get("generated_files") or []
+                ),
+                "selected_video_path": str(
+                    image_fallback_result.get("output_path") or ""
+                ),
+                "motion_plan": motion_plan_for_render,
+                "warnings": list(image_fallback_result.get("warnings") or []),
+                "errors": list(image_fallback_result.get("errors") or []),
             }
         )
         outputs["ai_video"] = ai_video_result
-        outputs["ai_video_path"] = ""
+        outputs["ai_video_path"] = str(
+            image_fallback_result.get("output_path") or ""
+        )
 
-        # 2. Source Plan
-        try:
-            source_plan = (
-                SourceVideoEngine().make_search_plan(
-                    project,
-                    product_plan=product_plan,
-                )
-            )
-
-            outputs["source_plan"] = source_plan
-
-            state.update_step(
-                job_id,
-                "source_plan",
-                "done",
-                source_plan,
-            )
-
-        except Exception as exc:
-            source_plan = {}
-            outputs["source_plan"] = {}
-
-            state.update_step(
-                job_id,
-                "source_plan",
-                "failed",
-                error=exc,
-            )
-
-        # 3. Source Ranking
-        try:
-            videos = (
-                SourceVideoEngine().list_project_videos(
-                    project
-                )
-            )
-
-            ranked = SourceVideoRanker().rank(
-                videos,
-                sample_count=4,
-            )
-
-            outputs["source_rank"] = ranked
-
-            state.update_step(
-                job_id,
-                "source_rank",
-                "done",
-                {
-                    "count": len(ranked),
-                    "top": ranked[:3],
-                },
-            )
-
-        except Exception as exc:
-            ranked = []
-            outputs["source_rank"] = []
-
-            state.update_step(
-                job_id,
-                "source_rank",
-                "failed",
-                error=exc,
-            )
-
-        # 3-1. Live Video Source Collection
-        try:
-            keywords = (
-                product_plan.get("keywords", {})
-                if isinstance(product_plan, dict)
-                else {}
-            )
-
+        # Sprint131-6: 이후 모든 영상 분석·편집 단계는 이번 실행에서
+        # 새 상품 이미지로 생성된 Image Motion 영상만 사용합니다.
+        fresh_motion_video = str(outputs.get("ai_video_path") or "").strip()
+        if fresh_motion_video and Path(fresh_motion_video).is_file():
+            try:
+                project.video_path = fresh_motion_video
+            except Exception:
+                pass
             print(
-                "[WORKFLOW] keywords keys =",
-                list(keywords.keys()),
+                "[Sprint131-6 Fresh Input] ACTIVE VIDEO:",
+                fresh_motion_video,
                 flush=True,
             )
+        else:
             print(
-                "[WORKFLOW] taobao_keyword =",
-                keywords.get("taobao_keyword"),
-                flush=True,
-            )
-            print(
-                "[WORKFLOW] source_1688_keyword =",
-                keywords.get("source_1688_keyword"),
-                flush=True,
-            )
-            print(
-                "[WORKFLOW] douyin_keyword =",
-                keywords.get("douyin_keyword"),
+                "[Sprint131-6 Fresh Input] ACTIVE VIDEO: MISSING",
                 flush=True,
             )
 
-            live_sources = VideoSourcingEngine().collect(
-                {
-                    "name": getattr(
-                        project,
-                        "product_name",
-                        "",
-                    ),
-                    "product_name": getattr(
-                        project,
-                        "product_name",
-                        "",
-                    ),
-                    "keyword": getattr(
-                        project,
-                        "keyword",
-                        "",
-                    ),
-                    "coupang_url": getattr(
-                        project,
-                        "coupang_url",
-                        "",
-                    ),
-                    "partner_url": getattr(
-                        project,
-                        "partner_url",
-                        "",
-                    ),
-                    "image_url": getattr(
-                        project,
-                        "image_url",
-                        "",
-                    ),
-                    "image_path": image_path,
-                    "taobao_keyword": keywords.get(
-                        "taobao_keyword",
-                        "",
-                    ),
-                    "source_1688_keyword": keywords.get(
-                        "source_1688_keyword",
-                        "",
-                    ),
-                    "douyin_keyword": keywords.get(
-                        "douyin_keyword",
-                        "",
-                    ),
-                    "taobao_top10": keywords.get(
-                        "taobao_top10",
-                        [],
-                    ),
-                    "source_1688_top10": keywords.get(
-                        "source_1688_top10",
-                        [],
-                    ),
-                    "douyin_top10": keywords.get(
-                        "douyin_top10",
-                        [],
-                    ),
-                    "clean_name": keywords.get(
-                        "clean_name",
-                        "",
-                    ),
-                    "tokens": keywords.get(
-                        "tokens",
-                        [],
-                    ),
-                    "category": keywords.get(
-                        "category",
-                        "",
-                    ),
-                }
-            )
 
-            outputs["video_sources"] = live_sources
+        # 2~3. Legacy Source Video Pipeline Disabled
+        # Sprint131-6: 기존 latest.mp4, 다운로드 영상, 외부 영상 후보를 절대 사용하지 않습니다.
+        source_plan = {
+            "ok": True,
+            "status": "disabled_fresh_product_input_only",
+            "source": "image_motion_only",
+            "video_path": fresh_motion_video,
+        }
+        ranked = []
+        outputs["source_plan"] = source_plan
+        outputs["source_rank"] = ranked
+        outputs["video_sources"] = {
+            "ok": True,
+            "status": "disabled_fresh_product_input_only",
+            "results": [],
+            "best_candidates": [],
+        }
+        outputs["video_candidates"] = []
 
-            video_candidates = (
-                live_sources.get(
-                    "best_candidates",
-                    [],
-                )
-                or live_sources.get(
-                    "candidates",
-                    [],
-                )
-                or live_sources.get(
-                    "results",
-                    [],
-                )
-            )
+        state.update_step(
+            job_id,
+            "source_plan",
+            "done",
+            source_plan,
+        )
+        state.update_step(
+            job_id,
+            "source_rank",
+            "done",
+            {
+                "count": 0,
+                "top": [],
+                "status": "disabled_fresh_product_input_only",
+            },
+        )
 
-            outputs["video_candidates"] = (
-                video_candidates
-                if isinstance(video_candidates, list)
-                else []
-            )
-
-            print(
-                "[Sprint62] Video candidates:",
-                len(outputs["video_candidates"]),
-                flush=True,
-            )
-
-        except Exception as exc:
-            print(
-                "[Sprint62] VideoSourcing ERROR:",
-                repr(exc),
-                flush=True,
-            )
-
-            outputs["video_sources"] = {
-                "ok": False,
-                "reason": str(exc),
-            }
-            outputs["video_candidates"] = []
+        print(
+            "[Sprint131-6 Fresh Input] Legacy Source Plan: DISABLED",
+            flush=True,
+        )
+        print(
+            "[Sprint131-6 Fresh Input] Legacy Source Ranking: DISABLED",
+            flush=True,
+        )
+        print(
+            "[Sprint131-6 Fresh Input] Live Video Sourcing: DISABLED",
+            flush=True,
+        )
 
         # 4. Real Vision
         try:
-            current_video = resolver.resolve_path(
-                project
-            )
+            current_video = str(outputs.get("ai_video_path") or "").strip()
 
             print(
-                "[AUTO] current_video =",
+                "[Sprint131-6 Fresh Input] current_video =",
                 current_video,
                 flush=True,
             )
@@ -4809,9 +5161,7 @@ class WorkflowEngine:
         )
 
         try:
-            current_video = resolver.resolve_path(
-                project
-            )
+            current_video = str(outputs.get("ai_video_path") or "").strip()
 
             outputs["video_quality"] = (
                 VideoQualityEngine().score(
@@ -6087,6 +6437,15 @@ class WorkflowEngine:
                     or "선택 상품"
                 ),
                 "product_name": getattr(project, "product_name", ""),
+                # Sprint131-8: ContentFactory와 VideoPipeline 입력을 새 Image Motion으로 고정합니다.
+                "video_path": str(outputs.get("ai_video_path") or ""),
+                "source_video_path": str(outputs.get("ai_video_path") or ""),
+                "active_video_path": str(outputs.get("ai_video_path") or ""),
+                "merged_video_path": str(
+                    (outputs.get("product_image_video_fallback") or {}).get("canonical_merged_path")
+                    or outputs.get("ai_video_path")
+                    or ""
+                ),
                 "reviews": merged_reviews,
                 "review_data": merged_reviews,
                 "coupang_reviews": (
@@ -6549,7 +6908,7 @@ class WorkflowEngine:
                     if isinstance(outputs.get("video_pipeline"), dict)
                     else {}
                 ).get("output_path", "")
-                or resolver.resolve_path(project)
+                or str(outputs.get("ai_video_path") or "")
                 or ""
             )
             affiliate_link = str(

@@ -21,7 +21,7 @@ CONTENT_PACK_DIR = Path("exports/content_packs")
 
 
 class ContentFactory:
-    VERSION = "content-factory-121-1"
+    VERSION = "content-factory-131-11"
 
     def __init__(self):
         CONTENT_PACK_DIR.mkdir(parents=True, exist_ok=True)
@@ -243,6 +243,44 @@ class ContentFactory:
         pack["review_quotes"] = review_quotes
         pack["review_hooks"] = review_hooks
         pack["review_scripts"] = review_scripts
+
+        # ===================================
+        # Sprint131-11 Scene Subtitle Bridge
+        # ===================================
+        # ReviewScriptGenerator가 생성한 실제 대본 자막을
+        # VideoPipeline -> SubtitlePipeline으로 전달합니다.
+        scene_subtitles = (
+            review_scripts.get("scene_subtitles")
+            if isinstance(review_scripts, dict)
+            else None
+        )
+
+        if isinstance(scene_subtitles, list) and scene_subtitles:
+            pack["scene_subtitles"] = scene_subtitles
+        else:
+            pack.pop("scene_subtitles", None)
+
+        scene_script_bridge = (
+            review_scripts.get("scene_script_bridge")
+            if isinstance(review_scripts, dict)
+            else None
+        )
+
+        if isinstance(scene_script_bridge, dict):
+            purpose_lines = scene_script_bridge.get("purpose_lines")
+
+            if isinstance(purpose_lines, dict) and purpose_lines:
+                pack["purpose_lines"] = purpose_lines
+            else:
+                pack.pop("purpose_lines", None)
+        else:
+            pack.pop("purpose_lines", None)
+
+        print(
+            "[Sprint131-11 Scene Subtitle Bridge] Count:",
+            len(pack.get("scene_subtitles") or []),
+            flush=True,
+        )
 
         print(
             "[Sprint73-4] Quote Selector:",
@@ -706,4 +744,3 @@ class ContentFactory:
             return name[:2]
 
         return "정보"
-    

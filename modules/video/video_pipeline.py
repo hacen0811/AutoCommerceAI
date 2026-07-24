@@ -1,26 +1,30 @@
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 from typing import Any, Dict
 
-from modules.video.video_composer import VideoComposer
-from modules.video.video_renderer import VideoRenderer
 from modules.video.subtitle_pipeline import SubtitlePipeline
+
+
+print(
+    "######## VIDEO_PIPELINE SPRINT131-9 IMAGE MOTION FINAL LOCK LOADED ########",
+    flush=True,
+)
 
 
 class VideoPipeline:
     """
-    Video Engine Pipeline 54-4
+    Sprint131-9 Image Motion Final Lock
 
-    흐름:
-    1. VideoComposer로 편집 작업 계획 생성
-    2. VideoRenderer로 장면별 MP4 생성
-    3. 장면 병합
-    4. SubtitlePipeline으로 전체 자막 적용
-    5. 최종 자막 포함 MP4 반환
+    핵심:
+    - VideoComposer / VideoRenderer 재렌더링을 실행하지 않음
+    - exports/videos/<project_id>_image_motion.mp4를 최종 원본으로 사용
+    - 해당 원본을 <project_id>_merged.mp4로 동기화
+    - 실제 대본 자막만 <project_id>_final.mp4에 적용
     """
 
-    PIPELINE_VERSION = "video-pipeline-54-4"
+    PIPELINE_VERSION = "video-pipeline-131-9"
 
     def __init__(
         self,
@@ -36,11 +40,6 @@ class VideoPipeline:
         self.merged_dir.mkdir(parents=True, exist_ok=True)
         self.subtitle_dir.mkdir(parents=True, exist_ok=True)
 
-        self.renderer = VideoRenderer(
-            output_dir=self.render_dir,
-            final_output_dir=self.merged_dir,
-        )
-
         self.subtitle_pipeline = SubtitlePipeline(
             work_dir=self.subtitle_dir,
         )
@@ -53,98 +52,132 @@ class VideoPipeline:
         apply_subtitles: bool = True,
     ) -> Dict[str, Any]:
         content_pack = content_pack or {}
-
-        composer_result = VideoComposer().compose(
-            content_pack=content_pack,
+        project_id = self._project_id(
             project=project,
+            content_pack=content_pack,
         )
 
-        jobs = composer_result.get("valid_jobs") or []
+        image_motion_path = (
+            self.merged_dir / f"{project_id}_image_motion.mp4"
+        )
+        merged_output = (
+            self.merged_dir / f"{project_id}_merged.mp4"
+        )
+        final_output = (
+            self.merged_dir / f"{project_id}_final.mp4"
+        )
 
-        result = {
+        result: Dict[str, Any] = {
             "ok": False,
             "pipeline_version": self.PIPELINE_VERSION,
             "status": "planned",
-            "composer": composer_result,
+            "composer": {
+                "ok": image_motion_path.is_file(),
+                "composer_version": "bypassed-by-video-pipeline-131-9",
+                "project_id": project_id,
+                "source_video_paths": [str(image_motion_path)],
+                "message": "이미지 모션 완성본을 직접 사용합니다.",
+            },
             "render": {},
             "subtitle": {},
+            "source_path": str(image_motion_path),
             "output_path": "",
         }
 
-        if not composer_result.get("jobs"):
-            result["status"] = "no_jobs"
-            result["message"] = "편집 작업 계획이 없습니다."
-            return result
-
-        if not jobs:
-            result["status"] = "no_valid_jobs"
+        if not image_motion_path.is_file():
+            result["status"] = "image_motion_missing"
             result["message"] = (
-                "연결된 실제 영상 파일이 없어 렌더링할 수 없습니다."
+                f"이미지 모션 영상을 찾을 수 없습니다: {image_motion_path}"
+            )
+            print(
+                "[Sprint131-9 Video Pipeline] IMAGE MOTION MISSING:",
+                image_motion_path,
+                flush=True,
             )
             return result
 
         if not render:
             result["ok"] = True
             result["status"] = "plan_only"
-            result["message"] = "영상 편집 작업 계획만 생성했습니다."
+            result["output_path"] = str(image_motion_path)
+            result["message"] = "이미지 모션 최종 입력 계획만 생성했습니다."
             return result
 
-        project_id = self._project_id(
-            project=project,
-            composer_result=composer_result,
-        )
-
-        merged_output = (
-            self.merged_dir
-            / f"{project_id}_merged.mp4"
-        )
-
-        render_result = self.renderer.render_jobs(
-            jobs=jobs,
-            final_output_path=merged_output,
-        )
-
-        result["render"] = render_result
-
-        if not render_result.get("ok"):
-            result["status"] = "render_failed"
-            result["message"] = render_result.get(
-                "message",
-                "장면 렌더링 또는 병합에 실패했습니다.",
+        try:
+            if (
+                not merged_output.exists()
+                or image_motion_path.resolve() != merged_output.resolve()
+            ):
+                shutil.copy2(image_motion_path, merged_output)
+        except OSError as exc:
+            result["status"] = "merged_sync_failed"
+            result["message"] = (
+                f"이미지 모션 영상을 merged 파일로 복사하지 못했습니다: {exc}"
             )
             return result
 
-        merged_path = render_result.get("output_path", "")
+        merged_ok = (
+            merged_output.is_file()
+            and merged_output.stat().st_size > 1024
+        )
+
+        result["render"] = {
+            "ok": merged_ok,
+            "renderer_version": "bypassed-by-video-pipeline-131-9",
+            "status": "completed" if merged_ok else "failed",
+            "input_path": str(image_motion_path),
+            "output_path": str(merged_output) if merged_ok else "",
+            "message": (
+                "VideoComposer 재렌더링 없이 이미지 모션 영상을 "
+                "merged 영상으로 동기화했습니다."
+            ),
+        }
+
+        print(
+            "[Sprint131-9 Video Pipeline] FINAL SOURCE:",
+            image_motion_path,
+            flush=True,
+        )
+        print(
+            "[Sprint131-9 Video Pipeline] MERGED OUTPUT:",
+            merged_output,
+            flush=True,
+        )
+
+        if not merged_ok:
+            result["status"] = "merged_sync_failed"
+            result["message"] = "merged 영상 생성에 실패했습니다."
+            return result
 
         if not apply_subtitles:
             result["ok"] = True
             result["status"] = "render_completed"
-            result["output_path"] = merged_path
+            result["output_path"] = str(merged_output)
             result["message"] = (
-                "자막 없이 최종 영상 렌더링이 완료되었습니다."
+                "이미지 모션 영상을 자막 없이 최종 영상으로 반환합니다."
             )
             return result
 
-        final_output = (
-            self.merged_dir
-            / f"{project_id}_final.mp4"
-        )
-
         subtitle_result = self.subtitle_pipeline.render(
-            input_path=merged_path,
+            input_path=merged_output,
             content_pack=content_pack,
             output_path=final_output,
         )
-
         result["subtitle"] = subtitle_result
 
         if not subtitle_result.get("ok"):
+            # 연출 문구를 잘못 입히는 것보다 자막 없는 정상 이미지 모션을 반환합니다.
             result["ok"] = True
-            result["status"] = "render_completed_subtitle_failed"
-            result["output_path"] = merged_path
+            result["status"] = "image_motion_completed_subtitle_skipped"
+            result["output_path"] = str(merged_output)
             result["message"] = (
-                "영상 렌더링은 완료했지만 자막 적용에 실패했습니다. "
-                "자막 없는 병합 영상을 반환합니다."
+                "이미지 모션 영상은 정상입니다. 실제 대본 자막을 찾지 못해 "
+                "연출 문구를 사용하지 않고 자막 적용을 건너뛰었습니다."
+            )
+            print(
+                "[Sprint131-9 Video Pipeline] SUBTITLE SKIPPED:",
+                subtitle_result.get("message", ""),
+                flush=True,
             )
             return result
 
@@ -155,9 +188,14 @@ class VideoPipeline:
             str(final_output),
         )
         result["message"] = (
-            "장면 렌더링, 병합, 자막 적용까지 완료되었습니다."
+            "전체 이미지 모션 영상에 실제 대본 자막 적용이 완료되었습니다."
         )
 
+        print(
+            "[Sprint131-9 Video Pipeline] FINAL VIDEO:",
+            result["output_path"],
+            flush=True,
+        )
         return result
 
     def plan(
@@ -188,25 +226,54 @@ class VideoPipeline:
     def _project_id(
         self,
         project: Any,
-        composer_result: Dict[str, Any],
+        content_pack: Dict[str, Any],
     ) -> str:
-        project_id = composer_result.get("project_id")
+        candidates = []
 
-        if not project_id and project is not None:
+        if project is not None:
             if isinstance(project, dict):
-                project_id = (
-                    project.get("id")
-                    or project.get("project_id")
-                    or project.get("name")
+                candidates.extend(
+                    [
+                        project.get("id"),
+                        project.get("project_id"),
+                        project.get("name"),
+                    ]
                 )
             else:
-                project_id = (
-                    getattr(project, "id", None)
-                    or getattr(project, "project_id", None)
-                    or getattr(project, "name", None)
+                candidates.extend(
+                    [
+                        getattr(project, "id", None),
+                        getattr(project, "project_id", None),
+                        getattr(project, "name", None),
+                    ]
                 )
 
-        project_id = str(project_id or "default")
+        candidates.extend(
+            [
+                content_pack.get("project_id"),
+                content_pack.get("id"),
+            ]
+        )
+
+        project_data = content_pack.get("project") or {}
+        if isinstance(project_data, dict):
+            candidates.extend(
+                [
+                    project_data.get("id"),
+                    project_data.get("project_id"),
+                    project_data.get("name"),
+                ]
+            )
+
+        project_id = next(
+            (
+                str(value).strip()
+                for value in candidates
+                if value not in (None, "")
+                and str(value).strip()
+            ),
+            "default",
+        )
 
         return (
             project_id
