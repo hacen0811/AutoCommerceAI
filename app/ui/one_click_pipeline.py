@@ -36,7 +36,7 @@ except Exception:
     SearchKeywordEngine = None
 
 
-UI_VERSION = "sprint115-4-unified-evidence-text"
+UI_VERSION = "sprint130-4-ui-project-display-trace"
 RESULT_DIR = Path("exports/one_click_results")
 REVIEW_IMAGE_ROOT = Path("assets/review_images")
 PRODUCT_IMAGE_ROOT = Path("assets/products")
@@ -480,6 +480,18 @@ def rebuild_project_from_coupang(
     )
 
     try:
+        print(
+            "[UTF8 PAYLOAD BEFORE SAVE]",
+            json.dumps(
+                {
+                    "product_payload": product_payload,
+                    "keywords": keywords,
+                },
+                ensure_ascii=False,
+                default=str,
+            ),
+            flush=True,
+        )
         project = create_project_from_payload(
             product_payload,
             keywords,
@@ -787,6 +799,19 @@ def render_project_pipeline(
         or getattr(project, "title", "")
     )
 
+    print(
+        "[UTF8 UI PROJECT DISPLAY]",
+        {
+            "product_name_raw": getattr(project, "product_name", ""),
+            "product_name_repr": repr(getattr(project, "product_name", "")),
+            "title_raw": getattr(project, "title", ""),
+            "title_repr": repr(getattr(project, "title", "")),
+            "project_name_raw": project_name,
+            "project_name_repr": repr(project_name),
+        },
+        flush=True,
+    )
+
     st.success(f"선택된 프로젝트: {project_name}")
 
     if not path_debug.get("exists"):
@@ -1086,7 +1111,59 @@ def show_one_click_pipeline():
         ),
         key="sprint115_common_review_text",
     )
+    if not common_review_text:
+        common_review_text = str(
+            st.session_state.get(
+                "sprint115_common_review_text",
+                "",
+            )
+        )
+
+    from pathlib import Path
+    import json
+
+    Path("utf8_text_area_debug.json").write_text(
+        json.dumps(
+            {
+                "text": common_review_text,
+                "repr": repr(common_review_text),
+                "codepoints": [
+                    f"U+{ord(char):04X}"
+                    for char in common_review_text
+                ],
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    print(
+        "[UTF8 TRACE text_area type]",
+        type(common_review_text).__name__,
+        flush=True,
+    )
+
+    print(
+        "[UTF8 TRACE text_area repr]",
+        repr(common_review_text),
+        flush=True,
+    )
+
+    print(
+        "[UTF8 TRACE session_state repr]",
+        repr(st.session_state.get("sprint115_common_review_text")),
+        flush=True,
+    )
+
     common_review_text = str(common_review_text or "")
+
+    print(
+        "[UTF8 TRACE common_review_text UI RAW]",
+        repr(common_review_text),
+        flush=True,
+    )
+
     st.caption(f"현재 입력 글자 수: {len(common_review_text.strip())}")
     if common_review_text.strip():
         st.success(
@@ -1107,6 +1184,27 @@ def show_one_click_pipeline():
         "상품명",
         height=100,
         placeholder="쿠팡 상품명을 붙여넣어 주세요.",
+    )
+
+    print(
+        "[UTF8 TEXT_AREA RAW]",
+        product_name,
+        flush=True,
+    )
+    print(
+        "[UTF8 TEXT_AREA REPR]",
+        repr(product_name),
+        flush=True,
+    )
+    print(
+        "[UTF8 TEXT_AREA UNICODE ESCAPE]",
+        product_name.encode("unicode_escape").decode("ascii"),
+        flush=True,
+    )
+    print(
+        "[UTF8 TEXT_AREA UTF8 HEX]",
+        product_name.encode("utf-8").hex(),
+        flush=True,
     )
 
     new_project_product_images = st.file_uploader(
@@ -1151,6 +1249,19 @@ def show_one_click_pipeline():
         type="primary",
         use_container_width=True,
     ):
+        print(
+            "[UTF8 UI INPUT ON CREATE]",
+            json.dumps(
+                {
+                    "product_name": product_name,
+                    "coupang_url": coupang_url,
+                },
+                ensure_ascii=False,
+                default=str,
+            ),
+            flush=True,
+        )
+
         if not product_name.strip():
             st.error("상품명을 입력해 주세요.")
             return
@@ -1175,6 +1286,18 @@ def show_one_click_pipeline():
                         product_payload,
                         product_name.strip(),
                     )
+                    print(
+                        "[UTF8 PAYLOAD BEFORE SAVE]",
+                        json.dumps(
+                            {
+                                "product_payload": product_payload,
+                                "keywords": keywords,
+                            },
+                            ensure_ascii=False,
+                            default=str,
+                        ),
+                        flush=True,
+                    )
                     project = create_project_from_payload(
                         product_payload,
                         keywords,
@@ -1185,6 +1308,21 @@ def show_one_click_pipeline():
             except Exception as exc:
                 st.error(f"프로젝트 생성 실패: {exc}")
                 return
+
+        print(
+            "[UTF8 PROJECT AFTER SAVE]",
+            json.dumps(
+                {
+                    "id": getattr(project, "id", None),
+                    "product_name": getattr(project, "product_name", ""),
+                    "title": getattr(project, "title", ""),
+                    "data_json": getattr(project, "data_json", ""),
+                },
+                ensure_ascii=False,
+                default=str,
+            ),
+            flush=True,
+        )
 
         try:
             product_image_paths = save_uploaded_product_images(

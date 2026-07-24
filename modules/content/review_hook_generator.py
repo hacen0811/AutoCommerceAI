@@ -15,7 +15,7 @@ class ReviewHookGenerator:
     - 외부 AI API 없이 규칙 기반으로 동작
     """
 
-    VERSION = "review-hook-generator-76-2b"
+    VERSION = "review-hook-generator-76-2d"
 
     def generate(
         self,
@@ -63,15 +63,18 @@ class ReviewHookGenerator:
         benefit_summary = self._summarize_benefit(
             best_benefit,
             best_quote,
+            product_name=product_name,
         )
 
         evidence_summary = self._summarize_evidence(
             best_evidence,
             benefit_summary,
+            product_name=product_name,
         )
 
         pain_summary = self._summarize_pain(
-            best_pain
+            best_pain,
+            product_name=product_name,
         )
 
         hooks: List[Dict[str, Any]] = []
@@ -110,6 +113,7 @@ class ReviewHookGenerator:
                 self._before_after_hook(
                     pain=pain_summary,
                     benefit=benefit_summary,
+                    product_name=product_name,
                 ),
                 "pain_and_benefit",
             ),
@@ -167,30 +171,30 @@ class ReviewHookGenerator:
         best_hook = hooks[0] if hooks else {}
 
         print(
-            "[Sprint76-2B Hook] Version:",
+            "[Sprint76-2D Hook] Version:",
             self.VERSION,
             flush=True,
         )
         print(
-            "[Sprint76-2B Hook] Product:",
+            "[Sprint76-2D Hook] Product:",
             product_name,
             flush=True,
         )
         print(
-            "[Sprint76-2B Hook] Best Hook:",
+            "[Sprint76-2D Hook] Best Hook:",
             best_hook.get("text", ""),
             flush=True,
         )
 
         print(
-            "[Sprint76-2B Hook] Generated:",
+            "[Sprint76-2D Hook] Generated:",
             len(hooks),
             flush=True,
         )
 
         for item in hooks:
             print(
-                "[Sprint76-2B Hook] Score:",
+                "[Sprint76-2D Hook] Score:",
                 item.get("type"),
                 item.get("score"),
                 repr(item.get("text", "")),
@@ -198,7 +202,7 @@ class ReviewHookGenerator:
             )
 
         print(
-            "[Sprint76-2B Hook] Selected:",
+            "[Sprint76-2D Hook] Selected:",
             best_hook.get("type", ""),
             flush=True,
         )
@@ -264,11 +268,17 @@ class ReviewHookGenerator:
         product_name: str,
         benefit: str,
     ) -> str:
-        if "캐리어" in product_name:
-            return (
-                f"캐리어 하나 바꿨는데 "
-                f"여행 준비가 훨씬 편해졌습니다."
-            )
+        category = self._detect_category(product_name)
+
+        if category == "travel":
+            return "캐리어 하나 바꿨는데 여행 준비가 훨씬 편해졌습니다."
+
+        if category == "fan":
+            if benefit == "목걸이·탁상형 활용":
+                return "선풍기 하나 바꿨는데 이동할 때도 책상에서도 훨씬 편해졌습니다."
+            if benefit == "손이 자유로운 사용":
+                return "선풍기 하나 바꿨는데 손에 들고 있지 않아도 시원해졌습니다."
+            return f"선풍기 하나 바꿨는데 {benefit}이 확실히 달라졌습니다."
 
         return (
             f"{product_name} 하나 바꿨는데 "
@@ -279,7 +289,22 @@ class ReviewHookGenerator:
         self,
         pain: str,
         benefit: str,
+        product_name: str = "",
     ) -> str:
+        category = self._detect_category(product_name)
+
+        if category == "fan":
+            if benefit == "목걸이·탁상형 활용":
+                return (
+                    f"예전에는 {pain}가 고민이었는데, "
+                    "지금은 목에 걸고 책상에도 세워 쓸 수 있어 훨씬 편해졌습니다."
+                )
+            if benefit == "손이 자유로운 사용":
+                return (
+                    f"예전에는 {pain}가 고민이었는데, "
+                    "지금은 손에 들지 않고 사용할 수 있어 훨씬 편해졌습니다."
+                )
+
         return (
             f"예전에는 {pain}가 고민이었는데, "
             f"지금은 {benefit}으로 훨씬 편해졌습니다."
@@ -364,10 +389,19 @@ class ReviewHookGenerator:
         self,
         evidence: str,
         fallback_benefit: str,
+        product_name: str = "",
     ) -> str:
         text = self._clean_text(evidence)
+        category = self._detect_category(product_name)
 
         if not text:
+            return f"{fallback_benefit}이 만족스럽다"
+
+        # OCR이 명사 중간에서 끊긴 경우 원문을 Hook에 직접 쓰지 않는다.
+        if self._looks_incomplete(text):
+            if category == "fan":
+                if any(word in text for word in ("목걸이", "각도", "책상", "탁상", "세워")):
+                    return "목에 걸고 각도를 조절해 탁상형으로도 활용할 수 있다"
             return f"{fallback_benefit}이 만족스럽다"
 
         text = re.sub(r"\b3\s*박\s*4\s*일\b", "3박 4일", text)
@@ -403,7 +437,77 @@ class ReviewHookGenerator:
         text = re.sub(r"\s+", " ", text).strip()
         text = text.rstrip(".!? ")
 
-        return self._shorten(text, 38).rstrip("…")
+        # Sprint76-2D: 상품별 핵심 의미를 완성된 절로 먼저 요약한다.
+        # 글자 수로 자르면 "사무실 테이"처럼 명사 중간 절단이 발생한다.
+        if category == "fan":
+            if all(word in text for word in ("목걸이", "각도")) and any(
+                word in text for word in ("책상", "탁상", "테이블", "세워")
+            ):
+                return "목에 걸고 각도를 조절해 탁상형으로도 활용할 수 있다"
+            if any(word in text for word in ("손에 들지", "손이 자유", "목에 걸")):
+                return "손에 들지 않고 사용할 수 있어 편리하다"
+            if any(word in text for word in ("가볍", "초경량", "휴대")):
+                return "가볍게 휴대하며 사용할 수 있다"
+
+        return self._shorten_complete_clause(text, 38)
+
+
+    def _shorten_complete_clause(
+        self,
+        text: str,
+        limit: int,
+    ) -> str:
+        text = self._clean_text(text).rstrip(".!? ")
+
+        if len(text) <= limit:
+            return text
+
+        # 문장부호나 연결어 앞에서 먼저 끊어 완성된 절을 유지한다.
+        boundaries = []
+        for match in re.finditer(r"[,;]|(?:고|며|지만|는데|해서|하여|하면|하면은)\s", text):
+            end = match.start()
+            if 12 <= end <= limit:
+                boundaries.append(end)
+
+        if boundaries:
+            candidate = text[:max(boundaries)].rstrip(" ,.;:!?\"'“”‘’")
+            if not self._looks_incomplete(candidate):
+                return candidate
+
+        # 한국어 명사나 어미 중간 절단을 피하기 위해 마지막 공백까지만 사용한다.
+        candidate = text[:limit]
+        space_index = candidate.rfind(" ")
+        if space_index >= 12:
+            candidate = candidate[:space_index]
+
+        candidate = candidate.rstrip(" ,.;:!?\"'“”‘’")
+
+        if self._looks_incomplete(candidate):
+            return "실사용 만족도가 높다"
+
+        return candidate
+
+    def _looks_incomplete(
+        self,
+        text: str,
+    ) -> bool:
+        cleaned = self._clean_text(text).rstrip(".!? ")
+        if not cleaned:
+            return True
+
+        # 자주 발생하는 한국어 OCR 절단 꼬리
+        broken_tails = (
+            "테이", "테이라는", "입니", "합니", "됩니", "있습니",
+            "사용하", "좋았", "편했", "조절해 책상이나 사무실",
+        )
+        if any(cleaned.endswith(tail) for tail in broken_tails):
+            return True
+
+        # 말줄임표 또는 조사만 붙은 채 끝난 문장도 불완전한 것으로 본다.
+        if cleaned.endswith("…"):
+            return True
+
+        return False
 
     def _evidence_clause(
         self,
@@ -427,65 +531,69 @@ class ReviewHookGenerator:
         self,
         benefit: str,
         quote: str,
+        product_name: str = "",
     ) -> str:
-        text = self._clean_text(
-            f"{benefit} {quote}"
-        )
+        text = self._clean_text(f"{benefit} {quote}")
+        category = self._detect_category(product_name)
+
+        # Sprint76-2C: 상품 카테고리를 먼저 적용해 다른 상품군의
+        # 단어 하나가 전체 Hook을 오염시키는 문제를 차단한다.
+        if category == "fan":
+            fan_rules = (
+                (("목걸이", "목에 걸", "넥밴드"), "손이 자유로운 사용"),
+                (("탁상", "책상", "세워", "각도 조절", "각도조절"), "목걸이·탁상형 활용"),
+                (("가볍", "초경량", "휴대", "포켓"), "가벼운 휴대성"),
+                (("바람", "시원", "냉각", "풍량"), "시원한 바람"),
+                (("조용", "소음"), "낮은 소음"),
+                (("배터리", "사용 시간", "오래"), "넉넉한 사용 시간"),
+            )
+            for keywords, summary in fan_rules:
+                if any(keyword in text for keyword in keywords):
+                    return summary
+
+            # 전자제품에서 수납·공간 계열 오염이 감지되면 안전한 기본값 사용
+            if any(word in text for word in ("수납", "내부 공간", "분리 수납", "넉넉한 공간")):
+                return "편리한 휴대성과 활용"
 
         rules = (
-            (
-                ("분리 수납", "섞이지", "지퍼", "메쉬 포켓", "내부 공간"),
-                "분리 수납",
-            ),
-            (
-                ("가볍", "이동이 편", "끌기 편", "휴대"),
-                "가벼운 이동",
-            ),
-            (
-                ("튼튼", "내구성", "오래 쓸"),
-                "튼튼한 내구성",
-            ),
-            (
-                ("깔끔", "세련", "디자인", "예쁘"),
-                "깔끔한 디자인",
-            ),
-            (
-                ("수납", "넉넉", "공간"),
-                "넉넉한 수납공간",
-            ),
-            (
-                ("설치", "간편", "쉽게"),
-                "간편한 설치",
-            ),
-            (
-                ("접착", "고정", "떨어지지"),
-                "튼튼한 고정력",
-            ),
-            (
-                ("정리", "깔끔하게"),
-                "깔끔한 정리",
-            ),
+            (("분리 수납", "섞이지", "지퍼", "메쉬 포켓", "내부 공간"), "분리 수납"),
+            (("가볍", "이동이 편", "끌기 편", "휴대"), "가벼운 이동"),
+            (("튼튼", "내구성", "오래 쓸"), "튼튼한 내구성"),
+            (("깔끔", "세련", "디자인", "예쁘"), "깔끔한 디자인"),
+            (("수납", "넉넉", "공간"), "넉넉한 수납공간"),
+            (("설치", "간편", "쉽게"), "간편한 설치"),
+            (("접착", "고정", "떨어지지"), "튼튼한 고정력"),
+            (("정리", "깔끔하게"), "깔끔한 정리"),
         )
 
         for keywords, summary in rules:
-            if any(
-                keyword in text
-                for keyword in keywords
-            ):
+            if any(keyword in text for keyword in keywords):
                 return summary
 
         cleaned = self._clean_label(benefit)
-
-        return self._shorten(
-            cleaned,
-            20,
-        )
+        return self._shorten(cleaned, 20)
 
     def _summarize_pain(
         self,
         pain: str,
+        product_name: str = "",
     ) -> str:
         text = self._clean_text(pain)
+        category = self._detect_category(product_name)
+
+        if category == "fan":
+            fan_rules = (
+                (("손", "들고", "자유"), "손이 자유롭지 않은 사용"),
+                (("바람 방향", "각도", "방향"), "바람 방향 맞추기"),
+                (("무겁", "목", "부담"), "오래 사용할 때의 무게"),
+                (("소음", "시끄"), "사용 중 소음"),
+                (("더위", "덥", "여름철"), "여름철 외출 더위"),
+            )
+            for keywords, summary in fan_rules:
+                if any(keyword in text for keyword in keywords):
+                    return summary
+            if any(word in text for word in ("수납", "공간", "정리", "짐")):
+                return "손이 자유롭지 않거나 바람 방향을 맞추기 어려운 점"
 
         rules = (
             (
@@ -521,6 +629,29 @@ class ReviewHookGenerator:
             self._clean_label(text),
             24,
         )
+
+    def _detect_category(
+        self,
+        product_name: str,
+    ) -> str:
+        text = self._clean_text(product_name).lower()
+
+        if any(word in text for word in (
+            "선풍기", "목걸이", "넥밴드", "냉각", "서큘레이터", "팬",
+        )):
+            return "fan"
+
+        if any(word in text for word in (
+            "캐리어", "여행가방", "기내용", "화물용",
+        )):
+            return "travel"
+
+        if any(word in text for word in (
+            "정리함", "수납함", "선반", "트롤리", "바구니",
+        )):
+            return "storage"
+
+        return "general"
 
     def _clean_label(
         self,

@@ -36,7 +36,10 @@ def show_step_status(state, path_debug=None):
         st.subheader("오류")
 
         for err in errors:
-            st.warning(f"{err.get('step', 'unknown')}: {err.get('error', '알 수 없는 오류')}")
+            st.warning(
+                f"{err.get('step', 'unknown')}: "
+                f"{err.get('error', '알 수 없는 오류')}"
+            )
 
         if path_debug:
             with st.expander("영상 경로 디버그"):
@@ -68,36 +71,52 @@ def show_top_candidates(project, outputs):
     video_sources = outputs.get("video_sources", {}) or {}
     product_plan = outputs.get("product_plan", {}) or {}
 
-    #candidate_groups = [
-        #("타오바오 TOP10", "taobao", product_plan.get("taobao_top10") or source_plan.get("taobao_top10")),
-        #("1688 TOP10", "1688", product_plan.get("source_1688_top10") or source_plan.get("source_1688_top10")),
-        #("도우인 TOP10", "tiktok", product_plan.get("douyin_top10") or source_plan.get("douyin_top10")),
-    #]
+    # candidate_groups = [
+    #     (
+    #         "타오바오 TOP10",
+    #         "taobao",
+    #         product_plan.get("taobao_top10")
+    #         or source_plan.get("taobao_top10"),
+    #     ),
+    #     (
+    #         "1688 TOP10",
+    #         "1688",
+    #         product_plan.get("source_1688_top10")
+    #         or source_plan.get("source_1688_top10"),
+    #     ),
+    #     (
+    #         "도우인 TOP10",
+    #         "tiktok",
+    #         product_plan.get("douyin_top10")
+    #         or source_plan.get("douyin_top10"),
+    #     ),
+    # ]
 
-    #shown = False
+    shown = False
 
-    #for title, platform, items in candidate_groups:
-        #if not items:
-            #continue
-
-        #shown = True
-        #st.markdown(f"### {title}")
-
-        #for idx, item in enumerate(items, start=1):
-            #if not isinstance(item, dict):
-                #continue
-
-            #item = dict(item)
-            #item.setdefault("rank", idx)
-
-            #show_candidate_card(
-                #project=project,
-                #platform=platform,
-                #item=item,
-                #safe_project_id=safe_project_id,
-            #)
+    # for title, platform, items in candidate_groups:
+    #     if not items:
+    #         continue
+    #
+    #     shown = True
+    #     st.markdown(f"### {title}")
+    #
+    #     for idx, item in enumerate(items, start=1):
+    #         if not isinstance(item, dict):
+    #             continue
+    #
+    #         item = dict(item)
+    #         item.setdefault("rank", idx)
+    #
+    #         show_candidate_card(
+    #             project=project,
+    #             platform=platform,
+    #             item=item,
+    #             safe_project_id=safe_project_id,
+    #         )
 
     candidates = video_sources.get("candidates") or []
+
     if candidates:
         shown = True
         st.markdown("### 전체 검색 후보")
@@ -143,7 +162,7 @@ def show_result_summary(project, outputs):
 
     st.markdown("### 후보 카드")
     show_top_candidates(project, outputs)
-    
+
     st.divider()
     show_source_candidates()
 
@@ -162,7 +181,8 @@ def show_video_quality(outputs, state):
 
     if video_quality.get("ok") is False:
         st.warning(
-            f"영상 품질 평가 실패: {video_quality.get('reason', '알 수 없는 오류')}"
+            "영상 품질 평가 실패: "
+            f"{video_quality.get('reason', '알 수 없는 오류')}"
         )
         return
 
@@ -197,7 +217,12 @@ def show_pipeline_result(project, result, path_debug=None):
         st.info("아직 원클릭 실행 결과가 없습니다.")
         return
 
-    st.success(result.get("summary", "원클릭 파이프라인이 완료되었습니다."))
+    st.success(
+        result.get(
+            "summary",
+            "원클릭 파이프라인이 완료되었습니다.",
+        )
+    )
 
     state = result.get("state", {})
     outputs = result.get("outputs", {})
@@ -209,7 +234,9 @@ def show_pipeline_result(project, result, path_debug=None):
 
     show_step_status(state, path_debug)
 
-    tab1, tab2, tab3 = st.tabs(["요약", "결과 JSON", "상태 JSON"])
+    tab1, tab2, tab3 = st.tabs(
+        ["요약", "결과 JSON", "상태 JSON"]
+    )
 
     with tab1:
         show_result_summary(project, outputs)

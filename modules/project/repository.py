@@ -6,8 +6,75 @@ from database.models import Project, Checklist
 from modules.system.project_backup import ProjectBackup
 
 
+print(
+    "######## PROJECT_REPOSITORY SPRINT130-3 UTF8 TRACE LOADED ########",
+    flush=True,
+)
+
+
 class ProjectRepository:
-    VERSION = "project-repository-88-1"
+    VERSION = "project-repository-130-3-utf8-trace"
+
+    @staticmethod
+    def _print_utf8_project_trace(stage, item, project_id=None):
+        """
+        Sprint130-3:
+        SQLAlchemy가 반환한 Project 객체의 문자열을
+        RAW, REPR, UNICODE ESCAPE 형태로 각각 출력합니다.
+
+        실제 문자열은 변경하거나 재인코딩하지 않습니다.
+        UNICODE ESCAPE 출력은 콘솔 인코딩과 무관하게
+        Python 내부 유니코드 상태를 확인하기 위한 진단용입니다.
+        """
+        print(
+            f"[Sprint130-3 Repository UTF8] Stage: {stage}",
+            flush=True,
+        )
+        print(
+            f"[Sprint130-3 Repository UTF8] Project ID: "
+            f"{project_id if project_id is not None else getattr(item, 'id', None)}",
+            flush=True,
+        )
+
+        if item is None:
+            print(
+                "[Sprint130-3 Repository UTF8] Project: None",
+                flush=True,
+            )
+            return
+
+        fields = {
+            "title": str(getattr(item, "title", "") or ""),
+            "product_name": str(
+                getattr(item, "product_name", "") or ""
+            ),
+            "category": str(
+                getattr(item, "category", "") or ""
+            ),
+            "keyword": str(
+                getattr(item, "keyword", "") or ""
+            ),
+            "data_json_preview": str(
+                getattr(item, "data_json", "") or ""
+            )[:300],
+        }
+
+        for key, value in fields.items():
+            print(
+                f"[Sprint130-3 Repository UTF8] {key} RAW:",
+                value,
+                flush=True,
+            )
+            print(
+                f"[Sprint130-3 Repository UTF8] {key} REPR:",
+                repr(value),
+                flush=True,
+            )
+            print(
+                f"[Sprint130-3 Repository UTF8] {key} UNICODE:",
+                value.encode("unicode_escape").decode("ascii"),
+                flush=True,
+            )
 
     def create(self, payload):
         with SessionLocal() as db:
@@ -33,9 +100,37 @@ class ProjectRepository:
                     indent=2,
                 ),
             )
+
+            print(
+                "[Sprint130-3 Repository UTF8] CREATE INPUT",
+                flush=True,
+            )
+            for key in ("title", "product_name"):
+                value = str(getattr(item, key, "") or "")
+                print(
+                    f"[Sprint130-3 Repository UTF8] CREATE {key} RAW:",
+                    value,
+                    flush=True,
+                )
+                print(
+                    f"[Sprint130-3 Repository UTF8] CREATE {key} REPR:",
+                    repr(value),
+                    flush=True,
+                )
+                print(
+                    f"[Sprint130-3 Repository UTF8] CREATE {key} UNICODE:",
+                    value.encode("unicode_escape").decode("ascii"),
+                    flush=True,
+                )
+
             db.add(item)
             db.commit()
             db.refresh(item)
+
+            self._print_utf8_project_trace(
+                stage="create_after_refresh",
+                item=item,
+            )
 
             checklist = Checklist(
                 project_id=item.id,
@@ -49,29 +144,63 @@ class ProjectRepository:
 
     def find_by_coupang_url(self, coupang_url):
         with SessionLocal() as db:
-            return db.scalar(
+            item = db.scalar(
                 select(Project).where(
                     Project.coupang_url == coupang_url
                 )
             )
 
+            self._print_utf8_project_trace(
+                stage="find_by_coupang_url",
+                item=item,
+            )
+            return item
+
     def all(self):
         with SessionLocal() as db:
-            return list(
+            items = list(
                 db.scalars(
                     select(Project).order_by(Project.id.desc())
                 )
             )
 
+            print(
+                "[Sprint130-3 Repository UTF8] ALL COUNT:",
+                len(items),
+                flush=True,
+            )
+
+            for item in items[:5]:
+                self._print_utf8_project_trace(
+                    stage="all",
+                    item=item,
+                )
+
+            return items
+
     def get(self, project_id):
         with SessionLocal() as db:
-            return db.get(Project, project_id)
+            item = db.get(Project, project_id)
+
+            self._print_utf8_project_trace(
+                stage="get",
+                item=item,
+                project_id=project_id,
+            )
+
+            return item
 
     def update_project(self, project_id, payload):
         with SessionLocal() as db:
             item = db.get(Project, project_id)
             if not item:
                 return None
+
+            self._print_utf8_project_trace(
+                stage="update_project_before",
+                item=item,
+                project_id=project_id,
+            )
 
             fields = [
                 "title",
@@ -108,6 +237,28 @@ class ProjectRepository:
                     payload.get("data_json") or "{}"
                 )
 
+            print(
+                "[Sprint130-3 Repository UTF8] UPDATE PAYLOAD",
+                flush=True,
+            )
+            for key in ("title", "product_name"):
+                value = str(payload.get(key, "") or "")
+                print(
+                    f"[Sprint130-3 Repository UTF8] UPDATE {key} RAW:",
+                    value,
+                    flush=True,
+                )
+                print(
+                    f"[Sprint130-3 Repository UTF8] UPDATE {key} REPR:",
+                    repr(value),
+                    flush=True,
+                )
+                print(
+                    f"[Sprint130-3 Repository UTF8] UPDATE {key} UNICODE:",
+                    value.encode("unicode_escape").decode("ascii"),
+                    flush=True,
+                )
+
             checklist = db.scalar(
                 select(Checklist).where(
                     Checklist.project_id == project_id
@@ -121,6 +272,13 @@ class ProjectRepository:
 
             db.commit()
             db.refresh(item)
+
+            self._print_utf8_project_trace(
+                stage="update_project_after_refresh",
+                item=item,
+                project_id=project_id,
+            )
+
             ProjectBackup().auto_export_on_change()
             return item
 
@@ -132,6 +290,7 @@ class ProjectRepository:
 
             item.status = status
             db.commit()
+            db.refresh(item)
             ProjectBackup().auto_export_on_change()
             return item
 

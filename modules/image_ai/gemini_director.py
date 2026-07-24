@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Sequence
 
 class GeminiDirector:
     """
-    Sprint93-6A Gemini Director Core
+    Sprint129-1 Gemini Director Core
 
     역할:
     - Sprint93-5 scene_selection.json을 입력받음
@@ -21,7 +21,7 @@ class GeminiDirector:
     이 단계는 API 호출을 수행하지 않는다.
     """
 
-    VERSION = "gemini-director-123-1"
+    VERSION = "gemini-director-129-1"
 
     ASPECT_RATIO = "9:16"
     DEFAULT_FPS = 30
@@ -54,8 +54,10 @@ class GeminiDirector:
     )
 
     OUTPUT_POLICY = (
-        "Create a vertical 9:16 video. Keep the product sharp, realistic, stable, "
-        "and commercially presentable. No subtitles, no captions, no graphic text, "
+        "Create a vertical 9:16 shopping-short video. Keep the product visible within "
+        "the central safe area, sharp, realistic, stable, and commercially presentable. "
+        "The product must remain the primary visual subject, not the model or background. "
+        "No subtitles, no captions, no graphic text, "
         "no UI overlays, no watermark, and no generated brand marks."
     )
 
@@ -720,7 +722,8 @@ class GeminiDirector:
         diversity_instruction = (
             f"This is scene {max(1, int(scene_order))}. "
             "Do not repeat the immediately previous shot's camera rhythm, framing emphasis, "
-            "or visual beat. Keep this scene distinct while preserving continuity."
+            "or visual beat. Alternate between hero, context, detail, and usage emphasis when "
+            "the reference images support it. Keep this scene distinct while preserving continuity."
         )
 
         return {
@@ -854,6 +857,9 @@ class GeminiDirector:
             f"Ending direction: {transition_instruction}",
             f"Reference-image context: {visual_context}",
             "",
+            "Shopping conversion direction: make the product understandable within the first second of this shot.",
+            "Keep the product unobstructed and large enough for mobile viewing. Avoid decorative camera movement that hides the feature.",
+            "Use only claims and actions supported by the reference image and story context.",
             self.OUTPUT_POLICY,
         ]
 
