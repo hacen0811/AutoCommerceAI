@@ -1,8 +1,29 @@
 import json
+import os
 import re
+import sys
 import threading
+import traceback
 from pathlib import Path
 from urllib.parse import quote_plus
+
+
+def _configure_utf8_runtime():
+    """Windows CP949 환경에서 파이프라인 로그와 자식 프로세스를 UTF-8로 고정합니다."""
+    os.environ.setdefault("PYTHONIOENCODING", "utf-8")
+    os.environ.setdefault("PYTHONUTF8", "1")
+    for stream_name in ("stdout", "stderr"):
+        stream = getattr(sys, stream_name, None)
+        reconfigure = getattr(stream, "reconfigure", None)
+        if not callable(reconfigure):
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="backslashreplace")
+        except Exception:
+            pass
+
+
+_configure_utf8_runtime()
 
 import streamlit as st
 
@@ -36,10 +57,12 @@ except Exception:
     SearchKeywordEngine = None
 
 
-UI_VERSION = "sprint130-4-ui-project-display-trace"
+UI_VERSION = "sprint154-1-image-path-fallback"
 RESULT_DIR = Path("exports/one_click_results")
 REVIEW_IMAGE_ROOT = Path("assets/review_images")
 PRODUCT_IMAGE_ROOT = Path("assets/products")
+VIRAL_UPLOAD_ROOT = Path("assets/viral_uploads")
+SUPPORTED_VIRAL_VIDEO_SUFFIXES = {".mp4", ".mov", ".mkv", ".webm", ".m4v"}
 SUPPORTED_PRODUCT_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp"}
 SUPPORTED_REVIEW_IMAGE_SUFFIXES = {
     ".png",
@@ -49,6 +72,12 @@ SUPPORTED_REVIEW_IMAGE_SUFFIXES = {
     ".bmp",
 }
 
+
+print(
+    "######## ONE_CLICK_PIPELINE SPRINT154-1 IMAGE PATH FALLBACK LOADED ########",
+    __file__,
+    flush=True,
+)
 
 # Sprint102-3: 한 Streamlit 프로세스에서 동일 프로젝트 중복 실행을 차단합니다.
 _PIPELINE_RUN_GUARD = threading.RLock()
@@ -290,6 +319,87 @@ def show_product_image_upload_area(project, key_prefix):
         )
 
     return uploaded_files
+
+
+def viral_upload_dir(project):
+    return VIRAL_UPLOAD_ROOT / f"project_{safe_project_id(project)}"
+
+
+def list_saved_viral_videos(project):
+    folder = viral_upload_dir(project)
+    if not folder.exists():
+        return []
+    return [
+        str(path)
+        for path in sorted(folder.iterdir())
+        if path.is_file() and path.suffix.lower() in SUPPORTED_VIRAL_VIDEO_SUFFIXES
+    ]
+
+
+def save_uploaded_viral_videos(project, uploaded_files):
+    files = list(uploaded_files or [])[:10]
+    if not files:
+        return list_saved_viral_videos(project)
+
+    folder = viral_upload_dir(project)
+    folder.mkdir(parents=True, exist_ok=True)
+    for old_path in folder.iterdir():
+        if old_path.is_file() and old_path.suffix.lower() in SUPPORTED_VIRAL_VIDEO_SUFFIXES:
+            old_path.unlink()
+
+    saved_paths = []
+    for index, uploaded_file in enumerate(files, start=1):
+        original_name = getattr(uploaded_file, "name", "") or ""
+        suffix = Path(original_name).suffix.lower()
+        if suffix not in SUPPORTED_VIRAL_VIDEO_SUFFIXES:
+            suffix = ".mp4"
+        destination = folder / f"viral_{index:02d}{suffix}"
+        destination.write_bytes(uploaded_file.getbuffer())
+        saved_paths.append(str(destination))
+    return saved_paths
+
+
+def parse_viral_urls(value):
+    urls = []
+    for line in str(value or "").splitlines():
+        clean = line.strip()
+        if clean and clean.startswith(("http://", "https://")) and clean not in urls:
+            urls.append(clean)
+    return urls[:10]
+
+
+def show_viral_input_area(project, key_prefix):
+    project_safe_id = safe_project_id(project)
+    saved_paths = list_saved_viral_videos(project)
+
+    st.subheader("바이럴 쇼츠 참고 영상")
+    st.caption(
+        "직접 고른 바이럴 쇼츠 URL 또는 영상 파일을 최대 10개 입력하세요. "
+        "영상 자체를 복제하지 않고 장면 길이·컷 속도·모션·자막 위치 패턴만 분석합니다."
+    )
+    viral_urls_text = st.text_area(
+        "바이럴 쇼츠 URL (한 줄에 하나)",
+        height=130,
+        placeholder="https://www.youtube.com/shorts/...",
+        key=f"{key_prefix}_viral_urls_{project_safe_id}",
+    )
+    uploaded_files = st.file_uploader(
+        "바이럴 쇼츠 영상 파일",
+        type=["mp4", "mov", "mkv", "webm", "m4v"],
+        accept_multiple_files=True,
+        key=f"{key_prefix}_viral_videos_{project_safe_id}",
+    )
+    url_count = len(parse_viral_urls(viral_urls_text))
+    upload_count = len(uploaded_files or [])
+    if url_count + upload_count > 10:
+        st.warning("URL과 파일을 합쳐 앞의 10개만 분석합니다.")
+    elif url_count or upload_count:
+        st.success(f"바이럴 참고 영상 {url_count + upload_count}개가 준비됐습니다.")
+    elif saved_paths:
+        st.info(f"저장된 바이럴 영상 {len(saved_paths)}개를 다시 사용합니다.")
+    else:
+        st.caption("입력하지 않으면 바이럴 편집 분석 단계만 건너뜁니다.")
+    return viral_urls_text, uploaded_files
 
 
 def extract_product_payload(built, coupang_url, product_name):
@@ -594,9 +704,17 @@ def run_project_pipeline(
     sample_count,
     review_image_paths=None,
     review_text="",
+    locked_script="",
     product_image_paths=None,
     product_image_path="",
     youtube_privacy_status="private",
+    viral_video_sources=None,
+    declared_review_count=0,
+    review_checked_at="",
+    monthly_purchase_count=0,
+    rating=0.0,
+    input_product_name="",
+    stop_after_image_generation=False,
 ):
     """Sprint102-3: UI에서 동일 프로젝트의 중복 원클릭 진입을 차단합니다."""
     project_key = str(safe_project_id(project))
@@ -634,14 +752,31 @@ def run_project_pipeline(
     )
 
     try:
+        print(
+            "[Sprint147-5 UI ROUTE]",
+            {
+                "project_key": project_key,
+                "stop_after_image_generation": bool(stop_after_image_generation),
+                "locked_script_chars": len(str(locked_script or "").strip()),
+            },
+            flush=True,
+        )
         return _run_project_pipeline_impl(
             project=project,
             sample_count=sample_count,
             review_image_paths=review_image_paths,
             review_text=review_text,
+            locked_script=locked_script,
             product_image_paths=product_image_paths,
             product_image_path=product_image_path,
             youtube_privacy_status=youtube_privacy_status,
+            viral_video_sources=viral_video_sources,
+            declared_review_count=declared_review_count,
+            review_checked_at=review_checked_at,
+            monthly_purchase_count=monthly_purchase_count,
+            rating=rating,
+            input_product_name=input_product_name,
+            stop_after_image_generation=stop_after_image_generation,
         )
     finally:
         with _PIPELINE_RUN_GUARD:
@@ -658,9 +793,17 @@ def _run_project_pipeline_impl(
     sample_count,
     review_image_paths=None,
     review_text="",
+    locked_script="",
     product_image_paths=None,
     product_image_path="",
     youtube_privacy_status="private",
+    viral_video_sources=None,
+    declared_review_count=0,
+    review_checked_at="",
+    monthly_purchase_count=0,
+    rating=0.0,
+    input_product_name="",
+    stop_after_image_generation=False,
 ):
     print(
         "[Sprint72-1] run_project_pipeline entered",
@@ -669,10 +812,12 @@ def _run_project_pipeline_impl(
 
     review_image_paths = list(review_image_paths or [])
     review_text = str(review_text or "").strip()
+    locked_script = str(locked_script or "").strip()
     product_image_paths = list(product_image_paths or [])
     if product_image_path and product_image_path not in product_image_paths:
         product_image_paths.insert(0, product_image_path)
     product_image_path = product_image_paths[0] if product_image_paths else ""
+    viral_video_sources = [str(item).strip() for item in list(viral_video_sources or []) if str(item).strip()][:10]
 
     print(
         "[Sprint72-1] Review Images:",
@@ -690,9 +835,39 @@ def _run_project_pipeline_impl(
     )
 
     print(
+        "[Sprint134-1 Viral Input] Sources:",
+        len(viral_video_sources),
+        viral_video_sources,
+        flush=True,
+    )
+
+    print(
         "[Sprint94-1 Manual Images] Product Images:",
         len(product_image_paths),
         product_image_paths,
+        flush=True,
+    )
+
+    print(
+        "[Sprint146-9 UI -> WORKFLOW]",
+        {
+            "locked_script_chars": len(locked_script),
+            "monthly_purchase_count": int(monthly_purchase_count or 0),
+            "review_count": int(declared_review_count or 0),
+            "rating": float(rating or 0),
+            "review_checked_at": str(review_checked_at or ""),
+            "image_count": len(product_image_paths),
+        },
+        flush=True,
+    )
+
+    print(
+        "[Sprint147-5 UI -> WORKFLOW CALL]",
+        {
+            "stop_after_image_generation": bool(stop_after_image_generation),
+            "locked_script_chars": len(locked_script),
+            "image_count": len(product_image_paths),
+        },
         flush=True,
     )
 
@@ -701,9 +876,17 @@ def _run_project_pipeline_impl(
         sample_count=sample_count,
         review_image_paths=review_image_paths,
         review_text=review_text,
+        locked_script=locked_script,
         product_image_paths=product_image_paths,
         product_image_path=product_image_path,
         youtube_privacy_status=youtube_privacy_status,
+        viral_video_sources=viral_video_sources,
+        declared_review_count=declared_review_count,
+        review_checked_at=review_checked_at,
+        monthly_purchase_count=monthly_purchase_count,
+        rating=rating,
+        input_product_name=input_product_name,
+        stop_after_image_generation=stop_after_image_generation,
     )
 
     save_pipeline_result(project, result)
@@ -832,6 +1015,11 @@ def render_project_pipeline(
         key_prefix="existing",
     )
 
+    viral_urls_text, uploaded_viral_videos = show_viral_input_area(
+        project,
+        key_prefix="existing",
+    )
+
     manual_review_text = str(review_text or "")
 
     c1, c2 = st.columns(2)
@@ -873,6 +1061,13 @@ def render_project_pipeline(
             st.error(f"리뷰 이미지 저장 실패: {exc}")
             return
 
+        try:
+            viral_file_paths = save_uploaded_viral_videos(project, uploaded_viral_videos)
+            viral_sources = (parse_viral_urls(viral_urls_text) + viral_file_paths)[:10]
+        except Exception as exc:
+            st.error(f"바이럴 영상 저장 실패: {exc}")
+            return
+
         if product_image_paths:
             st.info(
                 f"상품 이미지 {len(product_image_paths)}장을 AI Director에 전달합니다."
@@ -895,6 +1090,8 @@ def render_project_pipeline(
                     product_image_paths=product_image_paths,
                     product_image_path=product_image_path,
                     youtube_privacy_status=youtube_privacy_status,
+                    viral_video_sources=viral_sources,
+                    input_product_name=project_name,
                 )
             except Exception as exc:
                 st.error(f"원클릭 실행 실패: {exc}")
@@ -1055,434 +1252,470 @@ def render_project_pipeline(
         )
 
 
-def show_one_click_pipeline():
-    st.title("⚡ 원클릭 파이프라인")
-    st.caption(
-        "상품명 + 상품/상세 이미지 + 리뷰 캡처를 기본 입력으로 사용합니다. "
-        "쿠팡 링크는 선택사항입니다."
-    )
-    st.caption(f"UI 버전: {UI_VERSION}")
+def _resolve_final_video_path(result):
+    """Sprint146-5: Workflow 결과 구조가 달라도 실제 최종 MP4를 찾습니다."""
+    outputs = result.get("outputs", {}) if isinstance(result, dict) else {}
+    candidates = []
 
-    sample_count = st.slider(
-        "Vision 분석 프레임 수",
-        4,
-        12,
-        6,
-        2,
-    )
-
-    youtube_privacy_label = st.selectbox(
-        "YouTube 공개 범위",
-        [
-            "🔒 비공개",
-            "🔗 일부 공개",
-            "🌍 공개",
-        ],
-        index=0,
-        help=(
-            "비공개: 본인만 시청 / "
-            "일부 공개: 링크를 아는 사람만 시청 / "
-            "공개: 누구나 검색과 시청 가능"
-        ),
-    )
-    youtube_privacy_status = {
-        "🔒 비공개": "private",
-        "🔗 일부 공개": "unlisted",
-        "🌍 공개": "public",
-    }[youtube_privacy_label]
-
-    st.caption(
-        "이번 원클릭 실행의 YouTube 공개 설정: "
-        f"{youtube_privacy_label}"
-    )
-
-    st.divider()
-    st.subheader("공통 리뷰 · 댓글 직접 입력")
-    st.caption(
-        "여기에 붙여넣은 리뷰는 새 프로젝트 생성과 기존 프로젝트 원클릭 실행에 "
-        "같이 사용됩니다. 내용이 있으면 리뷰 이미지 OCR을 건너뜁니다."
-    )
-    common_review_text = st.text_area(
-        "리뷰 또는 댓글 붙여넣기",
-        height=260,
-        placeholder=(
-            "쿠팡 리뷰, 유튜브·틱톡·인스타 댓글을 그대로 붙여넣으세요.\n"
-            "리뷰 사이에는 빈 줄을 넣어주세요."
-        ),
-        key="sprint115_common_review_text",
-    )
-    if not common_review_text:
-        common_review_text = str(
-            st.session_state.get(
-                "sprint115_common_review_text",
-                "",
-            )
+    final_video = outputs.get("final_video")
+    if isinstance(final_video, dict):
+        candidates.extend(
+            [
+                final_video.get("output_path"),
+                final_video.get("video_path"),
+                final_video.get("path"),
+            ]
         )
+    else:
+        candidates.append(final_video)
 
-    from pathlib import Path
-    import json
-
-    Path("utf8_text_area_debug.json").write_text(
-        json.dumps(
-            {
-                "text": common_review_text,
-                "repr": repr(common_review_text),
-                "codepoints": [
-                    f"U+{ord(char):04X}"
-                    for char in common_review_text
-                ],
-            },
-            ensure_ascii=False,
-            indent=2,
-        ),
-        encoding="utf-8",
-    )
-
-    print(
-        "[UTF8 TRACE text_area type]",
-        type(common_review_text).__name__,
-        flush=True,
-    )
-
-    print(
-        "[UTF8 TRACE text_area repr]",
-        repr(common_review_text),
-        flush=True,
-    )
-
-    print(
-        "[UTF8 TRACE session_state repr]",
-        repr(st.session_state.get("sprint115_common_review_text")),
-        flush=True,
-    )
-
-    common_review_text = str(common_review_text or "")
-
-    print(
-        "[UTF8 TRACE common_review_text UI RAW]",
-        repr(common_review_text),
-        flush=True,
-    )
-
-    st.caption(f"현재 입력 글자 수: {len(common_review_text.strip())}")
-    if common_review_text.strip():
-        st.success(
-            f"공통 직접 입력 리뷰가 준비되었습니다. "
-            f"({len(common_review_text.strip())}자)"
-        )
-
-    st.divider()
-    st.subheader("수동 자료로 새 프로젝트 생성")
-
-    coupang_url = st.text_area(
-        "쿠팡 링크 (선택)",
-        height=80,
-        placeholder="링크 없이도 생성할 수 있습니다.",
-    )
-
-    product_name = st.text_area(
-        "상품명",
-        height=100,
-        placeholder="쿠팡 상품명을 붙여넣어 주세요.",
-    )
-
-    print(
-        "[UTF8 TEXT_AREA RAW]",
-        product_name,
-        flush=True,
-    )
-    print(
-        "[UTF8 TEXT_AREA REPR]",
-        repr(product_name),
-        flush=True,
-    )
-    print(
-        "[UTF8 TEXT_AREA UNICODE ESCAPE]",
-        product_name.encode("unicode_escape").decode("ascii"),
-        flush=True,
-    )
-    print(
-        "[UTF8 TEXT_AREA UTF8 HEX]",
-        product_name.encode("utf-8").hex(),
-        flush=True,
-    )
-
-    new_project_product_images = st.file_uploader(
-        "새 프로젝트 상품 이미지 · 상세페이지 캡처",
-        type=["png", "jpg", "jpeg", "webp"],
-        accept_multiple_files=True,
-        key="new_project_product_images",
-        help=(
-            "첫 번째 이미지는 대표 이미지, 나머지는 상세 이미지로 저장됩니다."
-        ),
-    )
-
-    if new_project_product_images:
-        st.success(
-            f"상품 이미지 {len(new_project_product_images)}장이 선택되었습니다."
-        )
-
-    new_project_review_images = st.file_uploader(
-        "새 프로젝트 리뷰 이미지",
-        type=["png", "jpg", "jpeg", "webp", "bmp"],
-        accept_multiple_files=True,
-        key="new_project_review_images",
-        help=(
-            "프로젝트 생성 후 "
-            "assets/review_images/project_{프로젝트ID}에 저장됩니다."
-        ),
-    )
-
-    if new_project_review_images:
-        st.success(
-            f"리뷰 이미지 {len(new_project_review_images)}장이 "
-            "선택되었습니다."
-        )
-
-    auto_run = st.checkbox(
-        "프로젝트 생성 후 바로 원클릭 실행",
-        value=False,
-    )
-
-    if st.button(
-        "수동 자료로 프로젝트 생성",
-        type="primary",
-        use_container_width=True,
+    for key in (
+        "final_video_path",
+        "produced_final_path",
+        "active_video_path",
+        "ai_video_path",
+        "image_motion_video_path",
+        "merged_video_path",
     ):
-        print(
-            "[UTF8 UI INPUT ON CREATE]",
-            json.dumps(
-                {
-                    "product_name": product_name,
-                    "coupang_url": coupang_url,
-                },
-                ensure_ascii=False,
-                default=str,
-            ),
-            flush=True,
-        )
+        candidates.append(outputs.get(key))
 
-        if not product_name.strip():
-            st.error("상품명을 입력해 주세요.")
-            return
+    content_factory = outputs.get("content_factory")
+    if isinstance(content_factory, dict):
+        for key in (
+            "final_video_path",
+            "video_path",
+            "active_video_path",
+            "output_path",
+        ):
+            candidates.append(content_factory.get(key))
 
-        with st.spinner("프로젝트와 검색 키워드를 생성 중입니다..."):
+    for raw_path in candidates:
+        path_text = str(raw_path or "").strip()
+        if not path_text:
+            continue
+        path = Path(path_text)
+        if path.is_file() and path.suffix.lower() == ".mp4":
+            return str(path)
+
+    return ""
+
+
+def _extract_image_review_scenes(result):
+    outputs = result.get("outputs", {}) if isinstance(result, dict) else {}
+    review = outputs.get("image_review", {})
+    if not isinstance(review, dict):
+        return []
+    return [dict(item) for item in list(review.get("scenes") or []) if isinstance(item, dict)]
+
+
+def _generate_single_scene_image(scene, output_path):
+    """Sprint147-1: 선택한 장면 한 장만 Gemini 이미지 API로 다시 생성합니다."""
+    generator_class = None
+    import_errors = []
+    for module_name, class_name in (
+        ("modules.image_ai.gemini_image_generator", "GeminiImageGenerator"),
+        ("modules.image_ai.ai_image_generator", "AIImageGenerator"),
+    ):
+        try:
+            module = __import__(module_name, fromlist=[class_name])
+            generator_class = getattr(module, class_name, None)
+            if generator_class is not None:
+                break
+        except Exception as exc:
+            import_errors.append(f"{module_name}: {type(exc).__name__}: {exc}")
+    if generator_class is None:
+        raise RuntimeError("이미지 생성기 import 실패: " + " | ".join(import_errors))
+
+    engine = generator_class()
+    payload = {
+        "scene_id": str(scene.get("scene_id") or "scene"),
+        "attempt": int(scene.get("attempt_count") or 1) + 1,
+        "prompt": str(scene.get("prompt") or ""),
+        "image_prompt": str(scene.get("prompt") or ""),
+        "negative_prompt": str(scene.get("negative_prompt") or ""),
+        "reference_image_path": str(scene.get("reference_image_path") or ""),
+        "output_image_path": str(output_path),
+        "output_path": str(output_path),
+        "overwrite": True,
+    }
+    last_type_error = None
+    for method_name in ("generate_image", "generate", "run", "create"):
+        method = getattr(engine, method_name, None)
+        if not callable(method):
+            continue
+        for call in (lambda: method(**payload), lambda: method(payload)):
             try:
-                if coupang_url.strip():
-                    project, product_payload, keywords = (
-                        rebuild_project_from_coupang(
-                            coupang_url.strip(),
-                            product_name.strip(),
-                        )
+                raw = call()
+                candidate = ""
+                if isinstance(raw, dict):
+                    candidate = str(
+                        raw.get("output_image_path")
+                        or raw.get("output_path")
+                        or raw.get("image_path")
+                        or raw.get("path")
+                        or ""
                     )
-                else:
-                    product_payload = {
-                        "coupang_url": "",
-                        "product_name": product_name.strip(),
-                        "title": product_name.strip(),
-                        "source": "manual_upload",
-                    }
-                    keywords = build_keywords(
-                        product_payload,
-                        product_name.strip(),
-                    )
-                    print(
-                        "[UTF8 PAYLOAD BEFORE SAVE]",
-                        json.dumps(
-                            {
-                                "product_payload": product_payload,
-                                "keywords": keywords,
-                            },
-                            ensure_ascii=False,
-                            default=str,
-                        ),
-                        flush=True,
-                    )
-                    project = create_project_from_payload(
-                        product_payload,
-                        keywords,
-                    )
-                    project_id = getattr(project, "id", None)
-                    if project_id:
-                        project = ProjectRepository().get(project_id) or project
-            except Exception as exc:
-                st.error(f"프로젝트 생성 실패: {exc}")
-                return
+                elif isinstance(raw, (str, Path)):
+                    candidate = str(raw)
+                if candidate and Path(candidate).is_file():
+                    return candidate
+                if Path(output_path).is_file():
+                    return str(output_path)
+            except TypeError as exc:
+                last_type_error = exc
+                continue
+    if last_type_error:
+        raise last_type_error
+    raise RuntimeError("이미지 생성 결과 파일을 확인하지 못했습니다.")
 
-        print(
-            "[UTF8 PROJECT AFTER SAVE]",
-            json.dumps(
-                {
-                    "id": getattr(project, "id", None),
-                    "product_name": getattr(project, "product_name", ""),
-                    "title": getattr(project, "title", ""),
-                    "data_json": getattr(project, "data_json", ""),
-                },
-                ensure_ascii=False,
-                default=str,
-            ),
-            flush=True,
-        )
 
-        try:
-            product_image_paths = save_uploaded_product_images(
-                project,
-                new_project_product_images,
-            )
-            product_image_path = (
-                product_image_paths[0] if product_image_paths else ""
-            )
-        except Exception as exc:
-            st.error(f"상품 대표 이미지 저장 실패: {exc}")
-            return
+def _save_review_uploaded_image(project_id, scene_id, uploaded_file):
+    suffix = Path(getattr(uploaded_file, "name", "") or "").suffix.lower()
+    if suffix not in SUPPORTED_PRODUCT_IMAGE_SUFFIXES:
+        suffix = ".png"
+    folder = PRODUCT_IMAGE_ROOT / f"project_{project_id}" / "approved_images"
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / f"{safe_file_name(scene_id, 'scene')}_user{suffix}"
+    path.write_bytes(uploaded_file.getbuffer())
+    return str(path)
 
-        try:
-            review_paths = save_uploaded_review_images(
-                project,
-                new_project_review_images,
-            )
-        except Exception as exc:
-            st.error(f"리뷰 이미지 저장 실패: {exc}")
-            return
 
-        st.session_state["sprint50_created_project_id"] = (
-            getattr(project, "id", None)
-        )
-        st.session_state["sprint50_product_payload"] = product_payload
-        st.session_state["sprint50_keywords"] = keywords
+def _render_ai_image_review(project, result):
+    project_id = str(safe_project_id(project))
+    scenes_key = f"sprint147_review_scenes_{project_id}"
+    approved_key = f"sprint147_approved_{project_id}"
+    result_key = f"one_click_result_{project_id}"
 
-        st.success("수동 자료 기반 프로젝트를 생성했습니다.")
+    if scenes_key not in st.session_state:
+        st.session_state[scenes_key] = _extract_image_review_scenes(result)
+    if approved_key not in st.session_state:
+        st.session_state[approved_key] = {}
 
-        if product_image_paths:
-            st.success(
-                f"상품 이미지 {len(product_image_paths)}장을 저장했습니다."
-            )
-            st.caption(str(product_image_dir(project)))
-
-        if review_paths:
-            st.success(
-                f"리뷰 이미지 {len(review_paths)}장을 저장했습니다."
-            )
-            st.caption(str(review_image_dir(project)))
-
-        show_search_links(keywords, key_prefix="created")
-
-        if auto_run:
-            with st.spinner(
-                "생성된 프로젝트로 원클릭 후보 수집을 실행 중입니다..."
-            ):
-                try:
-                    result = run_project_pipeline(
-                        project,
-                        sample_count,
-                        review_image_paths=review_paths,
-                        review_text=common_review_text,
-                        product_image_paths=product_image_paths,
-                        product_image_path=product_image_path,
-                        youtube_privacy_status=youtube_privacy_status,
-                    )
-                    st.success("원클릭 후보 수집까지 완료했습니다.")
-
-                    outputs = (
-                        result.get("outputs", {})
-                        if isinstance(result, dict)
-                        else {}
-                    )
-                    review_ocr = outputs.get("review_ocr", {})
-                    review_insight = outputs.get(
-                        "review_insight",
-                        {},
-                    )
-
-                    st.write(
-                        "OCR 리뷰 수:",
-                        review_ocr.get("review_count", 0),
-                    )
-                    st.write(
-                        "리뷰 분석 성공:",
-                        bool(review_insight.get("ok")),
-                    )
-                except Exception as exc:
-                    st.error(f"원클릭 실행 실패: {exc}")
-
-        if st.session_state.get("sprint50_keywords"):
-            with st.expander(
-                "최근 생성 키워드 보기",
-                expanded=False,
-            ):
-                show_search_links(
-                    st.session_state.get(
-                        "sprint50_keywords",
-                        {},
-                    ),
-                    key_prefix="recent",
-                )
-
-    st.divider()
-    st.subheader("기존 프로젝트 선택 실행")
-
-    selector = ProjectSelector()
-    projects = selector.all_projects()
-
-    if not projects:
-        st.info(
-            "아직 프로젝트가 없습니다. "
-            "위 쿠팡 링크 입력으로 새 프로젝트를 생성해 주세요."
-        )
+    scenes = list(st.session_state.get(scenes_key) or [])
+    approved = dict(st.session_state.get(approved_key) or {})
+    if not scenes:
+        outputs = result.get("outputs", {}) if isinstance(result, dict) else {}
+        review = outputs.get("image_review", {}) if isinstance(outputs, dict) else {}
+        st.error("생성된 장면 이미지가 없습니다.")
+        if isinstance(review, dict):
+            st.write("이미지 생성 상태:", review.get("status", ""))
+            st.write("Director 상태:", review.get("director_status", ""))
+            st.write("Closed Loop 상태:", review.get("closed_loop_status", ""))
+            errors = list(review.get("generation_errors") or [])
+            if errors:
+                st.error(" / ".join(str(item) for item in errors))
         return
 
-    labels = selector.labels(projects)
-
-    created_project_id = st.session_state.get(
-        "sprint50_created_project_id"
-    )
-    default_index = 0
-
-    if created_project_id:
-        for idx, item in enumerate(labels.values()):
-            if str(getattr(item, "id", "")) == str(
-                created_project_id
-            ):
-                default_index = idx
-                break
-
-    selected_label = st.selectbox(
-        "프로젝트 선택",
-        list(labels.keys()),
-        index=default_index,
-    )
-
-    project = labels[selected_label]
-    project = ProjectRepository().get(project.id) or project
-
-    render_project_pipeline(
-        project,
-        sample_count,
-        review_text=common_review_text,
-        youtube_privacy_status=youtube_privacy_status,
-    )
-
     st.divider()
-    st.subheader("작업 큐")
-    jobs = JobQueue().load()
+    st.header("장면별 AI 이미지 확인")
+    st.caption("마음에 드는 이미지는 승인하고, 마음에 들지 않는 장면만 다시 생성하세요.")
 
-    if not jobs:
-        st.caption("큐가 비어 있습니다.")
+    for index, scene in enumerate(scenes):
+        scene_id = str(scene.get("scene_id") or f"scene_{index + 1:02d}")
+        image_path = str(
+            scene.get("image_path")
+            or scene.get("selected_image_path")
+            or scene.get("approved_image_path")
+            or scene.get("generated_image_path")
+            or scene.get("final_image_path")
+            or scene.get("resolved_image_path")
+            or scene.get("output_image_path")
+            or ""
+        ).strip()
+        with st.container(border=True):
+            st.subheader(f"장면 {index + 1}")
+            subtitle = str(scene.get("subtitle_text") or "").strip()
+            if subtitle:
+                st.write(f"자막: {subtitle}")
+            if image_path and Path(image_path).is_file():
+                print(
+                    "[Sprint154-1 Image Path Fallback] Scene:",
+                    scene_id,
+                    "Path:",
+                    image_path,
+                    flush=True,
+                )
+                st.image(image_path, use_container_width=True)
+                st.caption(image_path)
+            else:
+                st.error("이미지 파일을 찾지 못했습니다.")
 
-    for job in jobs:
-        st.write(
-            f"• {job.get('job_id')} / "
-            f"{job.get('project_name')} / "
-            f"{job.get('status')}"
+            c1, c2 = st.columns(2)
+            if c1.button(
+                "승인 완료" if approved.get(scene_id) else "이 이미지 승인",
+                key=f"approve_{project_id}_{scene_id}",
+                use_container_width=True,
+                disabled=bool(approved.get(scene_id)),
+            ):
+                approved[scene_id] = image_path
+                st.session_state[approved_key] = approved
+                st.rerun()
+
+            if c2.button(
+                "다시 생성",
+                key=f"regen_{project_id}_{scene_id}",
+                use_container_width=True,
+            ):
+                output_dir = PRODUCT_IMAGE_ROOT / f"project_{project_id}" / "generated_regenerated"
+                output_dir.mkdir(parents=True, exist_ok=True)
+                attempt = int(scene.get("attempt_count") or 1) + 1
+                output_path = output_dir / f"{scene_id}_attempt_{attempt:02d}.png"
+                with st.spinner(f"장면 {index + 1} 이미지를 다시 생성 중입니다..."):
+                    try:
+                        new_path = _generate_single_scene_image(scene, output_path)
+                    except Exception as exc:
+                        st.error(f"재생성 실패: {type(exc).__name__}: {exc}")
+                    else:
+                        scene["image_path"] = new_path
+                        scene["selected_image_path"] = new_path
+                        scene["approved_image_path"] = new_path
+                        scene["generated_image_path"] = new_path
+                        scene["final_image_path"] = new_path
+                        scene["resolved_image_path"] = new_path
+                        scene["output_image_path"] = new_path
+                        scene["attempt_count"] = attempt
+                        scenes[index] = scene
+                        approved.pop(scene_id, None)
+                        st.session_state[scenes_key] = scenes
+                        st.session_state[approved_key] = approved
+                        print(
+                            "[Sprint147-3 Image Review] Regenerated:",
+                            scene_id,
+                            new_path,
+                            flush=True,
+                        )
+                        st.rerun()
+
+            replacement = st.file_uploader(
+                "내 이미지로 교체",
+                type=["png", "jpg", "jpeg", "webp"],
+                key=f"replace_{project_id}_{scene_id}",
+            )
+            if replacement is not None:
+                replacement_flag = f"replace_saved_{project_id}_{scene_id}_{replacement.name}_{replacement.size}"
+                if not st.session_state.get(replacement_flag):
+                    new_path = _save_review_uploaded_image(project_id, scene_id, replacement)
+                    scene["image_path"] = new_path
+                    scene["selected_image_path"] = new_path
+                    scene["approved_image_path"] = new_path
+                    scene["generated_image_path"] = new_path
+                    scene["final_image_path"] = new_path
+                    scene["resolved_image_path"] = new_path
+                    scene["output_image_path"] = new_path
+                    scenes[index] = scene
+                    approved.pop(scene_id, None)
+                    st.session_state[scenes_key] = scenes
+                    st.session_state[approved_key] = approved
+                    st.session_state[replacement_flag] = True
+                    st.rerun()
+
+    approved_count = sum(1 for scene in scenes if approved.get(str(scene.get("scene_id") or "")))
+    st.progress(approved_count / max(1, len(scenes)))
+    st.write(f"승인 완료: {approved_count} / {len(scenes)}")
+
+    if approved_count != len(scenes):
+        st.info("모든 장면을 승인하면 최종 영상 제작 버튼이 활성화됩니다.")
+        return
+
+    if st.button(
+        "승인 이미지로 최종 영상 제작",
+        type="primary",
+        use_container_width=True,
+        key=f"finalize_{project_id}",
+    ):
+        selected_paths = [approved[str(scene.get("scene_id") or "")] for scene in scenes]
+        payload = st.session_state.get(f"sprint147_input_{project_id}", {})
+        with st.spinner("승인된 이미지로 모션·자막·최종 영상을 제작 중입니다..."):
+            final_result = run_project_pipeline(
+                project=project,
+                sample_count=6,
+                review_text="",
+                locked_script=str(payload.get("locked_script") or ""),
+                review_image_paths=[],
+                product_image_paths=selected_paths,
+                product_image_path=selected_paths[0],
+                youtube_privacy_status="private",
+                viral_video_sources=[],
+                declared_review_count=int(payload.get("declared_review_count") or 1),
+                review_checked_at=str(payload.get("review_checked_at") or ""),
+                monthly_purchase_count=int(payload.get("monthly_purchase_count") or 1),
+                rating=float(payload.get("rating") or 0),
+                input_product_name=str(payload.get("product_name") or ""),
+                stop_after_image_generation=False,
+            )
+        st.session_state[result_key] = final_result
+        st.session_state[f"sprint147_stage_{project_id}"] = "completed"
+        st.rerun()
+
+
+def show_one_click_pipeline():
+    st.title("⚡ 원클릭 쇼츠 완성")
+    st.caption("확정 대본을 장면으로 나누고, 필요한 AI 이미지를 한 장씩 만든 뒤 승인된 이미지만 영상에 사용합니다.")
+    st.caption(f"UI 버전: {UI_VERSION}")
+
+    active_project_id = st.session_state.get("sprint147_active_project_id")
+    if active_project_id:
+        active_project = ProjectRepository().get(active_project_id)
+        project_key = str(safe_project_id(active_project)) if active_project else str(active_project_id)
+        result = (
+            st.session_state.get(f"one_click_result_{project_key}")
+            or st.session_state.get(f"one_click_result_{active_project_id}")
+            or {}
+        )
+        stage = (
+            st.session_state.get(f"sprint147_stage_{project_key}")
+            or st.session_state.get(f"sprint147_stage_{active_project_id}")
+            or ""
         )
 
-    st.subheader("최근 Pipeline 상태")
-    for file_path in PipelineState().list_recent(10):
-        st.write(f"• {file_path.name}")
+        if active_project and stage == "review":
+            review_scenes = _extract_image_review_scenes(result)
+            cached_scenes = st.session_state.get(
+                f"sprint147_review_scenes_{project_key}",
+                [],
+            )
+            if review_scenes or cached_scenes:
+                _render_ai_image_review(active_project, result)
+                if st.button("새 상품으로 처음부터 시작", use_container_width=True):
+                    for key in list(st.session_state.keys()):
+                        if (
+                            str(project_key) in str(key)
+                            or str(active_project_id) in str(key)
+                            or str(key).startswith("sprint147_active_project")
+                        ):
+                            st.session_state.pop(key, None)
+                    st.rerun()
+                return
+
+            # Sprint147-2: 장면 결과가 없는 오래된 review 상태는 자동 해제합니다.
+            print(
+                "[Sprint147-2 Input Recovery] Cleared stale review state:",
+                project_key,
+                flush=True,
+            )
+            for key in list(st.session_state.keys()):
+                if (
+                    str(project_key) in str(key)
+                    or str(active_project_id) in str(key)
+                    or str(key).startswith("sprint147_active_project")
+                ):
+                    st.session_state.pop(key, None)
+            active_project_id = None
+
+        elif active_project and stage == "completed":
+            final_path = _resolve_final_video_path(result)
+            if final_path:
+                st.success("쇼츠 전체 제작이 완료됐습니다.")
+                st.video(final_path)
+                st.caption(f"최종 영상: {final_path}")
+            else:
+                st.warning("최종 MP4를 확인하지 못했습니다.")
+                st.json(result)
+            if st.button("새 상품 제작", type="primary", use_container_width=True):
+                for key in list(st.session_state.keys()):
+                    if (
+                        str(project_key) in str(key)
+                        or str(active_project_id) in str(key)
+                        or str(key).startswith("sprint147_active_project")
+                    ):
+                        st.session_state.pop(key, None)
+                st.rerun()
+            return
+
+    product_name = st.text_input("상품명", placeholder="상품명을 입력하세요.", key="sprint147_product_name")
+    c1, c2 = st.columns(2)
+    with c1:
+        monthly_purchase_count = st.number_input("최근 한 달 구매 수", min_value=1, value=1, step=1, key="sprint147_monthly_purchase_count")
+        rating = st.number_input("평점", min_value=0.0, max_value=5.0, value=0.0, step=0.1, format="%.1f", key="sprint147_rating")
+    with c2:
+        declared_review_count = st.number_input("리뷰 개수", min_value=1, value=1, step=1, key="sprint147_declared_review_count")
+        review_checked_at = st.date_input("리뷰 확인일", key="sprint147_review_checked_at")
+
+    locked_script = st.text_area("대본", height=360, placeholder="최종 확정된 쇼츠 대본을 붙여넣으세요.", key="sprint147_locked_script")
+    uploaded_product_images = st.file_uploader(
+        "실제 상품 이미지 (선택)",
+        type=["png", "jpg", "jpeg", "webp"],
+        accept_multiple_files=True,
+        key="sprint147_product_images",
+    )
+    st.caption("실제 상품 이미지는 상품 형태를 유지하는 참고 자료로 사용합니다. 없는 장면은 AI가 생성합니다.")
+
+    if not st.button("대본 기준 이미지 만들기", type="primary", use_container_width=True, key="sprint147_generate_images"):
+        return
+
+    print(
+        "[Sprint147-5 BUTTON CLICKED] 대본 기준 이미지 만들기",
+        flush=True,
+    )
+
+    errors = []
+    if not str(product_name or "").strip(): errors.append("상품명을 입력해 주세요.")
+    if not str(locked_script or "").strip(): errors.append("최종 확정 대본을 입력해 주세요.")
+    if errors:
+        for error in errors: st.error(error)
+        return
+
+    payload = {
+        "coupang_url": "",
+        "product_name": product_name.strip(),
+        "title": product_name.strip(),
+        "source": "one_click_ai_image_review_147_3",
+        "monthly_purchase_count": int(monthly_purchase_count),
+        "declared_review_count": int(declared_review_count),
+        "rating": float(rating),
+        "review_checked_at": review_checked_at.isoformat(),
+        "locked_script": locked_script.strip(),
+        "viral_video_sources": [],
+    }
+    try:
+        keywords = build_keywords(payload, product_name.strip())
+        project = create_project_from_payload(payload, keywords)
+        project_id = getattr(project, "id", None)
+        if project_id:
+            project = ProjectRepository().get(project_id) or project
+    except Exception as exc:
+        st.error(f"프로젝트 생성 실패: {exc}")
+        return
+
+    try:
+        product_image_paths = save_uploaded_product_images(project, uploaded_product_images)
+    except Exception as exc:
+        st.error(f"상품 이미지 저장 실패: {exc}")
+        return
+
+    with st.spinner("대본을 분석하고 장면별 이미지를 한 장씩 생성 중입니다..."):
+        try:
+            result = run_project_pipeline(
+                project=project,
+                sample_count=6,
+                review_text="",
+                locked_script=locked_script.strip(),
+                review_image_paths=[],
+                product_image_paths=product_image_paths,
+                product_image_path=product_image_paths[0] if product_image_paths else "",
+                youtube_privacy_status="private",
+                viral_video_sources=[],
+                declared_review_count=int(declared_review_count),
+                review_checked_at=review_checked_at.isoformat(),
+                monthly_purchase_count=int(monthly_purchase_count),
+                rating=float(rating),
+                input_product_name=product_name.strip(),
+                stop_after_image_generation=True,
+            )
+        except Exception as exc:
+            safe_traceback = traceback.format_exc()
+            Path("full_error.log").write_text(safe_traceback, encoding="utf-8")
+            st.error(f"이미지 생성 단계 실패: {type(exc).__name__}: {exc}")
+            return
+
+    project_id = str(safe_project_id(project))
+    st.session_state["sprint147_active_project_id"] = getattr(project, "id", project_id)
+    st.session_state[f"sprint147_input_{project_id}"] = payload
+    st.session_state[f"one_click_result_{project_id}"] = result
+    st.session_state[f"sprint147_stage_{project_id}"] = "review"
+    st.session_state.pop(f"sprint147_review_scenes_{project_id}", None)
+    st.session_state.pop(f"sprint147_approved_{project_id}", None)
+    st.rerun()
 
 
-from app.pages.pipeline_page import show_pipeline_page
-
-
-if __name__ == "__main__":
-    show_pipeline_page()
+render = show_one_click_pipeline
