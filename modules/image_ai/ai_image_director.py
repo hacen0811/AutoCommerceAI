@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping
 
@@ -26,8 +27,8 @@ class AIImageDirector:
             └─ ai_image_required      → 이미지 생성 프롬프트 + 모션 추천
     """
 
-    VERSION = "ai-image-director-154-2-recovery-review"
-    RESULT_FILENAME = "ai_image_director_154_2.json"
+    VERSION = "ai-image-director-157-cost-guard-resume"
+    RESULT_FILENAME = "ai_image_director_157.json"
 
     HUMAN_POLICY = {
         "hook": {
@@ -163,7 +164,7 @@ class AIImageDirector:
 
 
     FIDELITY_THRESHOLD = 90.0
-    MAX_GENERATION_ATTEMPTS = 3
+    MAX_GENERATION_ATTEMPTS = 2
 
     FIDELITY_WEIGHTS = {
         "shape_match": 24.0,
@@ -2137,17 +2138,21 @@ class AIImageDirector:
         result["closed_loop_supported"] = True
         result["closed_loop_executed"] = True
         result["generation_runs"] = []
+        result["cost_guard"] = {
+            "enabled": True,
+            "max_attempts_per_scene": 2,
+            "api_calls": 0,
+            "reused_scenes": 0,
+            "generated_scenes": 0,
+            "skipped_scenes": 0,
+            "fatal_stop": False,
+            "fatal_error_code": "",
+            "fatal_scene_id": "",
+        }
         result["errors"] = list(result.get("errors") or [])
         result["warnings"] = list(result.get("warnings") or [])
 
-        resolved_attempts = int(
-            max(1, min(
-                10,
-                max_attempts
-                if max_attempts is not None
-                else self.MAX_GENERATION_ATTEMPTS,
-            ))
-        )
+        resolved_attempts = min(2, max(1, int(max_attempts if max_attempts is not None else self.MAX_GENERATION_ATTEMPTS)))
         resolved_threshold = float(
             threshold
             if threshold is not None
@@ -2213,6 +2218,10 @@ class AIImageDirector:
                 "attempts": [],
                 "selected_attempt": 0,
                 "selected_image_path": "",
+                "review_image_path": "",
+                "best_failed_image_path": "",
+                "best_passed_image_path": "",
+                "attempt_paths": [],
                 "best_score": 0.0,
                 "passed": False,
                 "status": "not_started",
@@ -2221,6 +2230,36 @@ class AIImageDirector:
 
             current_prompt = base_prompt
             best_attempt: Dict[str, Any] | None = None
+
+            cached_path, cached_state = self._find_cached_scene_image(
+                output_dir=output_dir,
+                scene_id=scene_id,
+            )
+            if cached_path:
+                scene_run["selected_attempt"] = 0
+                scene_run["selected_image_path"] = cached_path
+                scene_run["review_image_path"] = cached_path
+                scene_run["passed"] = cached_state == "best_passed"
+                scene_run["manual_approval_required"] = not scene_run["passed"]
+                scene_run["status"] = "reused_cached_scene"
+                scene_run["best_score"] = 100.0 if scene_run["passed"] else 0.0
+                if scene_run["passed"]:
+                    scene_run["best_passed_image_path"] = cached_path
+                    passed_count += 1
+                else:
+                    scene_run["best_failed_image_path"] = cached_path
+                    failed_count += 1
+                result["cost_guard"]["reused_scenes"] += 1
+                scene_run_map[scene_id] = scene_run
+                result["generation_runs"].append(scene_run)
+                print(
+                    "[Sprint157 Resume] Reused:",
+                    scene_id,
+                    cached_state,
+                    cached_path,
+                    flush=True,
+                )
+                continue
 
             for attempt in range(1, resolved_attempts + 1):
                 attempt_output_path = self._build_attempt_output_path(
@@ -2255,6 +2294,16 @@ class AIImageDirector:
                 }
 
                 try:
+                    result["cost_guard"]["api_calls"] += 1
+                    print(
+                        "[Sprint157 Cost] API Call:",
+                        result["cost_guard"]["api_calls"],
+                        "Scene:",
+                        scene_id,
+                        "Attempt:",
+                        attempt,
+                        flush=True,
+                    )
                     raw_generation = image_generator(generation_payload)
                     generation = self._normalize_generation_result(
                         raw_generation=raw_generation,
@@ -2262,20 +2311,55 @@ class AIImageDirector:
                     )
                     attempt_result["generation_result"] = generation
                     attempt_result["generation_ok"] = bool(generation["ok"])
-                    attempt_result["generated_image_path"] = generation["image_path"]
+                    attempt_result["original_generated_image_path"] = generation["image_path"]
+                    attempt_result["preserved_review_image_path"] = self._first_text(
+                        generation.get("preserved_review_image_path")
+                    )
+                    attempt_result["generated_image_path"] = self._first_text(
+                        generation.get("preserved_review_image_path"),
+                        generation["image_path"],
+                    )
 
-                    if not generation["ok"] or not generation["image_path"]:
+                    if attempt_result["generated_image_path"]:
+                        scene_run["attempt_paths"].append(
+                            attempt_result["generated_image_path"]
+                        )
+
+                    if not generation["ok"] or not attempt_result["generated_image_path"]:
                         attempt_result["error"] = self._first_text(
                             generation.get("error"),
                             "이미지 생성 결과 경로가 없습니다",
                         )
+                        attempt_result["fatal_error"] = bool(
+                            generation.get("fatal_error")
+                        )
+                        attempt_result["fatal_error_code"] = self._first_text(
+                            generation.get("fatal_error_code")
+                        )
                         scene_run["attempts"].append(attempt_result)
+
+                        if attempt_result["fatal_error"]:
+                            result["cost_guard"]["fatal_stop"] = True
+                            result["cost_guard"]["fatal_error_code"] = (
+                                attempt_result["fatal_error_code"]
+                            )
+                            result["cost_guard"]["fatal_scene_id"] = scene_id
+                            scene_run["status"] = "fatal_provider_error"
+                            scene_run["errors"].append(attempt_result["error"])
+                            print(
+                                "[Sprint157 Cost Guard] STOP ALL SCENES:",
+                                attempt_result["fatal_error_code"],
+                                "Scene:",
+                                scene_id,
+                                flush=True,
+                            )
+                            break
                         continue
 
                     validation_payload = {
                         "scene_id": scene_id,
                         "attempt": attempt,
-                        "generated_image_path": generation["image_path"],
+                        "generated_image_path": attempt_result["generated_image_path"],
                         "reference_image_path": reference_image_path,
                         "reference_image_paths": reference_image_paths,
                         "prompt": current_prompt,
@@ -2290,7 +2374,7 @@ class AIImageDirector:
                     )
                     fidelity = self.evaluate_generated_image(
                         scene_id=scene_id,
-                        generated_image_path=generation["image_path"],
+                        generated_image_path=attempt_result["generated_image_path"],
                         vision_result=vision_result,
                         threshold=resolved_threshold,
                     )
@@ -2341,16 +2425,38 @@ class AIImageDirector:
                     best_attempt.get("score") or 0.0
                 )
                 scene_run["passed"] = bool(best_attempt.get("passed"))
+
+                best_source_path = self._first_text(
+                    best_attempt.get("generated_image_path"),
+                    best_attempt.get("preserved_review_image_path"),
+                    best_attempt.get("original_generated_image_path"),
+                )
+                best_review_path = self._preserve_best_review_image(
+                    source_path=best_source_path,
+                    output_dir=output_dir,
+                    scene_id=scene_id,
+                    passed=scene_run["passed"],
+                )
+
                 scene_run["selected_image_path"] = self._first_text(
-                    best_attempt.get("generated_image_path")
+                    best_review_path,
+                    best_source_path,
                 )
                 scene_run["review_image_path"] = scene_run["selected_image_path"]
                 scene_run["manual_approval_required"] = not scene_run["passed"]
-                scene_run["status"] = (
-                    "passed"
-                    if scene_run["passed"]
-                    else "best_attempt_ready_for_manual_review"
-                )
+
+                if scene_run["passed"]:
+                    scene_run["best_passed_image_path"] = (
+                        scene_run["selected_image_path"]
+                    )
+                    scene_run["status"] = "passed"
+                else:
+                    scene_run["best_failed_image_path"] = (
+                        scene_run["selected_image_path"]
+                    )
+                    scene_run["status"] = (
+                        "best_attempt_preserved_for_manual_review"
+                    )
             else:
                 scene_run["status"] = "generation_failed"
 
@@ -2361,6 +2467,17 @@ class AIImageDirector:
 
             scene_run_map[scene_id] = scene_run
             result["generation_runs"].append(scene_run)
+
+            if result["cost_guard"]["fatal_stop"]:
+                remaining = max(
+                    0,
+                    len(prompts) - len(result["generation_runs"]),
+                )
+                result["cost_guard"]["skipped_scenes"] += remaining
+                result["warnings"].append(
+                    "치명적 공급자 오류로 남은 장면 생성을 즉시 중단했습니다."
+                )
+                break
 
         self._apply_closed_loop_selection(
             result=result,
@@ -2388,6 +2505,74 @@ class AIImageDirector:
             output_dir=output_dir,
             save_result=save_result,
         )
+
+    def _find_cached_scene_image(
+        self,
+        output_dir: str,
+        scene_id: str,
+    ) -> tuple[str, str]:
+        review_dir = Path(str(output_dir or ".")) / "generated_review"
+        if not review_dir.is_dir():
+            return "", ""
+
+        safe_scene_id = "".join(
+            char if char.isalnum() or char in {"_", "-"} else "_"
+            for char in str(scene_id or "scene")
+        )
+        for state in ("best_passed", "best_failed"):
+            for suffix in (".png", ".jpg", ".jpeg", ".webp"):
+                candidate = review_dir / f"{safe_scene_id}_{state}{suffix}"
+                if candidate.is_file() and candidate.stat().st_size > 0:
+                    return str(candidate), state
+        return "", ""
+
+    def _preserve_best_review_image(
+        self,
+        source_path: str,
+        output_dir: str,
+        scene_id: str,
+        passed: bool,
+    ) -> str:
+        """
+        장면별 최고 이미지를 best_passed 또는 best_failed 이름으로 보존합니다.
+        """
+        source = Path(str(source_path or "")).expanduser()
+        if not source.is_file():
+            return ""
+
+        try:
+            project_dir = Path(str(output_dir or source.parent)).expanduser()
+            review_dir = project_dir / "generated_review"
+            review_dir.mkdir(parents=True, exist_ok=True)
+
+            suffix = source.suffix.lower() or ".png"
+            safe_scene_id = "".join(
+                char if char.isalnum() or char in {"_", "-"} else "_"
+                for char in str(scene_id or "scene")
+            )
+            state = "best_passed" if passed else "best_failed"
+            destination = review_dir / f"{safe_scene_id}_{state}{suffix}"
+
+            shutil.copy2(source, destination)
+            if destination.is_file() and destination.stat().st_size > 0:
+                print(
+                    "[Sprint156 Preserve Best] Scene:",
+                    scene_id,
+                    "Passed:",
+                    passed,
+                    "Path:",
+                    destination,
+                    flush=True,
+                )
+                return str(destination)
+        except Exception as exc:
+            print(
+                "[Sprint156 Preserve Best] ERROR:",
+                scene_id,
+                f"{type(exc).__name__}: {exc}",
+                flush=True,
+            )
+        return ""
 
     def _normalize_generation_result(
         self,
@@ -2427,6 +2612,16 @@ class AIImageDirector:
                 "error": self._first_text(
                     raw.get("error"),
                     raw.get("message") if not ok else "",
+                ),
+                "fatal_error": bool(raw.get("fatal_error")),
+                "fatal_error_code": self._first_text(
+                    raw.get("fatal_error_code")
+                ),
+                "cost_guard_triggered": bool(
+                    raw.get("cost_guard_triggered")
+                ),
+                "preserved_review_image_path": self._first_text(
+                    raw.get("preserved_review_image_path")
                 ),
                 "raw": raw,
             }

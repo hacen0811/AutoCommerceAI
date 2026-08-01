@@ -57,7 +57,7 @@ except Exception:
     SearchKeywordEngine = None
 
 
-UI_VERSION = "sprint155-project-review-mode"
+UI_VERSION = "sprint157-cost-guard-ui"
 RESULT_DIR = Path("exports/one_click_results")
 REVIEW_IMAGE_ROOT = Path("assets/review_images")
 PRODUCT_IMAGE_ROOT = Path("assets/products")
@@ -74,7 +74,7 @@ SUPPORTED_REVIEW_IMAGE_SUFFIXES = {
 
 
 print(
-    "######## ONE_CLICK_PIPELINE SPRINT155 PROJECT REVIEW MODE LOADED ########",
+    "######## ONE_CLICK_PIPELINE SPRINT157 COST GUARD UI LOADED ########",
     __file__,
     flush=True,
 )

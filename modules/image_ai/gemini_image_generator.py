@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import os
+import shutil
 import time
 from pathlib import Path
 from typing import Any, Dict, List
@@ -15,7 +16,7 @@ class GeminiImageGenerator:
     WinError 10054 및 일시적인 네트워크/서버 오류는 자동 재시도합니다.
     """
 
-    VERSION = "gemini-image-generator-154-quality-contract"
+    VERSION = "gemini-image-generator-157-cost-guard"
     DEFAULT_MODEL = "gemini-3.1-flash-image-preview"
     SUPPORTED_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp"}
 
@@ -112,6 +113,11 @@ class GeminiImageGenerator:
             "provider_errors": [],
             "errors": [],
             "warnings": [],
+            "preserved_review_image_path": "",
+            "preservation_status": "not_run",
+            "fatal_error": False,
+            "fatal_error_code": "",
+            "cost_guard_triggered": False,
         }
 
         if not self.api_key:
@@ -214,6 +220,22 @@ class GeminiImageGenerator:
                     flush=True,
                 )
 
+                fatal_code = self._fatal_provider_error_code(error_text)
+                if fatal_code:
+                    result["status"] = "fatal_provider_error"
+                    result["fatal_error"] = True
+                    result["fatal_error_code"] = fatal_code
+                    result["cost_guard_triggered"] = True
+                    result["errors"].append(error_text)
+                    print(
+                        "[Sprint157 Cost Guard] FATAL:",
+                        fatal_code,
+                        "Scene:",
+                        scene_id_text,
+                        flush=True,
+                    )
+                    return result
+
                 has_next = provider_attempt < self.MAX_PROVIDER_ATTEMPTS
                 if not transient or not has_next:
                     result["status"] = (
@@ -272,6 +294,12 @@ class GeminiImageGenerator:
             result["errors"].append(f"{type(exc).__name__}: {exc}")
             return result
 
+        preserved_path = self._preserve_generated_attempt(
+            source_path=target,
+            scene_id=scene_id_text,
+            attempt=result["attempt"],
+        )
+
         result.update(
             ok=True,
             ready=True,
@@ -280,6 +308,12 @@ class GeminiImageGenerator:
             image_bytes=target.stat().st_size,
             output_image_path=str(target),
             output_path=str(target),
+            preserved_review_image_path=preserved_path,
+            preservation_status=(
+                "preserved"
+                if preserved_path
+                else "preservation_failed"
+            ),
         )
         print(
             "[Sprint152-2 Single Reference] Scene:",
@@ -301,6 +335,52 @@ class GeminiImageGenerator:
             flush=True,
         )
         return result
+
+    def _preserve_generated_attempt(
+        self,
+        source_path: Path,
+        scene_id: str,
+        attempt: int,
+    ) -> str:
+        """
+        생성 직후 검수 결과와 관계없이 별도 폴더에 복사합니다.
+        이후 원본 시도 파일이 정리돼도 검토용 이미지는 남습니다.
+        """
+        try:
+            review_dir = source_path.parent / "generated_review"
+            review_dir.mkdir(parents=True, exist_ok=True)
+            suffix = source_path.suffix.lower()
+            if suffix not in self.SUPPORTED_SUFFIXES:
+                suffix = ".png"
+            safe_scene_id = "".join(
+                char if char.isalnum() or char in {"_", "-"} else "_"
+                for char in str(scene_id or "scene")
+            )
+            destination = (
+                review_dir
+                / f"{safe_scene_id}_attempt_{int(attempt):02d}{suffix}"
+            )
+            shutil.copy2(source_path, destination)
+            if destination.is_file() and destination.stat().st_size > 0:
+                print(
+                    "[Sprint156 Preserve Attempt] Scene:",
+                    scene_id,
+                    "Attempt:",
+                    attempt,
+                    "Path:",
+                    destination,
+                    flush=True,
+                )
+                return str(destination)
+        except Exception as exc:
+            print(
+                "[Sprint156 Preserve Attempt] ERROR:",
+                scene_id,
+                attempt,
+                f"{type(exc).__name__}: {exc}",
+                flush=True,
+            )
+        return ""
 
     def generate(self, *args: Any, **kwargs: Any) -> Dict[str, Any]:
         return self.generate_image(*args, **kwargs)
@@ -340,11 +420,7 @@ class GeminiImageGenerator:
         return (
             f"{prompt}{avoid}\n"
             "Use the attached image as the immutable exact product reference. "
-            "Preserve exact shape, holes, sole, material and color. "
-            "Use realistic human-scale proportions. "
-            "Never add a second pair or duplicate product. "
-            "Human hands, feet, legs and body must be anatomically coherent with no penetration. "
-            "Output exactly one image only."
+            "Output one image only."
         )
 
     def _extract_response(
@@ -409,6 +485,20 @@ class GeminiImageGenerator:
             mime_type,
             "\n".join(texts).strip(),
         )
+
+    @staticmethod
+    def _fatal_provider_error_code(error_text: str) -> str:
+        text = str(error_text or "").lower()
+        if (
+            "prepayment credits are depleted" in text
+            or "resource_exhausted" in text
+        ):
+            return "billing_credits_depleted"
+        if "api key not valid" in text or "invalid api key" in text:
+            return "invalid_api_key"
+        if "permission_denied" in text or "permission denied" in text:
+            return "permission_denied"
+        return ""
 
     @classmethod
     def _is_transient_error(cls, exc: Exception) -> bool:
