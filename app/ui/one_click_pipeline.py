@@ -57,7 +57,7 @@ except Exception:
     SearchKeywordEngine = None
 
 
-UI_VERSION = "sprint154-2-manual-review-recovery"
+UI_VERSION = "sprint155-project-review-mode"
 RESULT_DIR = Path("exports/one_click_results")
 REVIEW_IMAGE_ROOT = Path("assets/review_images")
 PRODUCT_IMAGE_ROOT = Path("assets/products")
@@ -74,7 +74,7 @@ SUPPORTED_REVIEW_IMAGE_SUFFIXES = {
 
 
 print(
-    "######## ONE_CLICK_PIPELINE SPRINT154-2 MANUAL REVIEW RECOVERY LOADED ########",
+    "######## ONE_CLICK_PIPELINE SPRINT155 PROJECT REVIEW MODE LOADED ########",
     __file__,
     flush=True,
 )
@@ -1308,6 +1308,410 @@ def _extract_image_review_scenes(result):
     return [dict(item) for item in list(review.get("scenes") or []) if isinstance(item, dict)]
 
 
+
+def _first_existing_image_path(*values):
+    for value in values:
+        path_text = str(value or "").strip()
+        if path_text and Path(path_text).is_file():
+            return path_text
+    return ""
+
+
+def _find_first_value(data, keys):
+    """중첩 dict/list에서 지정 키의 첫 유효 값을 찾습니다."""
+    if isinstance(data, dict):
+        for key in keys:
+            value = data.get(key)
+            if value not in (None, "", [], {}):
+                return value
+        for value in data.values():
+            found = _find_first_value(value, keys)
+            if found not in (None, "", [], {}):
+                return found
+    elif isinstance(data, list):
+        for item in data:
+            found = _find_first_value(item, keys)
+            if found not in (None, "", [], {}):
+                return found
+    return None
+
+
+def _director_json_candidates(project_id):
+    folder = PRODUCT_IMAGE_ROOT / f"project_{project_id}"
+    preferred = [
+        folder / "ai_image_director_154_2.json",
+        folder / "ai_image_director_154.json",
+        folder / "ai_image_director_150_4.json",
+        folder / "ai_image_manifest.json",
+        folder / "manifest.json",
+    ]
+    existing = [path for path in preferred if path.is_file()]
+
+    extras = sorted(
+        folder.glob("ai_image_director*.json"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    for path in extras:
+        if path not in existing:
+            existing.append(path)
+    return existing
+
+
+def _recover_review_scenes_from_project(project_id):
+    """
+    기존 Director JSON과 생성 시도 PNG에서 검토용 장면을 복원합니다.
+    새 Gemini 생성이나 Vision 호출은 하지 않습니다.
+    """
+    project_id = str(project_id).strip()
+    folder = PRODUCT_IMAGE_ROOT / f"project_{project_id}"
+    source_path = None
+    director_data = {}
+
+    for candidate in _director_json_candidates(project_id):
+        loaded = read_json(candidate, {})
+        if isinstance(loaded, dict) and loaded:
+            director_data = loaded
+            source_path = candidate
+            if isinstance(loaded.get("generation_runs"), list):
+                break
+
+    generation_runs = (
+        director_data.get("generation_runs")
+        if isinstance(director_data.get("generation_runs"), list)
+        else []
+    )
+
+    if not generation_runs:
+        nested = _find_first_value(director_data, ("generation_runs",))
+        if isinstance(nested, list):
+            generation_runs = nested
+
+    scenes = []
+    for index, raw_run in enumerate(generation_runs, start=1):
+        if not isinstance(raw_run, dict):
+            continue
+
+        scene_id = str(
+            raw_run.get("scene_id")
+            or f"scene_{index:02d}"
+        ).strip()
+        attempts = [
+            dict(item)
+            for item in list(raw_run.get("attempts") or [])
+            if isinstance(item, dict)
+        ]
+
+        best_attempt = None
+        for item in attempts:
+            candidate_path = _first_existing_image_path(
+                item.get("generated_image_path"),
+                item.get("image_path"),
+                item.get("output_image_path"),
+                item.get("output_path"),
+            )
+            if not candidate_path:
+                continue
+            candidate = dict(item)
+            candidate["_existing_path"] = candidate_path
+            score = float(
+                candidate.get("score")
+                or candidate.get("fidelity_score")
+                or candidate.get("product_identity_score")
+                or 0
+            )
+            candidate["_score"] = score
+            if best_attempt is None or score > best_attempt["_score"]:
+                best_attempt = candidate
+
+        selected_path = _first_existing_image_path(
+            raw_run.get("selected_image_path"),
+            raw_run.get("review_image_path"),
+            raw_run.get("generated_image_path"),
+            raw_run.get("resolved_image_path"),
+        )
+        if not selected_path and best_attempt:
+            selected_path = best_attempt["_existing_path"]
+
+        # JSON에 시도가 없더라도 프로젝트 폴더의 장면 PNG를 복원합니다.
+        if not selected_path:
+            scene_files = sorted(
+                folder.glob(f"{scene_id}_ai_attempt_*.png"),
+                key=lambda path: path.stat().st_mtime,
+            )
+            if scene_files:
+                selected_path = str(scene_files[-1])
+
+        source_scene = (
+            raw_run.get("source_scene")
+            if isinstance(raw_run.get("source_scene"), dict)
+            else {}
+        )
+        fidelity = (
+            best_attempt.get("fidelity")
+            if best_attempt and isinstance(best_attempt.get("fidelity"), dict)
+            else {}
+        )
+        issues = list(
+            raw_run.get("issues")
+            or fidelity.get("issues")
+            or (
+                best_attempt.get("issues")
+                if best_attempt else []
+            )
+            or []
+        )
+        score = float(
+            raw_run.get("best_score")
+            or fidelity.get("fidelity_score")
+            or (
+                best_attempt.get("_score")
+                if best_attempt else 0
+            )
+            or 0
+        )
+        passed = bool(
+            raw_run.get("passed")
+            or fidelity.get("passed")
+            or (
+                best_attempt.get("passed")
+                if best_attempt else False
+            )
+        )
+
+        scenes.append(
+            {
+                "scene_id": scene_id,
+                "scene_index": int(
+                    raw_run.get("scene_index")
+                    or source_scene.get("scene_index")
+                    or index
+                ),
+                "image_path": selected_path,
+                "selected_image_path": selected_path,
+                "review_image_path": selected_path,
+                "generated_image_path": selected_path,
+                "passed": passed,
+                "fidelity_passed": passed,
+                "best_score": score,
+                "fidelity_score": score,
+                "issues": issues,
+                "attempts": attempts,
+                "attempt_count": len(attempts),
+                "subtitle_text": str(
+                    raw_run.get("subtitle_text")
+                    or source_scene.get("subtitle_text")
+                    or source_scene.get("subtitle")
+                    or source_scene.get("dialogue")
+                    or ""
+                ).strip(),
+                "prompt": str(
+                    raw_run.get("prompt")
+                    or raw_run.get("image_prompt")
+                    or source_scene.get("image_prompt")
+                    or source_scene.get("prompt")
+                    or ""
+                ),
+                "negative_prompt": str(
+                    raw_run.get("negative_prompt")
+                    or source_scene.get("negative_prompt")
+                    or ""
+                ),
+                "reference_image_path": str(
+                    raw_run.get("reference_image_path")
+                    or source_scene.get("reference_image_path")
+                    or folder / "00_main.png"
+                ),
+                "recovered_from_project": True,
+            }
+        )
+
+    # generation_runs 구조를 못 찾으면 파일명으로 장면을 복원합니다.
+    if not scenes:
+        grouped = {}
+        for path in sorted(folder.glob("scene_*_ai_attempt_*.png")):
+            match = re.match(r"(scene_\d+)_ai_attempt_(\d+)\.png$", path.name)
+            if not match:
+                continue
+            grouped.setdefault(match.group(1), []).append(path)
+
+        for index, (scene_id, paths) in enumerate(sorted(grouped.items()), start=1):
+            selected_path = str(paths[-1])
+            scenes.append(
+                {
+                    "scene_id": scene_id,
+                    "scene_index": index,
+                    "image_path": selected_path,
+                    "selected_image_path": selected_path,
+                    "review_image_path": selected_path,
+                    "generated_image_path": selected_path,
+                    "passed": False,
+                    "fidelity_passed": False,
+                    "best_score": 0.0,
+                    "issues": ["기존 생성 이미지를 파일에서 복원했습니다."],
+                    "attempts": [
+                        {
+                            "attempt": attempt_index,
+                            "generated_image_path": str(path),
+                            "passed": False,
+                        }
+                        for attempt_index, path in enumerate(paths, start=1)
+                    ],
+                    "attempt_count": len(paths),
+                    "subtitle_text": "",
+                    "prompt": "",
+                    "negative_prompt": "",
+                    "reference_image_path": str(folder / "00_main.png"),
+                    "recovered_from_project": True,
+                }
+            )
+
+    return {
+        "ok": bool(scenes),
+        "project_id": project_id,
+        "source_path": str(source_path or ""),
+        "scenes": scenes,
+        "scene_count": len(scenes),
+    }
+
+
+def _recover_project_input_payload(project, project_id):
+    """최종 영상 제작에 필요한 기존 Locked Script와 신뢰 입력값을 복원합니다."""
+    latest_result = read_json(
+        RESULT_DIR / f"{project_id}_latest_result.json",
+        {},
+    )
+    try:
+        project_data = json.loads(getattr(project, "data_json", "") or "{}")
+    except Exception:
+        project_data = {}
+
+    sources = [latest_result, project_data]
+    locked_script = ""
+    for source in sources:
+        value = _find_first_value(
+            source,
+            (
+                "locked_script",
+                "approved_script_text",
+                "original_best_script",
+                "best_script",
+            ),
+        )
+        if value:
+            locked_script = str(value).strip()
+            break
+
+    def recover_number(keys, default):
+        for source in sources:
+            value = _find_first_value(source, keys)
+            if value not in (None, ""):
+                try:
+                    return type(default)(value)
+                except Exception:
+                    continue
+        return default
+
+    return {
+        "product_name": str(
+            getattr(project, "product_name", "")
+            or getattr(project, "title", "")
+            or ""
+        ),
+        "locked_script": locked_script,
+        "monthly_purchase_count": recover_number(
+            ("monthly_purchase_count",),
+            1,
+        ),
+        "declared_review_count": recover_number(
+            ("declared_review_count", "review_count"),
+            1,
+        ),
+        "rating": recover_number(("rating",), 0.0),
+        "review_checked_at": str(
+            _find_first_value(
+                latest_result,
+                ("review_checked_at",),
+            )
+            or _find_first_value(
+                project_data,
+                ("review_checked_at",),
+            )
+            or ""
+        ),
+    }
+
+
+def _open_existing_project_review(project_id):
+    project_id = str(project_id or "").strip()
+    if not project_id:
+        return {"ok": False, "message": "프로젝트 ID를 입력해 주세요."}
+
+    project = ProjectRepository().get(project_id)
+    if project is None:
+        try:
+            project = ProjectRepository().get(int(project_id))
+        except Exception:
+            project = None
+    if project is None:
+        return {
+            "ok": False,
+            "message": f"프로젝트 {project_id}를 DB에서 찾지 못했습니다.",
+        }
+
+    recovery = _recover_review_scenes_from_project(project_id)
+    if not recovery.get("ok"):
+        return {
+            "ok": False,
+            "message": (
+                f"project_{project_id}에서 생성 이미지를 복원하지 못했습니다."
+            ),
+        }
+
+    safe_id = str(safe_project_id(project))
+    result = {
+        "ok": True,
+        "status": "recovered_project_review",
+        "outputs": {
+            "image_review": {
+                "ok": True,
+                "status": "recovered",
+                "scenes": recovery["scenes"],
+                "source_path": recovery["source_path"],
+            }
+        },
+    }
+    st.session_state["sprint147_active_project_id"] = getattr(
+        project,
+        "id",
+        project_id,
+    )
+    st.session_state[f"one_click_result_{safe_id}"] = result
+    st.session_state[f"sprint147_review_scenes_{safe_id}"] = recovery["scenes"]
+    st.session_state[f"sprint147_approved_{safe_id}"] = {}
+    st.session_state[f"sprint147_input_{safe_id}"] = (
+        _recover_project_input_payload(project, safe_id)
+    )
+    st.session_state[f"sprint147_stage_{safe_id}"] = "review"
+
+    print(
+        "[Sprint155 Project Review] Opened:",
+        safe_id,
+        "Scenes:",
+        recovery["scene_count"],
+        "Source:",
+        recovery["source_path"],
+        flush=True,
+    )
+    return {
+        "ok": True,
+        "project": project,
+        "project_id": safe_id,
+        "scene_count": recovery["scene_count"],
+        "source_path": recovery["source_path"],
+    }
+
+
 def _generate_single_scene_image(scene, output_path):
     """Sprint147-1: 선택한 장면 한 장만 Gemini 이미지 API로 다시 생성합니다."""
     generator_class = None
@@ -1587,6 +1991,36 @@ def show_one_click_pipeline():
     st.title("⚡ 원클릭 쇼츠 완성")
     st.caption("확정 대본을 장면으로 나누고, 필요한 AI 이미지를 한 장씩 만든 뒤 승인된 이미지만 영상에 사용합니다.")
     st.caption(f"UI 버전: {UI_VERSION}")
+
+    with st.expander("📂 기존 프로젝트 다시 열기", expanded=True):
+        st.caption(
+            "이미 생성된 장면을 다시 생성하지 않고 검토·승인합니다."
+        )
+        review_project_id = st.text_input(
+            "프로젝트 ID",
+            value=str(
+                st.session_state.get(
+                    "sprint155_review_project_id",
+                    "348",
+                )
+            ),
+            key="sprint155_review_project_id",
+        )
+        if st.button(
+            "기존 이미지 검토 열기",
+            type="secondary",
+            use_container_width=True,
+            key="sprint155_open_review",
+        ):
+            opened = _open_existing_project_review(review_project_id)
+            if not opened.get("ok"):
+                st.error(opened.get("message", "프로젝트를 열지 못했습니다."))
+            else:
+                st.success(
+                    f"프로젝트 {opened['project_id']}의 기존 장면 "
+                    f"{opened['scene_count']}개를 복원했습니다."
+                )
+                st.rerun()
 
     active_project_id = st.session_state.get("sprint147_active_project_id")
     if active_project_id:
