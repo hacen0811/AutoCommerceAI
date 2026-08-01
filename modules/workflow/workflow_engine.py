@@ -3,6 +3,7 @@ from pathlib import Path
 import hashlib
 import json
 import mimetypes
+import os
 import re
 import sys
 import shutil
@@ -101,7 +102,7 @@ for _stream in (getattr(sys, "stdout", None), getattr(sys, "stderr", None)):
     except Exception:
         pass
 
-print("######## WORKFLOW_ENGINE SPRINT152-2 NETWORK RETRY SCENE ISOLATION LOADED ########", flush=True)
+print("######## WORKFLOW_ENGINE SPRINT154 INTEGRATED QUALITY GATE LOADED ########", flush=True)
 
 
 class WorkflowEngine:
@@ -126,8 +127,39 @@ class WorkflowEngine:
     → CapCutExport
     """
 
-    WORKFLOW_VERSION = "workflow-engine-152-2-network-retry-scene-isolation"
+    WORKFLOW_VERSION = "workflow-engine-154-integrated-quality-gate"
     
+
+    # Sprint153-2: 비용 없는 자막/음성/병합 재시험 모드입니다.
+    # PowerShell 예: $env:AUTOCOMMERCE_REUSE_IMAGE_MOTION_PROJECT_ID="344"
+    REUSE_IMAGE_MOTION_ENV = "AUTOCOMMERCE_REUSE_IMAGE_MOTION_PROJECT_ID"
+
+    @classmethod
+    def _resolve_reuse_image_motion_path(cls, project_id=""):
+        requested_id = str(os.getenv(cls.REUSE_IMAGE_MOTION_ENV, "") or "").strip()
+        if not requested_id:
+            return ""
+
+        # 숫자/문자 프로젝트 ID만 허용해 임의 경로 주입을 막습니다.
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", requested_id):
+            print(
+                "[Sprint153-2 Reuse ImageMotion] BLOCKED INVALID PROJECT ID:",
+                requested_id,
+                flush=True,
+            )
+            return ""
+
+        candidate = Path("exports") / "videos" / f"{requested_id}_image_motion.mp4"
+        if candidate.is_file() and candidate.stat().st_size > 1024:
+            print("[Sprint153-2 Reuse ImageMotion] ENABLED:", str(candidate), flush=True)
+            print("[Sprint153-2 Reuse ImageMotion] Current Project:", str(project_id or ""), flush=True)
+            print("[Sprint153-2 Reuse ImageMotion] Gemini Image: SKIPPED", flush=True)
+            print("[Sprint153-2 Reuse ImageMotion] Vision Closed Loop: SKIPPED", flush=True)
+            print("[Sprint153-2 Reuse ImageMotion] ImageMotion Render: SKIPPED", flush=True)
+            return str(candidate)
+
+        print("[Sprint153-2 Reuse ImageMotion] REQUESTED BUT MISSING:", str(candidate), flush=True)
+        return ""
 
     # Sprint102-3: 동일 프로젝트의 WorkflowEngine 중복 진입을 차단합니다.
     _RUN_GUARD = threading.RLock()
@@ -2779,6 +2811,13 @@ class WorkflowEngine:
             or "closed_loop_completed"
         )
 
+        required_scene_count = int(
+            (closed_loop_result or {}).get("closed_loop_scene_count") or 0
+        )
+        all_scenes_passed = bool(
+            (closed_loop_result or {}).get("closed_loop_all_passed")
+        )
+
         if selected_image_count <= 0:
             closed_loop_ok = False
             closed_loop_ready = False
@@ -2788,12 +2827,24 @@ class WorkflowEngine:
                 "Gemini 생성 이미지가 0장이므로 다음 영상 제작 단계 진입을 차단했습니다."
             )
             print(
-                "[Sprint152-2 Empty Generation Guard] Blocked: True",
+                "[Sprint154 Quality Gate] Blocked: no generated images",
+                flush=True,
+            )
+        elif required_scene_count > 0 and not all_scenes_passed:
+            closed_loop_ok = False
+            closed_loop_ready = False
+            resolved_status = "blocked_failed_scene_quality"
+            result["empty_generation_blocked"] = False
+            result["errors"].append(
+                "검수 실패 장면이 남아 있어 영상 제작 단계 진입을 차단했습니다."
+            )
+            print(
+                "[Sprint154 Quality Gate] Blocked: failed scenes remain",
                 flush=True,
             )
         else:
             print(
-                "[Sprint152-2 Empty Generation Guard] Blocked: False",
+                "[Sprint154 Quality Gate] Passed: all required scenes accepted",
                 flush=True,
             )
 
@@ -3934,7 +3985,15 @@ class WorkflowEngine:
         if str(product_image_path or "").strip() and str(product_image_path).strip() not in supplied_scene_images:
             supplied_scene_images.insert(0, str(product_image_path).strip())
 
-        if str(locked_script or "").strip() and not supplied_scene_images:
+        reuse_image_motion_path = self._resolve_reuse_image_motion_path(
+            getattr(project, "id", "")
+        )
+
+        if (
+            str(locked_script or "").strip()
+            and not supplied_scene_images
+            and not reuse_image_motion_path
+        ):
             print(
                 "[Sprint146-11 HARD BLOCK] LOCKED SCRIPT WITHOUT SCENE IMAGES - LEGACY FALLBACK NOT ALLOWED",
                 flush=True,
@@ -4040,6 +4099,9 @@ class WorkflowEngine:
         review_text = str(review_text or "").strip()
         locked_script = str(locked_script or "").strip()
         product_image_paths = product_image_paths or []
+        reuse_image_motion_path = self._resolve_reuse_image_motion_path(
+            getattr(project, "id", "")
+        )
         youtube_privacy_status = (
             self._normalize_youtube_privacy_status(
                 youtube_privacy_status
@@ -6674,13 +6736,29 @@ class WorkflowEngine:
             product_identity_context,
         )
 
-        # Sprint141-6: 생성 → Vision 검증 → 재생성 Closed Loop 단일 실행 진입점 연결
-        ai_image_closed_loop_result = (
-            self._run_sprint141_6_ai_image_closed_loop(
-                director_result=ai_image_director_result,
-                output_dir=director_output_dir,
+        # Sprint153-2: 기존 ImageMotion 영상 재사용 시 Gemini/Vision Closed Loop를 호출하지 않습니다.
+        if reuse_image_motion_path:
+            ai_image_closed_loop_result = {
+                "ok": True,
+                "ready": True,
+                "version": "workflow-ai-image-closed-loop-153-2-reuse-bypass",
+                "status": "skipped_reuse_existing_image_motion",
+                "generator": {"status": "skipped", "api_called": False},
+                "validator": {"status": "skipped", "api_called": False},
+                "closed_loop_result": ai_image_director_result,
+                "selected_image_count": 0,
+                "passed_scene_count": 0,
+                "failed_scene_count": 0,
+                "reuse_image_motion_path": reuse_image_motion_path,
+                "errors": [],
+            }
+        else:
+            ai_image_closed_loop_result = (
+                self._run_sprint141_6_ai_image_closed_loop(
+                    director_result=ai_image_director_result,
+                    output_dir=director_output_dir,
+                )
             )
-        )
         outputs["ai_image_closed_loop"] = ai_image_closed_loop_result
 
         closed_loop_director_result = (
@@ -7585,6 +7663,8 @@ class WorkflowEngine:
             / f"{project_id_for_director}_image_motion.mp4"
         )
         motion_output_path.parent.mkdir(parents=True, exist_ok=True)
+        if reuse_image_motion_path:
+            motion_output_path = Path(reuse_image_motion_path)
 
         # Sprint131-7: AI Director가 일부 이미지만 선택해도 이번 실행에서 업로드한
         # 전체 상품 이미지를 장면 순서대로 직접 배정합니다.
@@ -8017,7 +8097,55 @@ class WorkflowEngine:
             "render_requested": True,
         }
 
-        if motion_image_paths:
+        if reuse_image_motion_path:
+            scene_video_result.update(
+                ok=True,
+                ready=True,
+                status="skipped_reuse_existing_image_motion",
+                version="image-motion-generator-153-2-reuse-bypass",
+                generated_scene_count=0,
+                failed_scene_count=0,
+                generated_files=[],
+                items=[],
+                errors=[],
+                motion_plan_used_count=0,
+                render_requested=False,
+                api_called=False,
+            )
+            scene_merge_result.update(
+                ok=True,
+                ready=True,
+                status="reused_existing_image_motion",
+                output_path=str(motion_output_path),
+                scene_count=0,
+                errors=[],
+                render_requested=False,
+            )
+            image_fallback_result.update(
+                ok=True,
+                ready=True,
+                status="reused_existing_image_motion",
+                output_path=str(motion_output_path),
+                scene_files=[],
+                image_count=0,
+                motion_plan_count=0,
+                errors=[],
+                render_requested=False,
+                reused=True,
+            )
+            try:
+                ProjectRepository().update_links_and_media(
+                    getattr(project, "id"),
+                    video_path=str(motion_output_path),
+                )
+                project.video_path = str(motion_output_path)
+            except Exception as exc:
+                image_fallback_result.setdefault("warnings", []).append(
+                    f"Project video_path reuse update failed: {type(exc).__name__}: {exc}"
+                )
+            print("[Sprint153-2 Reuse ImageMotion] ACTIVE VIDEO:", str(motion_output_path), flush=True)
+
+        elif motion_image_paths:
             try:
                 image_motion_result = ImageMotionGenerator().generate_many(
                     image_paths=motion_image_paths,
