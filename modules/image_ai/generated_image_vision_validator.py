@@ -8,10 +8,10 @@ from typing import Any, Dict, List
 
 
 class GeneratedImageVisionValidator:
-    VERSION = "generated-image-vision-validator-154-product-human-duplicate"
+    VERSION = "generated-image-vision-validator-154-2-scene-aware"
     DEFAULT_MODEL = "gemini-3.5-flash"
-    IDENTITY_THRESHOLD = 95.0
-    CRITICAL_THRESHOLD = 92.0
+    IDENTITY_THRESHOLD = 90.0
+    CRITICAL_THRESHOLD = 88.0
 
     def __init__(self, api_key: Any = "", model: Any = "") -> None:
         self.api_key = str(
@@ -24,6 +24,27 @@ class GeneratedImageVisionValidator:
             or os.getenv("GEMINI_VISION_MODEL", "")
             or self.DEFAULT_MODEL
         ).strip()
+
+    def _scene_requirements(self, prompt: str) -> Dict[str, bool]:
+        text = str(prompt or "").lower()
+        human_required = any(
+            token in text
+            for token in (
+                "wear", "wearing", "human", "person", "hand", "foot", "feet",
+                "착용", "사람", "손", "발", "걷", "신는", "신고",
+            )
+        )
+        water_required = any(
+            token in text
+            for token in (
+                "water", "drain", "shower", "wet", "bathroom",
+                "물", "배수", "샤워", "젖", "욕실",
+            )
+        )
+        return {
+            "human_required": human_required,
+            "water_required": water_required,
+        }
 
     def validate(
         self,
@@ -40,7 +61,8 @@ class GeneratedImageVisionValidator:
         scene_id_text = str(scene_id or "").strip() or "scene_unknown"
         generated_path = Path(str(generated_image_path or image_path or "")).expanduser()
         reference_path = Path(str(reference_image_path or "")).expanduser()
-        threshold = max(self.IDENTITY_THRESHOLD, self._safe_float(fidelity_threshold, 95.0))
+        threshold = max(self.IDENTITY_THRESHOLD, self._safe_float(fidelity_threshold, 90.0))
+        requirements = self._scene_requirements(str(prompt or ""))
 
         score_keys = [
             "shape_score",
@@ -59,8 +81,6 @@ class GeneratedImageVisionValidator:
             "product_scale_score",
             "human_anatomy_score",
             "human_contact_score",
-            "duplicate_risk_score",
-            "location_variety_score",
         ]
         result: Dict[str, Any] = {
             "ok": False,
@@ -85,6 +105,7 @@ class GeneratedImageVisionValidator:
             "raw_response": "",
             "errors": [],
             "warnings": [],
+            "scene_requirements": requirements,
         }
         for key in score_keys:
             result[key] = 0.0
@@ -142,8 +163,6 @@ class GeneratedImageVisionValidator:
                 "product_scale_score": {"type": "NUMBER"},
                 "human_anatomy_score": {"type": "NUMBER"},
                 "human_contact_score": {"type": "NUMBER"},
-                "duplicate_risk_score": {"type": "NUMBER"},
-                "location_variety_score": {"type": "NUMBER"},
                 "issues": {"type": "ARRAY", "items": {"type": "STRING"}},
                 "retry_prompt": {"type": "STRING"},
                 "analysis": {"type": "STRING"},
@@ -197,17 +216,27 @@ class GeneratedImageVisionValidator:
             "color_score": 0.08,
         }
         product_identity_score = sum(scores[key] * weight for key, weight in identity_weights.items())
+        if not requirements["human_required"]:
+            scores["human_anatomy_score"] = 100.0
+            scores["human_contact_score"] = 100.0
+
+        physics_weight = 0.10 if requirements["water_required"] else 0.04
+        human_weight = 0.08 if requirements["human_required"] else 0.0
+        identity_weight = 0.66 if requirements["human_required"] else 0.72
+        other_weight = 1.0 - identity_weight - physics_weight - human_weight
+
         fidelity_score = (
-            product_identity_score * 0.60
-            + scores["physics_score"] * 0.08
-            + scores["scene_match_score"] * 0.05
-            + scores["artifact_score"] * 0.05
-            + scores["product_count_score"] * 0.07
-            + scores["product_scale_score"] * 0.05
-            + scores["human_anatomy_score"] * 0.04
-            + scores["human_contact_score"] * 0.04
-            + scores["duplicate_risk_score"] * 0.01
-            + scores["location_variety_score"] * 0.01
+            product_identity_score * identity_weight
+            + scores["physics_score"] * physics_weight
+            + (
+                (scores["human_anatomy_score"] + scores["human_contact_score"]) / 2.0
+            ) * human_weight
+            + (
+                scores["scene_match_score"] * 0.45
+                + scores["artifact_score"] * 0.25
+                + scores["product_count_score"] * 0.20
+                + scores["product_scale_score"] * 0.10
+            ) * other_weight
         )
 
         critical_keys = [
@@ -217,24 +246,33 @@ class GeneratedImageVisionValidator:
             "sole_outline_score",
             "product_count_score",
             "product_scale_score",
-            "human_anatomy_score",
-            "human_contact_score",
         ]
+        if requirements["human_required"]:
+            critical_keys.extend(
+                ["human_anatomy_score", "human_contact_score"]
+            )
+
         critical_failures = [
             key for key in critical_keys
             if scores[key] < self.CRITICAL_THRESHOLD
         ]
+        physics_minimum = 88.0 if requirements["water_required"] else 72.0
+
         passed = bool(
             product_identity_score >= threshold
             and fidelity_score >= threshold
             and not critical_failures
-            and scores["physics_score"] >= 90.0
-            and scores["artifact_score"] >= 92.0
-            and scores["product_count_score"] >= 98.0
-            and scores["product_scale_score"] >= 94.0
-            and scores["human_anatomy_score"] >= 94.0
-            and scores["human_contact_score"] >= 94.0
-            and scores["duplicate_risk_score"] >= 85.0
+            and scores["physics_score"] >= physics_minimum
+            and scores["artifact_score"] >= 86.0
+            and scores["product_count_score"] >= 90.0
+            and scores["product_scale_score"] >= 88.0
+            and (
+                not requirements["human_required"]
+                or (
+                    scores["human_anatomy_score"] >= 88.0
+                    and scores["human_contact_score"] >= 88.0
+                )
+            )
         )
 
         issues = [
@@ -293,9 +331,9 @@ class GeneratedImageVisionValidator:
             f"Negative constraints: {negative_prompt}\nPassing threshold: {threshold:.1f}/100.\n\n"
             "Score conservatively: exact shape, visible hole count, hole positions, hole sizes, "
             "hole spacing, sole outline, sole thickness, material, color, gravity-correct water flow, "
-            "drainage, hand/foot contact, scene match, duplicate products, realistic product scale, "
-            "exactly one pair or one item as requested, coherent hands/feet/legs, natural anatomy, "
-            "no body fusion or penetration, no repeated composition/background, text overlays and artifacts. "
+            "drainage, hand/foot contact when a human is present, scene match, duplicate products, "
+            "realistic product scale, exact requested product count, text overlays and artifacts. "
+            "For scenes without a human, return 100 for human anatomy/contact because those checks are not applicable. "
             "Changed hole layout or sole outline must fail even when the image is attractive. "
             "Return JSON only. retry_prompt must give concrete corrections for the next single-image attempt."
         )
@@ -312,13 +350,11 @@ class GeneratedImageVisionValidator:
             ("material_score", 93, "Match the exact material texture and surface finish"),
             ("color_score", 93, "Match the exact product color"),
             ("physics_score", 90, "Correct gravity, drainage and all hand/foot contact physics"),
-            ("artifact_score", 92, "Remove text overlays, malformed objects and visual artifacts"),
-            ("product_count_score", 98, "Show exactly the requested number of products; never add a second pair"),
-            ("product_scale_score", 94, "Keep the product at realistic human-scale proportions"),
-            ("human_anatomy_score", 94, "Use anatomically coherent hands, feet, legs and body proportions"),
-            ("human_contact_score", 94, "Make all hand/foot contact physically natural with no penetration"),
-            ("duplicate_risk_score", 85, "Use a clearly different composition and background from prior scenes"),
-            ("location_variety_score", 85, "Use the assigned location and avoid repeating bathroom-only scenes"),
+            ("artifact_score", 86, "Remove duplicates, text overlays, malformed anatomy and artifacts"),
+            ("product_count_score", 90, "Show exactly the requested product count; never add a second pair"),
+            ("product_scale_score", 88, "Keep the product at realistic scale"),
+            ("human_anatomy_score", 88, "Use coherent hands, feet, legs and body proportions"),
+            ("human_contact_score", 88, "Make all hand and foot contact natural with no penetration"),
         ]
         corrections = [message for key, minimum, message in checks if scores.get(key, 0) < minimum]
         corrections.extend(issues[:4])

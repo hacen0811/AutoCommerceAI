@@ -26,8 +26,8 @@ class AIImageDirector:
             └─ ai_image_required      → 이미지 생성 프롬프트 + 모션 추천
     """
 
-    VERSION = "ai-image-director-154-scene-quality"
-    RESULT_FILENAME = "ai_image_director_154.json"
+    VERSION = "ai-image-director-154-2-recovery-review"
+    RESULT_FILENAME = "ai_image_director_154_2.json"
 
     HUMAN_POLICY = {
         "hook": {
@@ -164,17 +164,6 @@ class AIImageDirector:
 
     FIDELITY_THRESHOLD = 90.0
     MAX_GENERATION_ATTEMPTS = 3
-    SCENE_LOCATIONS = (
-        "bathroom",
-        "entryway",
-        "balcony",
-        "living_room",
-        "laundry_room",
-        "wearing",
-        "product_closeup",
-    )
-    MAX_SAME_LOCATION = 2
-    DUPLICATE_SIMILARITY_THRESHOLD = 0.92
 
     FIDELITY_WEIGHTS = {
         "shape_match": 24.0,
@@ -356,22 +345,6 @@ class AIImageDirector:
                 output_dir=resolved_output_dir,
                 index=index,
             )
-            assigned_location = self._assigned_location(index, item.get("purpose", ""))
-            item["assigned_location"] = assigned_location
-            item["image_prompt"] = (
-                str(item.get("image_prompt") or "").rstrip()
-                + self._scene_quality_contract(
-                    assigned_location=assigned_location,
-                    purpose=str(item.get("purpose") or ""),
-                )
-            )
-            item["negative_prompt"] = (
-                str(item.get("negative_prompt") or "").rstrip(", ")
-                + ", duplicate composition, repeated bathroom background, extra product pair"
-                + ", oversized product, undersized product, malformed hand, malformed foot"
-                + ", malformed leg, fused body, impossible anatomy, body penetration"
-            ).strip(", ")
-
             fidelity_result = self._evaluate_scene_fidelity(
                 scene=scene,
                 direction=item,
@@ -415,7 +388,6 @@ class AIImageDirector:
                         "require_reference_image": True,
                         "output_image_path": item["output_image_path"],
                         "prompt_internal_only": True,
-                        "assigned_location": item.get("assigned_location", ""),
                     }
                 )
                 result["ai_image_scene_count"] += 1
@@ -2199,7 +2171,6 @@ class AIImageDirector:
         scene_run_map: Dict[str, Dict[str, Any]] = {}
         passed_count = 0
         failed_count = 0
-        accepted_visual_hashes: List[Dict[str, Any]] = []
 
         for prompt_item in prompts:
             if not isinstance(prompt_item, Mapping):
@@ -2334,27 +2305,6 @@ class AIImageDirector:
                     )
                     attempt_result["passed"] = bool(fidelity.get("passed"))
 
-                    duplicate_check = self._local_duplicate_check(
-                        image_path=generation["image_path"],
-                        accepted_items=accepted_visual_hashes,
-                    )
-                    attempt_result["duplicate_check"] = duplicate_check
-                    if duplicate_check.get("is_duplicate"):
-                        attempt_result["passed"] = False
-                        attempt_result["score"] = min(
-                            float(attempt_result.get("score") or 0.0),
-                            60.0,
-                        )
-                        fidelity["passed"] = False
-                        fidelity["retry_required"] = True
-                        fidelity["retry_prompt"] = (
-                            "Create a clearly different camera angle, composition and background. "
-                            "Do not repeat a prior scene."
-                        )
-                        fidelity.setdefault("issues", []).append(
-                            "duplicate_or_near_duplicate_scene"
-                        )
-
                     if (
                         best_attempt is None
                         or attempt_result["score"] > best_attempt["score"]
@@ -2364,14 +2314,6 @@ class AIImageDirector:
                     scene_run["attempts"].append(attempt_result)
 
                     if attempt_result["passed"]:
-                        if duplicate_check.get("visual_hash"):
-                            accepted_visual_hashes.append(
-                                {
-                                    "scene_id": scene_id,
-                                    "visual_hash": duplicate_check["visual_hash"],
-                                    "image_path": generation["image_path"],
-                                }
-                            )
                         break
 
                     retry_prompt = self._first_text(
@@ -2399,17 +2341,16 @@ class AIImageDirector:
                     best_attempt.get("score") or 0.0
                 )
                 scene_run["passed"] = bool(best_attempt.get("passed"))
-                if scene_run["passed"]:
-                    scene_run["selected_image_path"] = self._first_text(
-                        best_attempt.get("generated_image_path")
-                    )
-                    scene_run["status"] = "passed"
-                else:
-                    scene_run["selected_image_path"] = ""
-                    scene_run["status"] = "rejected_all_attempts"
-                    scene_run["errors"].append(
-                        "모든 시도가 품질 기준을 통과하지 못해 장면을 채택하지 않았습니다"
-                    )
+                scene_run["selected_image_path"] = self._first_text(
+                    best_attempt.get("generated_image_path")
+                )
+                scene_run["review_image_path"] = scene_run["selected_image_path"]
+                scene_run["manual_approval_required"] = not scene_run["passed"]
+                scene_run["status"] = (
+                    "passed"
+                    if scene_run["passed"]
+                    else "best_attempt_ready_for_manual_review"
+                )
             else:
                 scene_run["status"] = "generation_failed"
 
@@ -2447,72 +2388,6 @@ class AIImageDirector:
             output_dir=output_dir,
             save_result=save_result,
         )
-
-    def _assigned_location(self, index: int, purpose: str) -> str:
-        normalized = str(purpose or "").lower()
-        if "cta" in normalized or "detail" in normalized or "proof" in normalized:
-            return "product_closeup"
-        if "usage" in normalized or "wear" in normalized:
-            return "wearing"
-        return self.SCENE_LOCATIONS[(max(1, int(index)) - 1) % len(self.SCENE_LOCATIONS)]
-
-    def _scene_quality_contract(self, assigned_location: str, purpose: str) -> str:
-        count_rule = (
-            "Show exactly one pair of slippers and no additional pair."
-            if any(token in str(purpose or "").lower() for token in ("usage", "wear", "cta"))
-            else "Show exactly one product item unless a pair is explicitly required."
-        )
-        return (
-            "\n\n[SPRINT154 SCENE QUALITY CONTRACT]\n"
-            f"- ASSIGNED LOCATION: {assigned_location}. Use this location clearly.\n"
-            f"- {count_rule}\n"
-            "- Keep realistic human-scale size relative to feet, hands, furniture and floor tiles.\n"
-            "- Human anatomy must be coherent: natural hands, feet, toes, legs and body proportions.\n"
-            "- No duplicate product, second pair, giant product, tiny product, body fusion or penetration.\n"
-            "- Use a composition and camera angle clearly different from all previous scenes.\n"
-            "- Generate exactly one image only."
-        )
-
-    def _local_duplicate_check(
-        self,
-        image_path: str,
-        accepted_items: List[Dict[str, Any]],
-    ) -> Dict[str, Any]:
-        result = {
-            "checked": False,
-            "is_duplicate": False,
-            "max_similarity": 0.0,
-            "matched_scene_id": "",
-            "visual_hash": "",
-        }
-        try:
-            from PIL import Image
-            path = Path(str(image_path))
-            if not path.is_file():
-                return result
-            with Image.open(path) as image:
-                image = image.convert("L").resize((16, 16))
-                pixels = list(image.getdata())
-            average = sum(pixels) / max(1, len(pixels))
-            bits = "".join("1" if value >= average else "0" for value in pixels)
-            result["visual_hash"] = bits
-            result["checked"] = True
-
-            for item in accepted_items:
-                other = str(item.get("visual_hash") or "")
-                if len(other) != len(bits) or not other:
-                    continue
-                distance = sum(a != b for a, b in zip(bits, other))
-                similarity = 1.0 - distance / len(bits)
-                if similarity > result["max_similarity"]:
-                    result["max_similarity"] = round(similarity, 4)
-                    result["matched_scene_id"] = str(item.get("scene_id") or "")
-            result["is_duplicate"] = (
-                result["max_similarity"] >= self.DUPLICATE_SIMILARITY_THRESHOLD
-            )
-        except Exception:
-            return result
-        return result
 
     def _normalize_generation_result(
         self,

@@ -57,7 +57,7 @@ except Exception:
     SearchKeywordEngine = None
 
 
-UI_VERSION = "sprint154-1-image-path-fallback"
+UI_VERSION = "sprint154-2-manual-review-recovery"
 RESULT_DIR = Path("exports/one_click_results")
 REVIEW_IMAGE_ROOT = Path("assets/review_images")
 PRODUCT_IMAGE_ROOT = Path("assets/products")
@@ -74,7 +74,7 @@ SUPPORTED_REVIEW_IMAGE_SUFFIXES = {
 
 
 print(
-    "######## ONE_CLICK_PIPELINE SPRINT154-1 IMAGE PATH FALLBACK LOADED ########",
+    "######## ONE_CLICK_PIPELINE SPRINT154-2 MANUAL REVIEW RECOVERY LOADED ########",
     __file__,
     flush=True,
 )
@@ -1420,6 +1420,12 @@ def _render_ai_image_review(project, result):
             or scene.get("final_image_path")
             or scene.get("resolved_image_path")
             or scene.get("output_image_path")
+            or scene.get("review_image_path")
+            or (
+                (scene.get("attempts") or [{}])[-1].get("generated_image_path")
+                if isinstance(scene.get("attempts"), list) and scene.get("attempts")
+                else ""
+            )
             or ""
         ).strip()
         with st.container(border=True):
@@ -1427,6 +1433,35 @@ def _render_ai_image_review(project, result):
             subtitle = str(scene.get("subtitle_text") or "").strip()
             if subtitle:
                 st.write(f"자막: {subtitle}")
+
+            passed = bool(
+                scene.get("passed")
+                or scene.get("fidelity_passed")
+            )
+            score = (
+                scene.get("best_score")
+                or scene.get("fidelity_score")
+                or scene.get("score")
+                or 0
+            )
+            issues = list(
+                scene.get("issues")
+                or scene.get("validation_issues")
+                or []
+            )
+
+            if passed:
+                st.success(f"자동 검수 통과 · 점수 {float(score or 0):.1f}")
+            else:
+                st.warning(
+                    f"자동 검수 미통과 · 최고 점수 {float(score or 0):.1f} · "
+                    "이미지를 확인한 뒤 직접 승인하거나 다시 생성하세요."
+                )
+                if issues:
+                    st.caption(
+                        "검수 사유: "
+                        + " / ".join(str(item) for item in issues[:5])
+                    )
             if image_path and Path(image_path).is_file():
                 print(
                     "[Sprint154-1 Image Path Fallback] Scene:",
@@ -1445,7 +1480,7 @@ def _render_ai_image_review(project, result):
                 "승인 완료" if approved.get(scene_id) else "이 이미지 승인",
                 key=f"approve_{project_id}_{scene_id}",
                 use_container_width=True,
-                disabled=bool(approved.get(scene_id)),
+                disabled=bool(approved.get(scene_id)) or not (image_path and Path(image_path).is_file()),
             ):
                 approved[scene_id] = image_path
                 st.session_state[approved_key] = approved
