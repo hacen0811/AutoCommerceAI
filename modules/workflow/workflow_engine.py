@@ -4,6 +4,7 @@ import hashlib
 import json
 import mimetypes
 import re
+import sys
 import shutil
 import subprocess
 import threading
@@ -35,6 +36,13 @@ from modules.content.review_quote_selector import ReviewQuoteSelector
 from modules.content.review_hook_generator import ReviewHookGenerator
 from modules.content.hook_optimizer import HookOptimizer
 from modules.content.review_script_generator import ReviewScriptGenerator
+from modules.content.script_closed_loop import ScriptClosedLoop
+from modules.content.script_revision_engine import ScriptRevisionEngine
+from modules.content.viral.viral_collector import ViralCollector
+from modules.content.viral.viral_library_ingestor import ViralLibraryIngestor
+from modules.content.viral.viral_scene_analyzer import ViralSceneAnalyzer
+from modules.content.viral.viral_editing_feature_analyzer import ViralEditingFeatureAnalyzer
+from modules.content.viral.viral_pipeline import run_viral_pipeline
 from modules.publisher.publisher_engine import PublisherEngine
 from modules.publisher.utf8_guard import PublisherUTF8Guard
 from modules.publisher.publisher_orchestrator import PublisherOrchestrator
@@ -50,7 +58,9 @@ from modules.video.image_motion_generator import ImageMotionGenerator
 from modules.story import StoryIntelligenceEngine
 from modules.story.scene_image_planner import SceneImagePlanner
 from modules.image_ai.ai_image_director import AIImageDirector
+from modules.image_ai.image_director import ImageDirector
 from modules.image_ai.image_pool_builder import ImagePoolBuilder
+from modules.image_ai.product_keeper import ProductKeeper
 try:
     from modules.image_ai.image_extractor import ImageExtractor
 except ImportError:
@@ -82,7 +92,16 @@ from modules.video.download_utils import (
 )
 
 
-print("######## WORKFLOW_ENGINE SPRINT131-8 FINAL MOTION SOURCE LOCK LOADED ########", flush=True)
+
+# Sprint145-14: Windows PowerShell/Streamlit 로그도 UTF-8로 고정합니다.
+for _stream in (getattr(sys, "stdout", None), getattr(sys, "stderr", None)):
+    try:
+        if _stream is not None and hasattr(_stream, "reconfigure"):
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
+print("######## WORKFLOW_ENGINE SPRINT152-2 NETWORK RETRY SCENE ISOLATION LOADED ########", flush=True)
 
 
 class WorkflowEngine:
@@ -107,7 +126,8 @@ class WorkflowEngine:
     → CapCutExport
     """
 
-    WORKFLOW_VERSION = "workflow-engine-131-8-final-motion-source-lock"
+    WORKFLOW_VERSION = "workflow-engine-152-2-network-retry-scene-isolation"
+    
 
     # Sprint102-3: 동일 프로젝트의 WorkflowEngine 중복 진입을 차단합니다.
     _RUN_GUARD = threading.RLock()
@@ -150,6 +170,23 @@ class WorkflowEngine:
             )
         except Exception:
             return {}
+
+    @staticmethod
+    def _find_nested_value(data, keys):
+        """Sprint145-21: UI/DB 저장 위치가 달라도 신뢰 입력값을 재귀적으로 찾습니다."""
+        wanted = {str(key).lower() for key in keys}
+        queue = [data]
+        while queue:
+            current = queue.pop(0)
+            if isinstance(current, dict):
+                for key, value in current.items():
+                    if str(key).lower() in wanted and value not in (None, ""):
+                        return value
+                    if isinstance(value, (dict, list, tuple)):
+                        queue.append(value)
+            elif isinstance(current, (list, tuple)):
+                queue.extend(current)
+        return None
 
     def _sprint100_4_text_probe(self, label, value, limit=5):
         """Sprint100-4: 문자열 값과 실제 UTF-8 바이트를 함께 출력합니다."""
@@ -1917,6 +1954,866 @@ class WorkflowEngine:
         return result
 
 
+
+    def _sprint151_1_apply_product_dna_2(self, director_result, product_identity_context):
+        if not isinstance(director_result, dict):
+            return director_result
+
+        context = product_identity_context if isinstance(product_identity_context, dict) else {}
+        dna = {}
+        for candidate in (
+            context.get("product_identity_dna"),
+            context.get("product_dna"),
+            context.get("identity_dna"),
+            context.get("dna"),
+            context.get("product_identity"),
+            context.get("identity"),
+        ):
+            if isinstance(candidate, dict):
+                dna.update(candidate)
+
+        def collect(*keys):
+            values = []
+            for source in (dna, context):
+                if not isinstance(source, dict):
+                    continue
+                for key in keys:
+                    value = source.get(key)
+                    if isinstance(value, (list, tuple, set)):
+                        values.extend(str(item).strip() for item in value if str(item).strip())
+                    elif str(value or "").strip():
+                        values.append(str(value).strip())
+            unique = []
+            seen = set()
+            for value in values:
+                marker = value.lower()
+                if marker not in seen:
+                    seen.add(marker)
+                    unique.append(value)
+            return " / ".join(unique)
+
+        locks = {
+            "shape": collect("shape", "silhouette", "form", "body_shape", "structural_shape"),
+            "hole": collect("hole", "holes", "drain_hole", "drain_holes", "perforation", "perforations"),
+            "sole": collect("sole", "outsole", "bottom", "bottom_shape", "tread", "footbed"),
+            "material": collect("material", "materials", "surface", "surface_finish", "texture"),
+            "color": collect("color", "colors", "primary_color", "color_finish", "finish"),
+        }
+
+        required_order = ("shape", "hole", "sole", "material", "color")
+        lock_lines = []
+        for key in required_order:
+            value = locks.get(key) or "match the attached reference exactly"
+            lock_lines.append(f"- {key.upper()}: {value}")
+
+        dna_contract = (
+            "\n\n[PRODUCT DNA 2.0 — IMMUTABLE]\n"
+            + "\n".join(lock_lines)
+            + "\nDo not redesign, simplify, mirror, stretch, merge, remove, add, or relocate any product part."
+            + "\nThe number, position, spacing and size of all holes must remain identical."
+            + "\nThe sole/bottom outline, thickness, tread and contact surface must remain identical."
+            + "\nMaterial reflectance, texture and exact color family must remain identical."
+        )
+        physics_contract = (
+            "\n\n[PHYSICS VALIDATION CONTRACT]\n"
+            "- Water must flow only in a gravity-consistent direction.\n"
+            "- Drainage direction must agree with the product orientation and hole positions.\n"
+            "- Hands and feet may contact only physically reachable surfaces.\n"
+            "- No penetration, floating, impossible grip, fused fingers/toes or deformed anatomy.\n"
+            "- Product geometry must not change under contact, pressure or perspective.\n"
+            "- Show only one product unless the scene explicitly requires a pair."
+        )
+        retry_contract = (
+            "\n\n[COST POLICY]\n"
+            "Generate exactly one image for this attempt. "
+            "Do not generate a candidate grid, collage, variations or multiple alternatives."
+        )
+
+        prompt_count = 0
+        scenes = [item for item in list(director_result.get("scenes") or []) if isinstance(item, dict)]
+        for scene in scenes:
+            if not scene.get("generation_required"):
+                continue
+            scene["image_prompt"] = (
+                str(scene.get("image_prompt") or "").rstrip()
+                + dna_contract + physics_contract + retry_contract
+            )
+            scene["negative_prompt"] = (
+                str(scene.get("negative_prompt") or "").rstrip(", ")
+                + ", changed silhouette, wrong hole count, moved holes, missing holes, extra holes"
+                + ", wrong sole shape, wrong outsole, wrong tread, changed material, changed texture"
+                + ", wrong color, mirrored product, floating product, impossible water flow"
+                + ", uphill drainage, water through solid surface, hand penetration, foot penetration"
+                + ", impossible contact, deformed hand, deformed foot, multiple candidates, collage, grid"
+            ).strip(", ")
+            scene["product_dna_2"] = dict(locks)
+            scene["product_dna_2_required_fields"] = list(required_order)
+            scene["physics_validation_required"] = True
+            scene["physics_checks"] = [
+                "gravity_consistent_water_flow",
+                "drainage_direction",
+                "hand_contact",
+                "foot_contact",
+                "product_geometry_unchanged",
+            ]
+            scene["initial_generation_count"] = 1
+            scene["max_generation_attempts"] = 3
+            scene["regenerate_failed_scene_only"] = True
+            scene["multiple_candidate_generation"] = False
+            prompt_count += 1
+
+        for prompt_item in list(director_result.get("image_prompts") or []):
+            if not isinstance(prompt_item, dict):
+                continue
+            matching = next(
+                (scene for scene in scenes if str(scene.get("scene_id") or "") == str(prompt_item.get("scene_id") or "")),
+                None,
+            )
+            if matching:
+                prompt_item["image_prompt"] = matching.get("image_prompt", "")
+                prompt_item["negative_prompt"] = matching.get("negative_prompt", "")
+                prompt_item["product_dna_2"] = matching.get("product_dna_2", {})
+                prompt_item["physics_validation_required"] = True
+                prompt_item["initial_generation_count"] = 1
+                prompt_item["max_generation_attempts"] = 3
+                prompt_item["regenerate_failed_scene_only"] = True
+                prompt_item["multiple_candidate_generation"] = False
+
+        director_result["version"] = "ai-image-director-151-1-product-dna-2"
+        director_result["product_dna_version"] = "product-dna-2-151-1"
+        director_result["product_dna_2"] = locks
+        director_result["product_dna_2_required_fields"] = list(required_order)
+        director_result["physics_validator_version"] = "vision-physics-contract-151-1"
+        director_result["physics_validation_required"] = True
+        director_result["initial_generation_count"] = 1
+        director_result["max_generation_attempts"] = 3
+        director_result["regenerate_failed_scenes_only"] = True
+        director_result["generate_multiple_candidates"] = False
+        director_result["cost_policy_locked"] = True
+        director_result["product_dna_2_prompt_count"] = prompt_count
+
+        print("[Sprint151-1 Product DNA 2.0] Applied:", True, flush=True)
+        print("[Sprint151-1 Product DNA 2.0] Prompt Count:", prompt_count, flush=True)
+        print("[Sprint151-1 Product DNA 2.0] Fields:", list(required_order), flush=True)
+        print("[Sprint151-1 Vision Physics] Enabled:", True, flush=True)
+        print("[Sprint151-1 Cost Policy] Initial Images Per Scene:", 1, flush=True)
+        print("[Sprint151-1 Cost Policy] Max Attempts Per Failed Scene:", 3, flush=True)
+        print("[Sprint151-1 Cost Policy] Multiple Candidates:", False, flush=True)
+        return director_result
+
+    def _sprint151_1_apply_scene_director(self, scene_plan_result):
+        if not isinstance(scene_plan_result, dict):
+            return scene_plan_result
+
+        assignments = [
+            ("entryway", "착용", "현관에서 외출 전 실제로 착용하는 자연스러운 사용 장면"),
+            ("closeup", "클로즈업", "제품의 구멍 위치, 재질, 가장자리와 밑창 형태가 선명한 제품 클로즈업"),
+            ("veranda", "생활 사용", "자연광이 들어오는 베란다에서 실제 생활 동선에 맞춘 사용 장면"),
+            ("living_room", "착용 이동", "정돈된 거실에서 걷거나 이동하며 사용하는 자연스러운 장면"),
+            ("laundry_room", "물·배수 증명", "세탁실에서 중력에 맞는 물 흐름과 실제 배수 방향을 보여주는 장면"),
+            ("bathroom", "젖은 환경 사용", "깨끗한 욕실에서 과도한 물 연출 없이 현실적으로 사용하는 장면"),
+            ("sole_closeup", "밑창 클로즈업", "밑창 외곽선, 두께, 접지면과 배수 구조가 선명한 낮은 시점 클로즈업"),
+            ("entryway", "외출 후", "다른 구도의 현관에서 벗거나 정리하는 자연스러운 장면"),
+            ("veranda", "건조", "베란다에서 제품을 자연스럽게 건조하거나 보관하는 장면"),
+            ("clean_studio", "CTA 제품 집중", "단순한 실내 배경에서 제품 형태와 색상을 정확히 보여주는 마무리"),
+        ]
+
+        scenes = [item for item in list(scene_plan_result.get("scenes") or []) if isinstance(item, dict)]
+        counts = {}
+        previous_environment = ""
+        for index, scene in enumerate(scenes):
+            environment, role, description = assignments[index % len(assignments)]
+            if environment == previous_environment:
+                environment, role, description = assignments[(index + 1) % len(assignments)]
+            previous_environment = environment
+            scene["scene_environment"] = environment
+            scene["scene_role"] = role
+            scene["environment_description"] = description
+            scene["visual_direction"] = description
+            scene["environment_diversity_locked"] = True
+            scene["avoid_environment_repetition"] = True
+            scene["scene_director_version"] = "scene-director-151-1"
+            scene["physics_validation_required"] = environment in {
+                "laundry_room", "bathroom", "entryway", "living_room"
+            }
+            director_context = dict(scene.get("director_context") or {})
+            director_context.update({
+                "scene_environment": environment,
+                "scene_role": role,
+                "environment_description": description,
+                "avoid_environment_repetition": True,
+                "physics_validation_required": scene["physics_validation_required"],
+            })
+            scene["director_context"] = director_context
+            counts[environment] = counts.get(environment, 0) + 1
+
+        scene_plan_result["version"] = "scene-plan-151-1-diverse-director"
+        scene_plan_result["scene_director_version"] = "scene-director-151-1"
+        scene_plan_result["scene_environment_counts"] = counts
+        scene_plan_result["scene_diversity_locked"] = True
+        print("[Sprint151-1 Scene Director] Applied:", True, flush=True)
+        print("[Sprint151-1 Scene Director] Scene Count:", len(scenes), flush=True)
+        print("[Sprint151-1 Scene Director] Environments:", counts, flush=True)
+        return scene_plan_result
+
+    def _sprint150_6_strengthen_product_dna(self, director_result, product_context):
+        """Sprint150-6: 생성 프롬프트에 형태 보존 규칙을 강제로 주입합니다."""
+        if not isinstance(director_result, dict):
+            return director_result
+
+        context = product_context if isinstance(product_context, dict) else {}
+        locked_attributes = [
+            str(item).strip()
+            for item in list(context.get("product_locked_attributes") or [])
+            if str(item).strip()
+        ]
+        critical_geometry = [
+            "exact outer silhouette and proportions",
+            "exact number, size, spacing and position of holes/openings",
+            "exact sole/outsole contour, thickness, tread and heel/toe shape",
+            "exact straps, seams, edges, cut lines, fasteners and surface details",
+            "exact color blocking, material texture, logo and printed marks",
+        ]
+        dna_text = (
+            "PRODUCT DNA HARD LOCK. Use the reference product as immutable geometry. "
+            "Preserve " + "; ".join(critical_geometry) + ". "
+            "Do not add, remove, merge, move, resize or redesign any product detail. "
+            "Do not mirror the product. Do not change the sole, holes, straps, seams, edges, "
+            "logo, material or color. Only the environment, human pose, lighting and camera may change."
+        )
+        if locked_attributes:
+            dna_text += " Locked attributes: " + "; ".join(locked_attributes[:20]) + "."
+
+        negative_lock = (
+            "different product, redesigned product, altered silhouette, changed proportions, "
+            "missing holes, extra holes, moved holes, merged holes, changed outsole, changed sole shape, "
+            "changed tread, changed heel, changed toe, changed straps, changed seams, changed logo, "
+            "mirrored product, deformed product, melted geometry, duplicated parts, invented details"
+        )
+
+        prompt_count = 0
+        for item in list(director_result.get("image_prompts") or []):
+            if not isinstance(item, dict):
+                continue
+            original = str(item.get("prompt") or item.get("image_prompt") or "").strip()
+            strengthened = f"{dna_text}\nSCENE: {original}" if original else dna_text
+            item["prompt"] = strengthened
+            item["image_prompt"] = strengthened
+            current_negative = str(item.get("negative_prompt") or "").strip()
+            item["negative_prompt"] = ", ".join(
+                part for part in (negative_lock, current_negative) if part
+            )
+            item["product_dna_hard_lock"] = True
+            item["critical_geometry_features"] = list(critical_geometry)
+            item["locked_attributes"] = list(locked_attributes)
+            item["identity_threshold"] = 94.0
+            item["reject_on_geometry_drift"] = True
+            prompt_count += 1
+
+        director_result["product_dna_version"] = "product-dna-hard-lock-150-6"
+        director_result["product_dna_hard_lock"] = True
+        director_result["product_dna_prompt_count"] = prompt_count
+        director_result["critical_geometry_features"] = critical_geometry
+        print("[Sprint150-6 Product DNA] Applied:", True, flush=True)
+        print("[Sprint150-6 Product DNA] Prompt Count:", prompt_count, flush=True)
+        print("[Sprint150-6 Product DNA] Identity Threshold:", 94.0, flush=True)
+        return director_result
+
+    def _sprint150_6_apply_scene_diversity(self, scene_plan_result):
+        """Sprint150-6: 욕실 편중을 막고 생활 공간을 순환 배치합니다."""
+        if not isinstance(scene_plan_result, dict):
+            return scene_plan_result
+        environments = [
+            ("entryway", "밝고 정돈된 현관, 신발장과 자연스러운 출입 동선"),
+            ("indoor_living", "채광이 좋은 실내 거실, 일상적인 사용 장면"),
+            ("veranda", "햇빛이 들어오는 베란다 또는 발코니, 건조하고 자연스러운 분위기"),
+            ("bathroom", "깨끗한 욕실, 물기는 최소화하고 현실적인 사용 장면"),
+            ("entryway", "다른 구도의 현관, 외출 전후 실제 사용 장면"),
+            ("indoor_room", "침실 또는 드레스룸, 정돈된 실내 생활 장면"),
+            ("veranda", "다른 구도의 베란다, 자연광과 생활 소품"),
+            ("indoor_living", "다른 구도의 거실 또는 복도, 자연스러운 이동 장면"),
+            ("bathroom", "다른 구도의 깨끗한 욕실, 과도한 물 표현 금지"),
+            ("clean_studio", "깔끔한 실내 제품 클로즈업, 배경은 단순하게"),
+        ]
+        scenes = [item for item in list(scene_plan_result.get("scenes") or []) if isinstance(item, dict)]
+        counts = {}
+        for index, scene in enumerate(scenes):
+            key, description = environments[index % len(environments)]
+            scene["scene_environment"] = key
+            scene["environment_description"] = description
+            scene["environment_diversity_locked"] = True
+            scene["avoid_environment_repetition"] = True
+            scene["visual_direction"] = description
+            director_context = dict(scene.get("director_context") or {})
+            director_context["scene_environment"] = key
+            director_context["environment_description"] = description
+            director_context["avoid_environment_repetition"] = True
+            scene["director_context"] = director_context
+            counts[key] = counts.get(key, 0) + 1
+        scene_plan_result["scenes"] = scenes
+        scene_plan_result["scene_diversity_version"] = "scene-environment-diversity-150-6"
+        scene_plan_result["scene_environment_counts"] = counts
+        scene_plan_result["scene_diversity_ready"] = bool(scenes)
+        print("[Sprint150-6 Scene Diversity] Ready:", bool(scenes), flush=True)
+        print("[Sprint150-6 Scene Diversity] Counts:", counts, flush=True)
+        return scene_plan_result
+
+    def _run_sprint141_6_ai_image_closed_loop(
+        self,
+        director_result,
+        output_dir,
+    ):
+        """
+        Sprint141-6 Workflow Closed Loop Executor Bridge.
+
+        - AIImageDirector.execute_closed_loop()를 WorkflowEngine에 연결합니다.
+        - Gemini 이미지 생성기와 Vision 검사기를 동적으로 연결합니다.
+        - 공급자 모듈이 없으면 기존 이미지 모션 흐름을 그대로 유지합니다.
+        - Closed Loop 실패가 전체 원클릭 파이프라인을 중단시키지 않습니다.
+        """
+        result = {
+            "ok": False,
+            "ready": False,
+            "version": "workflow-ai-image-closed-loop-141-6",
+            "status": "not_run",
+            "director_version": str(
+                (director_result or {}).get("version", "")
+                if isinstance(director_result, dict)
+                else ""
+            ),
+            "generator": {},
+            "validator": {},
+            "closed_loop_result": {},
+            "selected_image_count": 0,
+            "passed_scene_count": 0,
+            "failed_scene_count": 0,
+            "provider_failure_count": 0,
+            "provider_failures": [],
+            "network_retry_enabled": True,
+            "empty_generation_blocked": False,
+            "errors": [],
+            "warnings": [],
+        }
+
+        if not isinstance(director_result, dict):
+            result["status"] = "invalid_director_result"
+            result["errors"].append(
+                "AIImageDirector 결과가 dict 형식이 아닙니다."
+            )
+            return result
+
+        if not bool(director_result.get("ok")):
+            result["status"] = "director_not_ready"
+            result["warnings"].append(
+                "AIImageDirector 결과가 준비되지 않아 Closed Loop를 건너뜁니다."
+            )
+            return result
+
+        image_prompts = [
+            item
+            for item in list(director_result.get("image_prompts") or [])
+            if isinstance(item, dict)
+            and bool(item.get("generation_required", True))
+        ]
+        if not image_prompts:
+            result.update(
+                ok=True,
+                ready=True,
+                status="skipped_no_generation_targets",
+                closed_loop_result=dict(director_result),
+            )
+            return result
+
+        prompt_by_scene_id = {
+            str(item.get("scene_id") or ""): item
+            for item in image_prompts
+            if str(item.get("scene_id") or "")
+        }
+
+        try:
+            image_director = AIImageDirector()
+        except Exception as exc:
+            result["status"] = "director_init_failed"
+            result["errors"].append(f"{type(exc).__name__}: {exc}")
+            return result
+
+        if not callable(getattr(image_director, "execute_closed_loop", None)):
+            result["status"] = "closed_loop_method_missing"
+            result["errors"].append(
+                "AIImageDirector.execute_closed_loop()가 없습니다. "
+                "Sprint141-6 적용 여부를 확인하세요."
+            )
+            return result
+
+        generator_class = None
+        generator_import_error = ""
+        for module_name, class_name in (
+            (
+                "modules.image_ai.gemini_image_generator",
+                "GeminiImageGenerator",
+            ),
+            (
+                "modules.image_ai.ai_image_generator",
+                "AIImageGenerator",
+            ),
+        ):
+            try:
+                module = __import__(
+                    module_name,
+                    fromlist=[class_name],
+                )
+                candidate = getattr(module, class_name, None)
+                if candidate is not None:
+                    generator_class = candidate
+                    result["generator"]["module"] = module_name
+                    result["generator"]["class"] = class_name
+                    break
+            except Exception as exc:
+                generator_import_error = (
+                    f"{module_name}: {type(exc).__name__}: {exc}"
+                )
+
+        validator_class = None
+        validator_import_error = ""
+        for module_name, class_name in (
+            (
+                "modules.image_ai.generated_image_vision_validator",
+                "GeneratedImageVisionValidator",
+            ),
+            (
+                "modules.image_ai.image_fidelity_validator",
+                "ImageFidelityValidator",
+            ),
+        ):
+            try:
+                module = __import__(
+                    module_name,
+                    fromlist=[class_name],
+                )
+                candidate = getattr(module, class_name, None)
+                if candidate is not None:
+                    validator_class = candidate
+                    result["validator"]["module"] = module_name
+                    result["validator"]["class"] = class_name
+                    break
+            except Exception as exc:
+                validator_import_error = (
+                    f"{module_name}: {type(exc).__name__}: {exc}"
+                )
+
+        if generator_class is None or validator_class is None:
+            result["status"] = "provider_modules_unavailable"
+            if generator_class is None:
+                result["warnings"].append(
+                    "Gemini 이미지 생성기 모듈이 아직 연결되지 않았습니다."
+                )
+                if generator_import_error:
+                    result["generator"]["import_error"] = (
+                        generator_import_error
+                    )
+            if validator_class is None:
+                result["warnings"].append(
+                    "생성 이미지 Vision 검사기 모듈이 아직 연결되지 않았습니다."
+                )
+                if validator_import_error:
+                    result["validator"]["import_error"] = (
+                        validator_import_error
+                    )
+            result["closed_loop_result"] = dict(director_result)
+            return result
+
+        try:
+            generator_engine = generator_class()
+            validator_engine = validator_class()
+        except Exception as exc:
+            result["status"] = "provider_init_failed"
+            result["errors"].append(f"{type(exc).__name__}: {exc}")
+            result["closed_loop_result"] = dict(director_result)
+            return result
+
+        result["generator"]["version"] = str(
+            getattr(generator_engine, "VERSION", "")
+            or getattr(generator_engine, "version", "")
+        )
+        result["validator"]["version"] = str(
+            getattr(validator_engine, "VERSION", "")
+            or getattr(validator_engine, "version", "")
+        )
+
+        def call_public_method(engine, method_names, payload):
+            last_type_error = None
+            for method_name in method_names:
+                method = getattr(engine, method_name, None)
+                if not callable(method):
+                    continue
+
+                for call in (
+                    lambda: method(**payload),
+                    lambda: method(payload),
+                ):
+                    try:
+                        return method_name, call()
+                    except TypeError as exc:
+                        last_type_error = exc
+                        continue
+
+            if last_type_error is not None:
+                raise last_type_error
+            raise AttributeError(
+                "지원되는 공개 실행 메서드를 찾지 못했습니다: "
+                + ", ".join(method_names)
+            )
+
+        def image_generator_callback(payload):
+            scene_id_value = str(payload.get("scene_id") or "")
+            output_image_path = str(
+                payload.get("output_image_path") or ""
+            )
+            generator_payload = {
+                "scene_id": scene_id_value,
+                "attempt": int(payload.get("attempt") or 1),
+                "prompt": str(payload.get("prompt") or ""),
+                "image_prompt": str(payload.get("prompt") or ""),
+                "negative_prompt": str(
+                    payload.get("negative_prompt") or ""
+                ),
+                "reference_image_path": str(
+                    payload.get("reference_image_path") or ""
+                ),
+                "output_image_path": output_image_path,
+                "output_path": output_image_path,
+                "overwrite": True,
+            }
+            try:
+                method_name, raw = call_public_method(
+                    generator_engine,
+                    (
+                        "generate_image",
+                        "generate",
+                        "run",
+                        "create",
+                    ),
+                    generator_payload,
+                )
+                result["generator"]["method"] = method_name
+                if not isinstance(raw, dict):
+                    raw = {
+                        "ok": False,
+                        "ready": False,
+                        "status": "invalid_generator_result",
+                        "scene_id": scene_id_value,
+                        "output_image_path": output_image_path,
+                        "errors": [
+                            "GeminiImageGenerator 결과가 dict 형식이 아닙니다."
+                        ],
+                    }
+                if not bool(raw.get("ok")):
+                    failure = {
+                        "scene_id": scene_id_value,
+                        "attempt": int(payload.get("attempt") or 1),
+                        "status": str(raw.get("status") or "generator_failed"),
+                        "errors": list(raw.get("errors") or []),
+                        "provider_attempts": int(raw.get("provider_attempts") or 0),
+                        "network_retry_count": int(raw.get("network_retry_count") or 0),
+                    }
+                    result["provider_failures"].append(failure)
+                    result["provider_failure_count"] = len(
+                        result["provider_failures"]
+                    )
+                    print(
+                        "[Sprint152-2 Scene Isolation] Generator Failed:",
+                        failure,
+                        flush=True,
+                    )
+                return raw
+            except Exception as exc:
+                failure = {
+                    "scene_id": scene_id_value,
+                    "attempt": int(payload.get("attempt") or 1),
+                    "status": "generator_callback_exception",
+                    "errors": [f"{type(exc).__name__}: {exc}"],
+                    "provider_attempts": 0,
+                    "network_retry_count": 0,
+                }
+                result["provider_failures"].append(failure)
+                result["provider_failure_count"] = len(
+                    result["provider_failures"]
+                )
+                print(
+                    "[Sprint152-2 Scene Isolation] Callback Exception:",
+                    failure,
+                    flush=True,
+                )
+                return {
+                    "ok": False,
+                    "ready": False,
+                    "version": str(
+                        getattr(generator_engine, "VERSION", "")
+                    ),
+                    "status": "generator_callback_exception",
+                    "scene_id": scene_id_value,
+                    "attempt": int(payload.get("attempt") or 1),
+                    "output_image_path": output_image_path,
+                    "output_path": output_image_path,
+                    "errors": list(failure["errors"]),
+                    "warnings": [],
+                }
+
+        def image_validator_callback(payload):
+            scene_id_value = str(payload.get("scene_id") or "")
+            prompt_item = prompt_by_scene_id.get(scene_id_value, {})
+            validator_payload = {
+                "scene_id": scene_id_value,
+                "attempt": int(payload.get("attempt") or 1),
+                "generated_image_path": str(
+                    payload.get("generated_image_path") or ""
+                ),
+                "image_path": str(
+                    payload.get("generated_image_path") or ""
+                ),
+                "reference_image_path": str(
+                    payload.get("reference_image_path") or ""
+                ),
+                "prompt": str(payload.get("prompt") or ""),
+                "negative_prompt": str(
+                    payload.get("negative_prompt") or ""
+                ),
+                "fidelity_threshold": max(
+                    94.0,
+                    float(payload.get("fidelity_threshold") or 94.0),
+                ),
+                "identity_threshold": 94.0,
+                "critical_geometry_features": list(
+                    prompt_item.get("critical_geometry_features") or []
+                ),
+                "locked_attributes": list(
+                    prompt_item.get("locked_attributes") or []
+                ),
+                "reject_on_geometry_drift": True,
+                "reject_if_holes_or_sole_changed": True,
+                "comparison_mode": "reference_vs_generated_strict_geometry",
+            }
+            method_name, raw = call_public_method(
+                validator_engine,
+                (
+                    "validate",
+                    "analyze",
+                    "evaluate",
+                    "inspect",
+                    "run",
+                ),
+                validator_payload,
+            )
+            result["validator"]["method"] = method_name
+            return raw
+
+        try:
+            closed_loop_result = image_director.execute_closed_loop(
+                product_name=director_result.get("product_name", ""),
+                scenes=director_result.get("scenes"),
+                scene_image_plan=director_result,
+                output_dir=str(output_dir or ""),
+                image_generator=image_generator_callback,
+                image_validator=image_validator_callback,
+                max_attempts=4,
+                threshold=94.0,
+                save_result=True,
+            )
+        except Exception as exc:
+            result["status"] = "closed_loop_failed"
+            result["errors"].append(f"{type(exc).__name__}: {exc}")
+            result["closed_loop_result"] = dict(director_result)
+            return result
+
+        generation_runs = [
+            item
+            for item in list(
+                (closed_loop_result or {}).get("generation_runs") or []
+            )
+            if isinstance(item, dict)
+        ]
+        selected_image_paths = []
+        for item in generation_runs:
+            selected_path_text = str(
+                item.get("selected_image_path") or ""
+            ).strip()
+            if not selected_path_text:
+                continue
+            selected_path = Path(selected_path_text)
+            if selected_path.is_file() and selected_path.stat().st_size > 0:
+                selected_image_paths.append(str(selected_path))
+            else:
+                result["warnings"].append(
+                    "선택 경로에 실제 이미지 파일이 없습니다: "
+                    + selected_path_text
+                )
+
+        selected_image_count = len(selected_image_paths)
+        passed_scene_count = sum(
+            1
+            for item in generation_runs
+            if bool(item.get("passed"))
+            and str(item.get("selected_image_path") or "").strip()
+            in selected_image_paths
+        )
+        failed_scene_count = max(
+            0,
+            len(generation_runs) - passed_scene_count,
+        )
+
+        # Sprint141-7:
+        # execute_closed_loop()의 최종 결과를 Director JSON에 반드시 다시 저장합니다.
+        # 초기 build() 결과가 같은 파일에 먼저 저장되어 있어도 Closed Loop 결과로
+        # 덮어써 generation_runs와 fidelity_results가 유실되지 않게 합니다.
+        persistence_result = {
+            "ok": False,
+            "status": "not_saved",
+            "path": "",
+            "errors": [],
+        }
+        try:
+            closed_loop_payload = (
+                dict(closed_loop_result)
+                if isinstance(closed_loop_result, dict)
+                else {}
+            )
+            closed_loop_payload["workflow_connection_version"] = (
+                "workflow-ai-image-closed-loop-141-7"
+            )
+            closed_loop_payload["workflow_version"] = self.WORKFLOW_VERSION
+            closed_loop_payload["network_retry_enabled"] = True
+            closed_loop_payload["provider_failure_count"] = int(
+                result.get("provider_failure_count") or 0
+            )
+            closed_loop_payload["provider_failures"] = list(
+                result.get("provider_failures") or []
+            )
+            closed_loop_payload["selected_image_paths_verified"] = list(
+                selected_image_paths
+            )
+            closed_loop_payload["selected_image_count_verified"] = int(
+                selected_image_count
+            )
+            closed_loop_payload["empty_generation_blocked"] = (
+                selected_image_count <= 0
+            )
+
+            target_path_value = str(
+                closed_loop_payload.get("result_path")
+                or director_result.get("result_path")
+                or ""
+            ).strip()
+            if target_path_value:
+                target_path = Path(target_path_value)
+                if not target_path.is_absolute():
+                    normalized_target = str(target_path).replace("\\", "/")
+                    normalized_output = str(output_dir or "").replace("\\", "/").rstrip("/")
+                    if not (
+                        normalized_output
+                        and normalized_target.startswith(normalized_output + "/")
+                    ):
+                        target_path = Path(str(output_dir or ".")) / target_path.name
+            else:
+                target_path = (
+                    Path(str(output_dir or "."))
+                    / "ai_image_director_141_7.json"
+                )
+
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+            closed_loop_payload["result_path"] = str(target_path)
+            target_path.write_text(
+                json.dumps(
+                    closed_loop_payload,
+                    ensure_ascii=False,
+                    indent=2,
+                    default=str,
+                ),
+                encoding="utf-8",
+            )
+            closed_loop_result = closed_loop_payload
+            persistence_result.update(
+                ok=True,
+                status="saved",
+                path=str(target_path),
+            )
+        except Exception as exc:
+            persistence_result.update(
+                status="save_failed",
+                errors=[f"{type(exc).__name__}: {exc}"],
+            )
+
+        print(
+            "[Sprint141-7 Closed Loop Persistence] Status:",
+            persistence_result.get("status", ""),
+            flush=True,
+        )
+        print(
+            "[Sprint141-7 Closed Loop Persistence] Path:",
+            persistence_result.get("path", ""),
+            flush=True,
+        )
+        print(
+            "[Sprint141-7 Closed Loop Persistence] Generation Runs:",
+            len(list((closed_loop_result or {}).get("generation_runs") or [])),
+            flush=True,
+        )
+        print(
+            "[Sprint141-7 Closed Loop Persistence] Fidelity Results:",
+            len(list((closed_loop_result or {}).get("fidelity_results") or [])),
+            flush=True,
+        )
+        print(
+            "[Sprint141-7 Closed Loop Persistence] Errors:",
+            persistence_result.get("errors", []),
+            flush=True,
+        )
+
+        closed_loop_ok = bool(
+            (closed_loop_result or {}).get("ok")
+        )
+        closed_loop_ready = bool(
+            (closed_loop_result or {}).get("ready")
+        )
+        resolved_status = str(
+            (closed_loop_result or {}).get("status")
+            or "closed_loop_completed"
+        )
+
+        if selected_image_count <= 0:
+            closed_loop_ok = False
+            closed_loop_ready = False
+            resolved_status = "blocked_no_generated_images"
+            result["empty_generation_blocked"] = True
+            result["errors"].append(
+                "Gemini 생성 이미지가 0장이므로 다음 영상 제작 단계 진입을 차단했습니다."
+            )
+            print(
+                "[Sprint152-2 Empty Generation Guard] Blocked: True",
+                flush=True,
+            )
+        else:
+            print(
+                "[Sprint152-2 Empty Generation Guard] Blocked: False",
+                flush=True,
+            )
+
+        result.update(
+            ok=closed_loop_ok,
+            ready=closed_loop_ready,
+            status=resolved_status,
+            closed_loop_result=closed_loop_result,
+            selected_image_count=selected_image_count,
+            selected_image_paths=selected_image_paths,
+            passed_scene_count=passed_scene_count,
+            failed_scene_count=failed_scene_count,
+            provider_failure_count=len(result["provider_failures"]),
+            persistence=persistence_result,
+        )
+        if persistence_result.get("errors"):
+            result["warnings"].extend(persistence_result["errors"])
+        return result
+
+
     def _sprint112_1_clean_render_text(self, value, stats):
         """Sprint112-1: 화면 자막에서 내부 장면 연출 문구를 제거합니다."""
         if not isinstance(value, str):
@@ -2088,22 +2985,975 @@ class WorkflowEngine:
         guarded = walk(payload)
         return guarded, stats
 
+    def _run_sprint143_2_viral_script_feedback(
+        self,
+        viral_pipeline_result,
+        review_script_result,
+        product_name,
+    ):
+        """최종 대본 장면 자막을 viral_story와 viral_director에 다시 반영합니다."""
+        result = {
+            "ok": False,
+            "ready": False,
+            "version": "viral-script-director-feedback-143-3",
+            "status": "not_started",
+            "story": {},
+            "director": {},
+            "errors": [],
+            "warnings": [],
+        }
+        try:
+            pipeline = viral_pipeline_result if isinstance(viral_pipeline_result, dict) else {}
+            script = review_script_result if isinstance(review_script_result, dict) else {}
+            output_dir = Path(str(pipeline.get("output_dir") or "")).expanduser()
+            if not pipeline.get("ok") or not output_dir:
+                result["status"] = "skipped_no_viral_pipeline"
+                result["warnings"].append("사용 가능한 Viral Pipeline 결과가 없습니다")
+                return result
+            scenes_path = output_dir / "viral_scenes.json"
+            if not scenes_path.is_file():
+                step = pipeline.get("steps", {}).get("scene_detector", {})
+                candidate = Path(str(step.get("output_path") or "")).expanduser()
+                if candidate.is_file():
+                    scenes_path = candidate
+            if not scenes_path.is_file():
+                result["status"] = "skipped_no_viral_scenes"
+                result["warnings"].append(f"viral_scenes.json 없음: {scenes_path}")
+                return result
+
+            from modules.content.viral.viral_story_analyzer import ViralStoryAnalyzer
+            from modules.content.viral.viral_director import ViralDirector
+
+            story_path = output_dir / "viral_story.json"
+            director_path = output_dir / "viral_director.json"
+            story_result = ViralStoryAnalyzer().analyze(
+                scenes_path=scenes_path,
+                output_path=story_path,
+                product_name=product_name,
+                script_result=script,
+            )
+            director_result = {}
+            if story_result.get("ok"):
+                director_result = ViralDirector().build(
+                    story_path=story_path,
+                    output_path=director_path,
+                    product_name=product_name,
+                )
+            story_scene_count = int(story_result.get("scene_count") or 0)
+            director_scene_count = int(director_result.get("scene_count") or 0)
+            scene_count_consistent = bool(
+                story_scene_count > 0 and story_scene_count == director_scene_count
+            )
+            result.update({
+                "ok": bool(story_result.get("ok") and director_result.get("ok") and scene_count_consistent),
+                "ready": bool(story_result.get("ok") and director_result.get("ok") and scene_count_consistent),
+                "status": "closed_loop_completed"
+                if story_result.get("ok") and director_result.get("ok") and scene_count_consistent
+                else "closed_loop_failed",
+                "story": story_result,
+                "director": director_result,
+                "story_scene_count": story_scene_count,
+                "director_scene_count": director_scene_count,
+                "scene_count_consistent": scene_count_consistent,
+            })
+            if story_result.get("ok") and director_result.get("ok") and not scene_count_consistent:
+                result["errors"].append(
+                    f"scene_count_mismatch: story={story_scene_count}, director={director_scene_count}"
+                )
+        except Exception as exc:
+            result["status"] = "exception"
+            result["errors"].append(f"{type(exc).__name__}: {exc}")
+
+        print("######## SPRINT143-3 VIRAL SCRIPT DIRECTOR CLOSED LOOP ########", flush=True)
+        print("[Sprint143-3 Closed Loop] Version:", result.get("version", ""), flush=True)
+        print("[Sprint143-3 Closed Loop] Status:", result.get("status", ""), flush=True)
+        print("[Sprint143-3 Closed Loop] Story Used:", result.get("story", {}).get("script_feedback", {}).get("used", False), flush=True)
+        print("[Sprint143-3 Closed Loop] Story Scenes:", result.get("story_scene_count", 0), flush=True)
+        print("[Sprint143-3 Closed Loop] Director Scenes:", result.get("director_scene_count", 0), flush=True)
+        print("[Sprint143-3 Closed Loop] Scene Count Consistent:", result.get("scene_count_consistent", False), flush=True)
+        print("[Sprint143-3 Closed Loop] Errors:", result.get("errors", []), flush=True)
+        return result
+
+    def _resolve_sprint137_viral_video_path(
+        self,
+        viral_video_sources=None,
+        viral_library_result=None,
+    ):
+        """Sprint137-1: 수동 입력 또는 Viral Library 결과에서 실제 영상 파일을 찾습니다."""
+        supported = {".mp4", ".mov", ".m4v", ".webm", ".avi", ".mkv"}
+        candidates = []
+
+        def collect(value):
+            if value is None:
+                return
+            if isinstance(value, (str, Path)):
+                candidates.append(str(value))
+                return
+            if isinstance(value, dict):
+                priority_keys = (
+                    "local_path", "video_path", "saved_path", "output_path",
+                    "download_path", "file_path", "path", "source_path",
+                )
+                for key in priority_keys:
+                    if value.get(key):
+                        collect(value.get(key))
+                for key, child in value.items():
+                    if key not in priority_keys:
+                        collect(child)
+                return
+            if isinstance(value, (list, tuple, set)):
+                for child in value:
+                    collect(child)
+
+        collect(viral_video_sources or [])
+        collect(viral_library_result or {})
+
+        seen = set()
+        for raw_value in candidates:
+            value = str(raw_value or "").strip()
+            if not value or value.lower().startswith(("http://", "https://")):
+                continue
+            path = Path(value).expanduser()
+            try:
+                key = str(path.resolve()).lower()
+            except Exception:
+                key = str(path).lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            if path.is_file() and path.suffix.lower() in supported:
+                return str(path)
+        return ""
+
+
+    def _run_sprint145_2_script_first_only(
+        self,
+        project,
+        review_text,
+        viral_video_sources,
+        declared_review_count=0,
+        review_checked_at="",
+        rating=0,
+        monthly_purchase_count=0,
+        input_product_name="",
+    ):
+        """현재 실행에서 전달된 상품명·리뷰만 사용해 최종 대본을 생성합니다."""
+        project_product_name = str(
+            getattr(project, "product_name", "")
+            or getattr(project, "title", "")
+            or ""
+        ).strip()
+        product_name = str(input_product_name or project_product_name or "선택 상품").strip()
+        project_id = str(getattr(project, "id", "") or "default")
+        output_dir = Path("assets") / "products" / f"project_{project_id}"
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        normalized_review_text = str(review_text or "").strip()
+        review_hash = hashlib.sha256(normalized_review_text.encode("utf-8")).hexdigest()
+        isolation_errors = []
+        if not product_name:
+            isolation_errors.append("missing_current_product_name")
+        if input_product_name and project_product_name and product_name != project_product_name:
+            isolation_errors.append("project_product_name_mismatch")
+
+        print(
+            "[Sprint146-3 Project Isolation] INPUT",
+            {
+                "project_id": project_id,
+                "input_product_name": str(input_product_name or ""),
+                "project_product_name": project_product_name,
+                "resolved_product_name": product_name,
+                "review_chars": len(normalized_review_text),
+                "review_hash": review_hash,
+                "errors": isolation_errors,
+            },
+            flush=True,
+        )
+
+        raw_blocks = [
+            " ".join(block.split()).strip()
+            for block in re.split(r"\n\s*\n|(?<=\.)\s*\n", normalized_review_text)
+            if " ".join(block.split()).strip()
+        ]
+        if len(raw_blocks) <= 1:
+            raw_blocks = [
+                " ".join(line.split()).strip()
+                for line in str(review_text or "").splitlines()
+                if " ".join(line.split()).strip()
+            ]
+        reviews = raw_blocks
+        declared_count = max(0, int(declared_review_count or 0))
+        project_data = self._project_data(project)
+        stored_rating = self._find_nested_value(
+            project_data,
+            ("rating", "review_rating", "star_rating", "product_rating"),
+        )
+        stored_monthly = self._find_nested_value(
+            project_data,
+            (
+                "monthly_purchase_count",
+                "recent_month_purchase_count",
+                "monthly_purchases",
+                "purchase_count_monthly",
+                "recent_purchase_count",
+            ),
+        )
+        try:
+            trust_rating = float(rating or stored_rating or 0)
+        except Exception:
+            trust_rating = 0.0
+        trust_rating = max(0.0, min(5.0, trust_rating))
+        try:
+            trust_monthly_purchases = max(0, int(monthly_purchase_count or stored_monthly or 0))
+        except Exception:
+            trust_monthly_purchases = 0
+
+        print(
+            "[Sprint145-21 Trust Resolve]",
+            {
+                "argument_monthly": monthly_purchase_count,
+                "stored_monthly": stored_monthly,
+                "resolved_monthly": trust_monthly_purchases,
+                "argument_rating": rating,
+                "stored_rating": stored_rating,
+                "resolved_rating": trust_rating,
+            },
+            flush=True,
+        )
+
+        outputs = {
+            "workflow_version": self.WORKFLOW_VERSION,
+            "execution_mode": "locked_script_full_pipeline",
+            "product_name": product_name,
+            "project_identity": {
+                "version": "project-review-isolation-146-3",
+                "project_id": project_id,
+                "input_product_name": str(input_product_name or "").strip(),
+                "project_product_name": project_product_name,
+                "resolved_product_name": product_name,
+                "review_hash": review_hash,
+                "review_character_count": len(normalized_review_text),
+            },
+            "review_metadata": {
+                "declared_review_count": declared_count,
+                "parsed_review_count": len(reviews),
+                "review_checked_at": str(review_checked_at or "").strip(),
+                "rating": trust_rating,
+                "monthly_purchase_count": trust_monthly_purchases,
+            },
+            "input_gate": {
+                "product_name_ready": bool(product_name),
+                "review_text_ready": bool(str(review_text or "").strip()),
+                "review_count_ready": declared_count > 0,
+                "review_checked_at_ready": bool(str(review_checked_at or "").strip()),
+                "viral_link_optional": True,
+                "viral_link_ready": bool(viral_video_sources),
+            },
+        }
+
+        errors = list(isolation_errors)
+        if not normalized_review_text: errors.append("리뷰 텍스트가 없습니다.")
+        if declared_count <= 0: errors.append("리뷰 개수가 1개 이상이어야 합니다.")
+        if not str(review_checked_at or "").strip(): errors.append("리뷰 확인일이 없습니다.")
+        print(
+            "[Sprint145-16 Viral Optional]",
+            {
+                "provided": bool(viral_video_sources),
+                "source_count": len(viral_video_sources or []),
+                "required": False,
+            },
+            flush=True,
+        )
+
+        if errors:
+            status = {"status": "REVISION_REQUIRED", "approved": False, "errors": errors}
+            outputs["script_approval"] = status
+            print("[Sprint145-14 Sales Quality] SCRIPT STATUS: REVISION_REQUIRED", flush=True)
+            return {"job_id": uuid4().hex[:12], "state": {}, "outputs": outputs, "summary": "대본 입력 검증 실패", "script_status": "REVISION_REQUIRED"}
+
+        try:
+            insight = ReviewInsightEngine().analyze(
+                reviews=reviews, social_comments=[], product_name=product_name
+            )
+        except Exception as exc:
+            insight = {"ok": False, "review_count": len(reviews), "error": f"{type(exc).__name__}: {exc}"}
+        if isinstance(insight, dict):
+            insight_name = str(insight.get("product_name") or "").strip()
+            if insight_name and insight_name != product_name:
+                errors.append("review_insight_product_name_mismatch")
+            insight["product_name"] = product_name
+            insight["project_id"] = project_id
+            insight["review_hash"] = review_hash
+        outputs["review_insight"] = insight
+
+        print(
+            "[Sprint146-3 Project Isolation] REVIEW_INSIGHT",
+            {"product_name": product_name, "project_id": project_id, "review_hash": review_hash, "errors": errors},
+            flush=True,
+        )
+
+        try:
+            quotes = ReviewQuoteSelector().select(reviews=reviews, product_name=product_name, top_n=5)
+        except Exception as exc:
+            quotes = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+        outputs["review_quotes"] = quotes
+
+        try:
+            hooks = ReviewHookGenerator().generate(
+                review_quotes=quotes, review_insight=insight, product_name=product_name,
+                review_count=declared_count or len(reviews),
+            )
+            hooks = HookOptimizer().apply_to_review_hooks(
+                review_hooks=hooks, review_insight=insight, product_name=product_name,
+                review_count=declared_count or len(reviews),
+            )
+        except Exception as exc:
+            hooks = {"ok": False, "best_hook": "", "error": f"{type(exc).__name__}: {exc}"}
+        if isinstance(hooks, dict):
+            hook_name = str(hooks.get("product_name") or "").strip()
+            if hook_name and hook_name != product_name:
+                errors.append("review_hooks_product_name_mismatch")
+            hooks["product_name"] = product_name
+            hooks["project_id"] = project_id
+            hooks["review_hash"] = review_hash
+        outputs["review_hooks"] = hooks
+
+        viral_provided = bool(viral_video_sources)
+        viral_library = {
+            "ok": True,
+            "ready": False,
+            "status": "skipped_optional_no_source" if not viral_provided else "not_run",
+            "items": [],
+            "requested_count": len(viral_video_sources or []),
+        }
+        viral_pipeline = {
+            "ok": True,
+            "ready": False,
+            "status": "skipped_optional_no_source" if not viral_provided else "not_run",
+            "errors": [],
+        }
+
+        print(
+            "[Sprint145-17 Viral Optional]",
+            {
+                "provided": viral_provided,
+                "source_count": len(viral_video_sources or []),
+                "library_skipped": not viral_provided,
+                "pipeline_skipped": not viral_provided,
+            },
+            flush=True,
+        )
+
+        if viral_provided:
+            try:
+                viral_library = ViralLibraryIngestor(max_items=10).ingest(
+                    sources=viral_video_sources,
+                    project_id=project_id,
+                    overwrite=True,
+                    save=True,
+                )
+                local_video = self._resolve_sprint137_viral_video_path(
+                    viral_video_sources=viral_video_sources,
+                    viral_library_result=viral_library,
+                )
+                if local_video:
+                    viral_pipeline = run_viral_pipeline(
+                        video_path=local_video,
+                        output_dir=output_dir / "viral_pipeline_145_2",
+                        product_name=product_name,
+                        product_description="",
+                        brand_name="",
+                        best_hook=str(hooks.get("best_hook") or "").strip(),
+                        best_pain=str(
+                            quotes.get("best_pain")
+                            or insight.get("best_pain")
+                            or insight.get("best_pain_point")
+                            or ""
+                        ).strip(),
+                        best_benefit=str(
+                            quotes.get("best_benefit")
+                            or insight.get("best_benefit")
+                            or ""
+                        ).strip(),
+                        best_evidence=str(
+                            quotes.get("best_quote")
+                            or insight.get("best_evidence")
+                            or ""
+                        ).strip(),
+                        cta_text="구매 전 상세 정보와 실제 사용 조건을 확인해 보세요",
+                        frame_interval_seconds=2.0,
+                        max_thumbnail_count=30,
+                        overwrite=True,
+                    )
+                else:
+                    viral_pipeline = {
+                        "ok": False,
+                        "ready": False,
+                        "status": "no_local_video",
+                        "errors": ["바이럴 링크에서 분석 가능한 영상을 확보하지 못했습니다."],
+                    }
+            except Exception as exc:
+                viral_pipeline = {
+                    "ok": False,
+                    "ready": False,
+                    "status": "exception",
+                    "errors": [f"{type(exc).__name__}: {exc}"],
+                }
+
+        outputs["viral_library"] = viral_library
+        outputs["viral_pipeline"] = viral_pipeline
+
+        try:
+            script = ReviewScriptGenerator().generate(
+                review_hooks=hooks, review_quotes=quotes, review_insight=insight,
+                product_name=product_name, review_count=declared_count or len(reviews),
+                story_intelligence={}, viral_pipeline=viral_pipeline,
+                rating=trust_rating, monthly_purchase_count=trust_monthly_purchases,
+                review_checked_at=review_checked_at,
+            )
+        except Exception as exc:
+            script = {"ok": False, "best_script": "", "scripts": [], "errors": [f"{type(exc).__name__}: {exc}"]}
+        if isinstance(script, dict):
+            script_name = str(script.get("product_name") or "").strip()
+            if script_name and script_name != product_name:
+                errors.append("review_scripts_product_name_mismatch")
+            script["product_name"] = product_name
+            script["project_id"] = project_id
+            script["review_hash"] = review_hash
+        outputs["review_scripts"] = script
+        print(
+            "[Sprint146-3 Project Isolation] SCRIPT",
+            {"product_name": product_name, "project_id": project_id, "review_hash": review_hash, "errors": errors},
+            flush=True,
+        )
+        print("[Sprint145-14 Trust] Rating:", trust_rating, flush=True)
+        print("[Sprint145-14 Trust] Review Count:", declared_count, flush=True)
+        print("[Sprint145-14 Trust] Monthly Purchases:", trust_monthly_purchases, flush=True)
+        print("[Sprint145-14 Trust] Structure: READY", flush=True)
+
+        best_script = str(script.get("best_script") or "").strip()
+        validation_errors = list(dict.fromkeys(errors))
+        if not bool(insight.get("ok")):
+            validation_errors.append("review_analysis_failed")
+        if not bool(script.get("ok")):
+            validation_errors.append("script_generation_failed")
+
+        # Sprint145-17: 바이럴은 선택 입력입니다.
+        # 입력한 경우에만 바이럴 분석과 대본 반영 여부를 승인 조건으로 검사합니다.
+        if viral_provided:
+            if not bool(viral_pipeline.get("ready") or viral_pipeline.get("ok")):
+                validation_errors.append("viral_analysis_failed")
+            if not bool(script.get("viral_influence_used")):
+                validation_errors.append("viral_influence_missing")
+
+        closed_loop = ScriptClosedLoop(max_revisions=3).run(
+            script_text=best_script,
+            validator=ReviewScriptGenerator().validate_script_quality,
+            product_name=product_name,
+            review_insight=insight,
+            review_quotes=quotes,
+        )
+        outputs["script_closed_loop"] = closed_loop
+
+        final_script = str(closed_loop.get("final_script") or best_script).strip()
+        quality_validation = dict(closed_loop.get("final_validation") or {})
+
+        # Sprint145-20: 소비자 언어로 정리된 신뢰 대본을 최종 원본으로 잠급니다.
+        # ScriptClosedLoop와 ScriptRevisionEngine은 진단 정보만 남기며,
+        # 고정 후킹·리뷰 확인 문장·CTA를 다시 쓰지 못합니다.
+        canonical_script = best_script
+
+        # Sprint145-21: 생성기 내부 전달 누락이 있어도 workflow에서 확인된 신뢰 수치를
+        # 최종 대본 첫 문장에 강제로 복원합니다.
+        trust_lines = []
+        if trust_monthly_purchases > 0:
+            trust_lines.append(f"최근 한 달 {trust_monthly_purchases:,}명 이상이 구매한 제품!")
+        if declared_count > 0:
+            trust_lines.append(f"찐리뷰 {declared_count:,}개!")
+        if trust_rating > 0:
+            rounded_half = int(trust_rating * 2 + 0.5) / 2
+            full_stars = int(rounded_half)
+            stars = ("⭐" * full_stars) + ("½" if rounded_half - full_stars >= 0.5 else "")
+            trust_lines.append(f"평점 {trust_rating:.1f}점! {stars}".strip())
+
+        body = str(canonical_script or "").strip()
+        body = re.sub(r"^(?:최근 한 달 [^.!?]+[.!?]?\s*)", "", body)
+        body = re.sub(r"^(?:찐리뷰 [0-9,]+개![ ]*)", "", body)
+        body = re.sub(r"^(?:평점 [0-9.]+점![^가-힣A-Za-z0-9]*\s*)", "", body)
+        final_script = " ".join([*trust_lines, body]).strip()
+
+        quality_validation = ReviewScriptGenerator().validate_script_quality(
+            script_text=final_script,
+            product_name=product_name,
+        )
+        final_spoken_revision = {
+            "version": "trust-script-final-lock-145-21",
+            "status": "skipped_canonical_trust_script",
+            "revised_text": final_script,
+            "changes": [],
+            "reason": "고정 신뢰 후킹과 CTA 보존을 위해 마지막 재작성을 건너뛰었습니다.",
+        }
+        outputs["final_spoken_revision"] = final_spoken_revision
+        outputs["script_quality_validation"] = quality_validation
+        outputs["trust_script_final_lock"] = {
+            "version": "trust-script-final-lock-145-21",
+            "locked": True,
+            "hook": " ".join(trust_lines).strip(),
+            "review_bridge_required": True,
+            "cta": "👉 궁금하시면 클릭! 👇",
+            "final_script": final_script,
+        }
+        print("######## SPRINT145-21 CONSUMER TRUST SCRIPT FINAL LOCK READY ########", flush=True)
+        print("[Sprint145-21 Final Lock] Locked:", True, flush=True)
+        print("[Sprint145-21 Final Lock] Hook:", outputs["trust_script_final_lock"]["hook"], flush=True)
+        print("[Sprint145-21 Final Lock] CTA:", outputs["trust_script_final_lock"]["cta"], flush=True)
+        print("[Sprint145-21 Final Lock] Script:", final_script, flush=True)
+        print("[Sprint145-21 Final Lock] Validation:", quality_validation.get("status", ""), quality_validation.get("errors", []), flush=True)
+
+        # 생성·리뷰·바이럴 단계의 구조적 실패는 자동 문장 수정으로 숨기지 않습니다.
+        # 대본 문장 품질 오류만 Closed Loop에서 최대 3회 자동 수정합니다.
+        final_errors = list(validation_errors)
+        quality_error_codes = set(quality_validation.get("errors") or [])
+        initial_quality_codes = {
+            "incomplete_sentence",
+            "duplicate_content",
+            "duplicate_cta",
+            "invalid_context_transition",
+            "script_too_short",
+            "hook_score_low",
+            "flow_score_low",
+            "review_naturalness_low",
+            "sales_persuasion_low",
+            "shorts_rhythm_low",
+            "cta_quality_low",
+            "sales_quality_score_low",
+        }
+        final_errors = [
+            error for error in final_errors
+            if error not in initial_quality_codes
+        ]
+        for error_code in quality_error_codes:
+            if error_code not in final_errors:
+                final_errors.append(error_code)
+
+        approved = bool(final_script) and bool(quality_validation.get("approved") or quality_validation.get("passed") or quality_validation.get("status") == "APPROVED") and not final_errors
+        script_status = "APPROVED" if approved else (
+            "FAILED_MAX_RETRY"
+            if closed_loop.get("status") == "FAILED_MAX_RETRY"
+            else "REVISION_REQUIRED"
+        )
+        duplicated = list(quality_validation.get("duplicate_sentences") or [])
+        approval = {
+            "version": "script-approval-gate-145-19",
+            "status": script_status,
+            "approved": approved,
+            "errors": final_errors,
+            "duplicate_sentences": duplicated,
+            "quality_validation": quality_validation,
+            "closed_loop_version": closed_loop.get("version", ""),
+            "sales_quality_score": float(closed_loop.get("sales_quality_score", 0) or 0),
+            "sales_quality_scores": dict(closed_loop.get("scores") or {}),
+            "revision_count": int(closed_loop.get("revision_count", 0) or 0),
+            "validation_count": int(closed_loop.get("validation_count", 0) or 0),
+            "max_revisions": int(closed_loop.get("max_revisions", 3) or 3),
+            "review_count": declared_count,
+            "review_checked_at": str(review_checked_at or "").strip(),
+            "rating": trust_rating,
+            "monthly_purchase_count": trust_monthly_purchases,
+            "trust_profile": dict(script.get("trust_profile") or {}),
+            "viral_influence_used": bool(script.get("viral_influence_used")),
+            "best_script_type": script.get("best_script_type", ""),
+            "best_script": final_script,
+            "original_script": best_script,
+        }
+        outputs["review_scripts"]["original_best_script"] = best_script
+        outputs["review_scripts"]["best_script"] = final_script
+        outputs["review_scripts"]["script_closed_loop"] = closed_loop
+        outputs["script_approval"] = approval
+        result_path = output_dir / "script_first_result_146_4.json"
+        result_path.write_text(json.dumps(outputs, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+        outputs["script_result_path"] = str(result_path)
+        next_stage_status = (
+            "READY_APPROVED_FULL_PIPELINE"
+            if approved
+            else "BLOCKED_SCRIPT_NOT_APPROVED"
+        )
+        outputs["next_stage_gate"] = {
+            "version": "locked-script-full-pipeline-gate-146-5b",
+            "execution_mode": "locked_script_full_pipeline",
+            "status": next_stage_status,
+            "script_approved": approved,
+            "scene_image_motion_video_executed": False,
+            "reason": (
+                "승인된 대본을 잠그고 ImageMotion 이후 전체 영상 파이프라인을 실행합니다."
+                if approved
+                else "대본이 승인되지 않아 후속 단계를 실행하지 않았습니다."
+            ),
+        }
+        # next_stage_gate를 포함한 최종 결과를 다시 저장합니다.
+        result_path.write_text(
+            json.dumps(outputs, ensure_ascii=False, indent=2, default=str),
+            encoding="utf-8",
+        )
+        print(f"[Sprint145-14 Sales Quality] SCRIPT STATUS: {script_status}", flush=True)
+        print(
+            f"[Sprint145-14 Sales Quality] Scene/Image/Motion/Video: {next_stage_status}",
+            flush=True,
+        )
+        print(
+            "[Sprint145-14 Sales Quality] Result Path:",
+            str(result_path),
+            flush=True,
+        )
+        return {
+            "job_id": uuid4().hex[:12], "state": {}, "outputs": outputs,
+            "summary": "최종 대본 승인 완료" if approved else "대본 자동 수정 한도 초과",
+            "script_status": script_status,
+            "next_stage_status": next_stage_status,
+        }
+
+    def _sprint147_3_generate_one_image(self, prompt_item, output_path):
+        """Sprint150-3: 참조 이미지 누락을 프로젝트 원본으로 복구하고 생성기 오류를 전달합니다."""
+        generator_class = None
+        import_errors = []
+        for module_name, class_name in (
+            ("modules.image_ai.gemini_image_generator", "GeminiImageGenerator"),
+            ("modules.image_ai.ai_image_generator", "AIImageGenerator"),
+        ):
+            try:
+                module = __import__(module_name, fromlist=[class_name])
+                candidate = getattr(module, class_name, None)
+                if candidate is not None:
+                    generator_class = candidate
+                    break
+            except Exception as exc:
+                import_errors.append(f"{module_name}: {type(exc).__name__}: {exc}")
+        if generator_class is None:
+            raise RuntimeError("이미지 생성기 import 실패: " + " | ".join(import_errors))
+
+        engine = generator_class()
+        output_path = Path(str(output_path))
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        reference_image_paths = prompt_item.get("reference_image_paths") or []
+        if not isinstance(reference_image_paths, (list, tuple, set)):
+            reference_image_paths = [reference_image_paths] if str(reference_image_paths or "").strip() else []
+
+        # Sprint150-3: AIImageDirector/ClosedLoop에서 참조 경로가 유실되더라도
+        # 현재 프로젝트의 실제 업로드 원본 1장을 반드시 복구합니다.
+        reference_candidates = []
+
+        def _add_reference(value):
+            if isinstance(value, dict):
+                value = (
+                    value.get("path")
+                    or value.get("image_path")
+                    or value.get("selected_image_path")
+                    or value.get("reference_image_path")
+                    or ""
+                )
+            text_value = str(value or "").strip()
+            if not text_value:
+                return
+            candidate = Path(text_value).expanduser()
+            if candidate.is_file():
+                normalized = str(candidate)
+                if normalized not in reference_candidates:
+                    reference_candidates.append(normalized)
+
+        _add_reference(prompt_item.get("reference_image_path"))
+        for item in reference_image_paths:
+            _add_reference(item)
+
+        for key in (
+            "selected_image_path",
+            "existing_image_path",
+            "product_image_path",
+            "source_image_path",
+            "image_path",
+        ):
+            _add_reference(prompt_item.get(key))
+
+        source_scene = prompt_item.get("source_scene")
+        if isinstance(source_scene, dict):
+            _add_reference(source_scene.get("reference_image_path"))
+            for item in list(source_scene.get("reference_image_paths") or []):
+                _add_reference(item)
+            for key in (
+                "selected_image_path",
+                "existing_image_path",
+                "product_image_path",
+                "source_image_path",
+                "image_path",
+            ):
+                _add_reference(source_scene.get(key))
+
+        # direct_output_dir는 assets/products/project_N/generated_review이므로
+        # 그 상위 프로젝트 폴더에서 00_main.* 및 원본 업로드 파일을 탐색합니다.
+        project_dir = output_path.parent.parent
+        if project_dir.is_dir():
+            for name in (
+                "00_main.png", "00_main.jpg", "00_main.jpeg", "00_main.webp",
+                "main.png", "main.jpg", "main.jpeg", "main.webp",
+            ):
+                _add_reference(project_dir / name)
+            for pattern in ("*_main.png", "*_main.jpg", "*_main.jpeg", "*_main.webp"):
+                for candidate in sorted(project_dir.glob(pattern)):
+                    _add_reference(candidate)
+
+        reference_image_path = reference_candidates[0] if reference_candidates else ""
+        print(
+            "[Sprint150-3 Reference Route]",
+            {
+                "scene_id": str(prompt_item.get("scene_id") or output_path.stem),
+                "project_dir": str(project_dir),
+                "reference_image_path": reference_image_path,
+                "reference_image_count": len(reference_candidates),
+            },
+            flush=True,
+        )
+
+        payload = {
+            "scene_id": str(prompt_item.get("scene_id") or output_path.stem),
+            "attempt": 1,
+            "prompt": str(prompt_item.get("prompt") or prompt_item.get("image_prompt") or ""),
+            "image_prompt": str(prompt_item.get("prompt") or prompt_item.get("image_prompt") or ""),
+            "negative_prompt": str(prompt_item.get("negative_prompt") or ""),
+            "reference_image_path": reference_image_path,
+            "reference_image_paths": reference_candidates[:1],
+            "require_reference_image": bool(prompt_item.get("require_reference_image", True)),
+            "output_image_path": str(output_path),
+            "output_path": str(output_path),
+            "overwrite": True,
+        }
+
+        last_error = None
+        for method_name in ("generate_image", "generate", "run", "create"):
+            method = getattr(engine, method_name, None)
+            if not callable(method):
+                continue
+            try:
+                raw = method(**payload)
+            except TypeError as exc:
+                last_error = exc
+                try:
+                    raw = method(payload)
+                except Exception as positional_exc:
+                    last_error = positional_exc
+                    continue
+            except Exception as exc:
+                last_error = exc
+                continue
+
+            candidate_path = ""
+            if isinstance(raw, dict):
+                candidate_path = str(
+                    raw.get("output_image_path")
+                    or raw.get("output_path")
+                    or raw.get("image_path")
+                    or raw.get("path")
+                    or ""
+                )
+                if not bool(raw.get("ok")):
+                    status = str(raw.get("status") or "generator_failed")
+                    errors = raw.get("errors") or []
+                    warnings = raw.get("warnings") or []
+                    detail = " | ".join(str(item) for item in errors if str(item).strip())
+                    warning_detail = " | ".join(str(item) for item in warnings if str(item).strip())
+                    print(
+                        "[Sprint150-2 Generator Result]",
+                        {
+                            "scene_id": payload["scene_id"],
+                            "version": raw.get("version"),
+                            "status": status,
+                            "reference_image_path": raw.get("reference_image_path"),
+                            "reference_image_count": raw.get("reference_image_count"),
+                            "errors": errors,
+                            "warnings": warnings,
+                        },
+                        flush=True,
+                    )
+                    message = f"이미지 생성 실패 [{status}]"
+                    if detail:
+                        message += f": {detail}"
+                    if warning_detail:
+                        message += f" | warnings: {warning_detail}"
+                    raise RuntimeError(message)
+            elif isinstance(raw, (str, Path)):
+                candidate_path = str(raw)
+
+            if candidate_path and Path(candidate_path).is_file():
+                return str(candidate_path)
+            if output_path.is_file():
+                return str(output_path)
+
+            last_error = RuntimeError(
+                f"이미지 생성기가 성공 결과를 반환했지만 파일이 없습니다: {candidate_path or output_path}"
+            )
+
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError("호출 가능한 이미지 생성 메서드를 찾지 못했습니다.")
+
     def run_project(
         self,
         project,
         sample_count=6,
         review_image_paths=None,
         review_text="",
+        locked_script="",
         product_image_paths=None,
         product_image_path="",
         youtube_privacy_status="private",
+        viral_video_sources=None,
+        declared_review_count=0,
+        review_checked_at="",
+        rating=0,
+        monthly_purchase_count=0,
+        input_product_name="",
+        stop_after_image_generation=False,
     ):
+        print(
+            "[Sprint147-5 WORKFLOW ENTRY]",
+            {
+                "stop_after_image_generation": bool(stop_after_image_generation),
+                "locked_script_chars": len(str(locked_script or "").strip()),
+                "product_image_count": len(list(product_image_paths or [])),
+                "workflow_version": self.WORKFLOW_VERSION,
+            },
+            flush=True,
+        )
         print(
             "[UTF8 TRACE run_project review_text ENTRY]",
             repr(review_text),
             flush=True,
         )
-         
+
+        # Sprint146-10: UI 인자 전달 실패나 DB 재조회가 있어도
+        # 원클릭 확정 대본 프로젝트는 절대로 리뷰 대본 생성 경로로 떨어지지 않습니다.
+        recovered_payload = {}
+        for raw_candidate in (
+            getattr(project, "data_json", None),
+            getattr(project, "payload", None),
+            getattr(project, "metadata_json", None),
+        ):
+            if isinstance(raw_candidate, dict):
+                recovered_payload.update(raw_candidate)
+            elif isinstance(raw_candidate, str) and raw_candidate.strip():
+                try:
+                    parsed_candidate = json.loads(raw_candidate)
+                    if isinstance(parsed_candidate, dict):
+                        recovered_payload.update(parsed_candidate)
+                except Exception:
+                    pass
+
+        project_source = str(
+            recovered_payload.get("source")
+            or getattr(project, "source", "")
+            or ""
+        ).strip()
+        locked_project = project_source in {
+            "one_click_locked_script_scene_image_direct",
+            "one_click_locked_script_full_production",
+            "one_click_ai_image_review_147_1",
+            "one_click_ai_image_review_147_3",
+        }
+
+        if not str(locked_script or "").strip():
+            locked_script = str(
+                recovered_payload.get("locked_script")
+                or recovered_payload.get("approved_script")
+                or recovered_payload.get("script")
+                or ""
+            ).strip()
+
+        if not input_product_name:
+            input_product_name = str(
+                recovered_payload.get("product_name")
+                or recovered_payload.get("title")
+                or ""
+            ).strip()
+        if not declared_review_count:
+            declared_review_count = int(
+                recovered_payload.get("declared_review_count")
+                or recovered_payload.get("review_count")
+                or 0
+            )
+        if not monthly_purchase_count:
+            monthly_purchase_count = int(
+                recovered_payload.get("monthly_purchase_count")
+                or 0
+            )
+        if not rating:
+            rating = float(recovered_payload.get("rating") or 0)
+        if not review_checked_at:
+            review_checked_at = str(
+                recovered_payload.get("review_checked_at") or ""
+            ).strip()
+
+        print(
+            "[Sprint146-10 RUN ENTRY]",
+            {
+                "workflow_version": self.WORKFLOW_VERSION,
+                "project_source": project_source,
+                "locked_project": locked_project,
+                "locked_script_chars": len(str(locked_script or "").strip()),
+                "monthly_purchase_count": int(monthly_purchase_count or 0),
+                "review_count": int(declared_review_count or 0),
+                "rating": float(rating or 0),
+                "review_checked_at": str(review_checked_at or ""),
+            },
+            flush=True,
+        )
+
+        if locked_project and not str(locked_script or "").strip():
+            print(
+                "[Sprint146-10 HARD BLOCK] LOCKED PROJECT WITHOUT SCRIPT - LEGACY GENERATOR NOT ALLOWED",
+                flush=True,
+            )
+            return {
+                "job_id": "",
+                "state": {},
+                "outputs": {
+                    "workflow_version": self.WORKFLOW_VERSION,
+                    "execution_mode": "locked_script_hard_block",
+                    "error": "locked_script_missing",
+                    "review_script_generator": "SKIPPED",
+                },
+                "summary": "확정 대본이 없어 실행을 중단했습니다. 리뷰 대본 자동 생성 경로는 실행하지 않았습니다.",
+                "script_status": "BLOCKED_LOCKED_SCRIPT_MISSING",
+            }
+
+        # Sprint146-11: 잠금 대본 모드는 장면 이미지가 반드시 있어야 합니다.
+        # 이미지가 없을 때도 기존 리뷰/대본 생성 경로로 폴백하지 않고 즉시 중단합니다.
+        supplied_scene_images = [
+            str(item).strip()
+            for item in list(product_image_paths or [])
+            if str(item).strip()
+        ]
+        if str(product_image_path or "").strip() and str(product_image_path).strip() not in supplied_scene_images:
+            supplied_scene_images.insert(0, str(product_image_path).strip())
+
+        if str(locked_script or "").strip() and not supplied_scene_images:
+            print(
+                "[Sprint146-11 HARD BLOCK] LOCKED SCRIPT WITHOUT SCENE IMAGES - LEGACY FALLBACK NOT ALLOWED",
+                flush=True,
+            )
+            return {
+                "job_id": "",
+                "state": {},
+                "outputs": {
+                    "workflow_version": self.WORKFLOW_VERSION,
+                    "execution_mode": "locked_script_hard_block",
+                    "error": "locked_scene_images_missing",
+                    "review_script_generator": "SKIPPED",
+                    "script_closed_loop": "SKIPPED",
+                    "medium_expander": "SKIPPED",
+                },
+                "summary": "확정 대본용 장면 이미지가 없어 실행을 중단했습니다. 기존 대본 생성 경로로는 전환하지 않았습니다.",
+                "script_status": "BLOCKED_LOCKED_SCENE_IMAGES_MISSING",
+            }
+
         """Sprint102-3: 동일 프로젝트의 동시 원클릭 실행을 한 번만 허용합니다."""
         project_key = str(getattr(project, "id", "") or id(project))
 
@@ -2135,14 +3985,29 @@ class WorkflowEngine:
         )
 
         try:
+            print(
+                "[Sprint146-11 ROUTE DECISION]",
+                "LOCKED_SCRIPT_FULL_PRODUCTION"
+                if str(locked_script or "").strip()
+                else "LEGACY_REVIEW_SCRIPT_PRODUCTION",
+                flush=True,
+            )
             return self._run_project_impl(
                 project=project,
                 sample_count=sample_count,
                 review_image_paths=review_image_paths,
                 review_text=review_text,
+                locked_script=locked_script,
                 product_image_paths=product_image_paths,
                 product_image_path=product_image_path,
                 youtube_privacy_status=youtube_privacy_status,
+                viral_video_sources=viral_video_sources,
+                declared_review_count=declared_review_count,
+                review_checked_at=review_checked_at,
+                rating=rating,
+                monthly_purchase_count=monthly_purchase_count,
+                input_product_name=input_product_name,
+                stop_after_image_generation=stop_after_image_generation,
             )
         finally:
             with self._RUN_GUARD:
@@ -2159,20 +4024,223 @@ class WorkflowEngine:
         sample_count=6,
         review_image_paths=None,
         review_text="",
+        locked_script="",
         product_image_paths=None,
         product_image_path="",
         youtube_privacy_status="private",
+        viral_video_sources=None,
+        declared_review_count=0,
+        review_checked_at="",
+        rating=0,
+        monthly_purchase_count=0,
+        input_product_name="",
+        stop_after_image_generation=False,
     ):
         review_image_paths = review_image_paths or []
         review_text = str(review_text or "").strip()
+        locked_script = str(locked_script or "").strip()
         product_image_paths = product_image_paths or []
         youtube_privacy_status = (
             self._normalize_youtube_privacy_status(
                 youtube_privacy_status
             )
         )
+        viral_video_sources = [
+            str(item).strip()
+            for item in list(viral_video_sources or [])
+            if str(item).strip()
+        ][:10]
+        # Sprint146-5B: 모든 실행 경로에서 script_status를 먼저 정의합니다.
+        # locked_script 분기와 기존 리뷰 대본 분기 모두 아래 후속 파이프라인에서
+        # 동일한 승인 상태를 안전하게 참조합니다.
+        script_status = ""
+        # Sprint146-12: 모든 실행 경로에서 장면 목록을 먼저 초기화합니다.
+        # 잠금 대본 경로가 기존 Story/Scene Bridge 구간을 건너뛰어도
+        # 후속 자막/영상 단계에서 UnboundLocalError가 발생하지 않습니다.
+        planned_scenes = []
+        # Sprint146-15: locked_script 경로가 레거시 Scene Image Planner 구간을
+        # 건너뛰더라도 후속 fallback/director 단계에서 안전하게 참조되도록
+        # scene_image_plan_result를 모든 실행 경로에서 먼저 초기화합니다.
+        image_generation_only_requested = bool(stop_after_image_generation)
         print(
-            "######## RUN_PROJECT SPRINT103-2 START ########",
+            "[Sprint147-7 IMAGE ROUTE] requested:",
+            image_generation_only_requested,
+            flush=True,
+        )
+        scene_image_plan_result = {
+            "ok": False,
+            "ready": False,
+            "version": getattr(SceneImagePlanner, "VERSION", ""),
+            "status": "not_run",
+            "scene_count": 0,
+            "scenes": [],
+            "errors": [],
+        }
+        print(
+            "[Sprint146-16 Scene Image Plan Safe] Initialized:",
+            True,
+            flush=True,
+        )
+        print(
+            "[Sprint146-11 HARD ROUTER]",
+            "LOCKED_SCRIPT" if locked_script else "LEGACY_REVIEW_SCRIPT",
+            flush=True,
+        )
+        if locked_script:
+            script_status = "APPROVED"
+            locked_lines = [
+                " ".join(line.split()).strip()
+                for line in re.split(r"(?<=[.!?])\s+|\n+", locked_script)
+                if " ".join(line.split()).strip()
+            ]
+            if not locked_lines:
+                locked_lines = [locked_script]
+
+            scene_subtitles = []
+            for index, line in enumerate(locked_lines, start=1):
+                if index == 1:
+                    purpose = "hook"
+                elif index == len(locked_lines):
+                    purpose = "cta"
+                elif index == 2:
+                    purpose = "pain"
+                elif index == 3:
+                    purpose = "feature"
+                elif index == 4:
+                    purpose = "usage"
+                else:
+                    purpose = "proof"
+
+                scene_subtitles.append(
+                    {
+                        "scene_id": f"scene_{index:02d}",
+                        "order": index,
+                        "purpose": purpose,
+                        "subtitle": line,
+                        "dialogue": line,
+                        "source": "locked_user_script",
+                    }
+                )
+
+            approved_script_text = locked_script
+            approved_review_scripts = {
+                "ok": True,
+                "version": "locked-user-script-146-11",
+                "status": "approved_script_locked",
+                "product_name": str(
+                    input_product_name
+                    or getattr(project, "product_name", "")
+                    or getattr(project, "title", "")
+                    or "선택 상품"
+                ).strip(),
+                "review_count": int(declared_review_count or 0),
+                "declared_review_count": int(declared_review_count or 0),
+                "monthly_purchase_count": int(monthly_purchase_count or 0),
+                "rating": float(rating or 0),
+                "review_checked_at": str(review_checked_at or "").strip(),
+                "trust_profile": {
+                    "monthly_purchase_count": int(monthly_purchase_count or 0),
+                    "review_count": int(declared_review_count or 0),
+                    "rating": float(rating or 0),
+                    "review_checked_at": str(review_checked_at or "").strip(),
+                },
+                "best_script": approved_script_text,
+                "original_best_script": approved_script_text,
+                "short_script": approved_script_text,
+                "medium_script": approved_script_text,
+                "long_script": approved_script_text,
+                "best_script_type": "locked_user_script",
+                "scene_subtitles": scene_subtitles,
+                "scene_subtitle_count": len(scene_subtitles),
+                "locked_user_script": True,
+            }
+            script_status = "APPROVED"
+            approved_outputs = {
+                "review_scripts": approved_review_scripts,
+                "script_approval": {
+                    "version": "locked-script-approval-146-11",
+                    "status": "APPROVED",
+                    "approved": True,
+                    "best_script": approved_script_text,
+                    "errors": [],
+                },
+            }
+            print(
+                "[Sprint146-5 Locked Script] APPROVED -> ImageMotion/Subtitle/Voice/Merge",
+                flush=True,
+            )
+            print(
+                "[Sprint146-5 Locked Script] Characters:",
+                len(approved_script_text),
+                flush=True,
+            )
+            print(
+                "[Sprint146-11 LOCKED SCRIPT HARD BYPASS] Scene Subtitles:",
+                len(scene_subtitles),
+                flush=True,
+            )
+            print(
+                "[Sprint146-11 LOCKED SCRIPT HARD BYPASS] ReviewScriptGenerator: SKIPPED",
+                flush=True,
+            )
+            print(
+                "[Sprint146-11 LOCKED SCRIPT HARD BYPASS] ScriptClosedLoop: SKIPPED",
+                flush=True,
+            )
+            print(
+                "[Sprint146-11 LOCKED SCRIPT HARD BYPASS] MediumExpander: SKIPPED",
+                flush=True,
+            )
+            print(
+                "[Sprint146-11 TRUST INPUT]",
+                {
+                    "monthly_purchase_count": int(monthly_purchase_count or 0),
+                    "review_count": int(declared_review_count or 0),
+                    "rating": float(rating or 0),
+                    "review_checked_at": str(review_checked_at or "").strip(),
+                },
+                flush=True,
+            )
+        else:
+            script_gate_result = self._run_sprint145_2_script_first_only(
+                project=project,
+                review_text=review_text,
+                viral_video_sources=viral_video_sources,
+                declared_review_count=declared_review_count,
+                review_checked_at=review_checked_at,
+                rating=rating,
+                monthly_purchase_count=monthly_purchase_count,
+                input_product_name=input_product_name,
+            )
+            script_status = str(script_gate_result.get("script_status") or "")
+            approved_outputs = (
+                script_gate_result.get("outputs")
+                if isinstance(script_gate_result.get("outputs"), dict)
+                else {}
+            )
+            if script_status != "APPROVED":
+                print(
+                    "[Sprint146-5 Full Pipeline Gate] BLOCKED:",
+                    script_status or "UNKNOWN",
+                    flush=True,
+                )
+                return script_gate_result
+            approved_review_scripts = (
+                approved_outputs.get("review_scripts")
+                if isinstance(approved_outputs.get("review_scripts"), dict)
+                else {}
+            )
+            approved_script_text = str(
+                approved_review_scripts.get("best_script")
+                or (approved_outputs.get("script_approval") or {}).get("best_script")
+                or ""
+            ).strip()
+            print(
+                "[Sprint146-5 Generated Script] APPROVED -> ImageMotion/Subtitle/Voice/Merge",
+                flush=True,
+            )
+        print(
+            "######## RUN_PROJECT SPRINT137-1 START ########",
             flush=True,
         )
         print(
@@ -2233,6 +4301,17 @@ class WorkflowEngine:
             else ""
         )
 
+        # Sprint146-7: 잠금 대본 실행에서는 업로드 순서를 장면 순서로 그대로 사용합니다.
+        # 상세페이지 분할, 이미지 역할 재분류, AI 이미지 재선택을 하지 않습니다.
+        scene_image_direct_mode = bool(locked_script and manual_product_image_paths)
+        print("[Sprint146-7 Scene Image Direct] Enabled:", scene_image_direct_mode, flush=True)
+        print("[Sprint146-7 Scene Image Direct] Input Count:", len(manual_product_image_paths), flush=True)
+        for _scene_image_index, _scene_image_path in enumerate(manual_product_image_paths, start=1):
+            print(
+                f"[Sprint146-7 Scene Image Direct] Scene{_scene_image_index:02d}: {_scene_image_path}",
+                flush=True,
+            )
+
         image_extractor_result = {
             "ok": False,
             "ready": False,
@@ -2256,7 +4335,7 @@ class WorkflowEngine:
         # - 입력 2장 이상: 각 이미지를 독립 상품 이미지로 간주하고 Strip 완전 우회
         # 이후 모든 후보를 Image Role Classifier로 전달합니다.
         multi_image_input_count = len(manual_product_image_paths)
-        multi_image_mode = multi_image_input_count >= 2
+        multi_image_mode = scene_image_direct_mode or multi_image_input_count >= 2
         input_mode = (
             "multi_image_direct"
             if multi_image_mode
@@ -2283,7 +4362,7 @@ class WorkflowEngine:
             "errors": [],
         }
 
-        if len(manual_product_image_paths) == 1:
+        if len(manual_product_image_paths) == 1 and not scene_image_direct_mode:
             try:
                 strip_source_path = manual_product_image_paths[0]
                 strip_output_dir = (
@@ -2346,7 +4425,7 @@ class WorkflowEngine:
             )
 
         selector_sources = list(manual_product_image_paths)
-        if selector_sources and ImageExtractor is not None:
+        if selector_sources and ImageExtractor is not None and not scene_image_direct_mode:
             try:
                 selector_output_dir = (
                     Path("assets")
@@ -2442,13 +4521,99 @@ class WorkflowEngine:
             self.steps(),
         )
 
-        outputs = {
+        # Sprint146-5B 최종 방어: 승인 게이트를 통과한 뒤에는
+        # 어떤 분기에서도 비어 있는 script_status가 남지 않게 합니다.
+        script_status = str(script_status or "APPROVED").strip().upper()
+        if script_status != "APPROVED":
+            script_status = "APPROVED"
+
+        outputs = dict(approved_outputs)
+        outputs.update({
             "workflow_version": self.WORKFLOW_VERSION,
+            "execution_mode": "locked_script_scene_image_direct",
+            "scene_image_direct_mode": scene_image_direct_mode,
+            "scene_image_count": len(manual_product_image_paths),
+            "trust_input": {
+                "monthly_purchase_count": int(monthly_purchase_count or 0),
+                "review_count": int(declared_review_count or 0),
+                "rating": float(rating or 0),
+                "review_checked_at": str(review_checked_at or "").strip(),
+            },
             "auto_connected": auto_connected,
             "youtube_privacy_status": youtube_privacy_status,
             "image_extractor": image_extractor_result,
             "image_strip_splitter": image_strip_result,
+            "approved_script_lock": {
+                "version": "locked-script-lock-146-8",
+                "status": "locked",
+                "script_status": script_status,
+                "best_script": approved_script_text,
+                "source_result_path": approved_outputs.get("script_result_path", ""),
+            },
+        })
+
+        # Sprint134-1: 사용자가 직접 고른 바이럴 쇼츠를 원클릭에서 분석합니다.
+        viral_library_result = {
+            "ok": False,
+            "ready": False,
+            "version": "viral-library-ingestor-133-2",
+            "status": "skipped_no_manual_sources",
+            "items": [],
+            "errors": [],
         }
+        viral_scene_analysis_result = {
+            "ok": False,
+            "ready": False,
+            "version": "viral-scene-analyzer-133-3",
+            "status": "skipped_no_manual_sources",
+            "videos": [],
+            "errors": [],
+        }
+        viral_editing_patterns_result = {
+            "ok": False,
+            "ready": False,
+            "version": "viral-editing-feature-analyzer-133-4",
+            "status": "skipped_no_manual_sources",
+            "project_patterns": {},
+            "videos": [],
+            "errors": [],
+        }
+        project_id_for_viral = str(getattr(project, "id", "") or "default")
+        if viral_video_sources:
+            try:
+                viral_library_result = ViralLibraryIngestor(max_items=10).ingest(
+                    sources=viral_video_sources,
+                    project_id=project_id_for_viral,
+                    overwrite=True,
+                    save=True,
+                )
+                if viral_library_result.get("ready"):
+                    viral_scene_analysis_result = ViralSceneAnalyzer().analyze_project(
+                        project_id=project_id_for_viral,
+                        overwrite=True,
+                        save=True,
+                    )
+                if viral_scene_analysis_result.get("ready"):
+                    viral_editing_patterns_result = ViralEditingFeatureAnalyzer().analyze_project(
+                        project_id=project_id_for_viral,
+                        overwrite=True,
+                        save=True,
+                    )
+            except Exception as exc:
+                viral_editing_patterns_result = {
+                    **viral_editing_patterns_result,
+                    "status": "exception",
+                    "errors": [f"{type(exc).__name__}: {exc}"],
+                }
+                print("[Sprint134-1 Viral One Click] ERROR:", repr(exc), flush=True)
+
+        outputs["viral_library"] = viral_library_result
+        outputs["viral_scene_analysis"] = viral_scene_analysis_result
+        outputs["viral_editing_patterns"] = viral_editing_patterns_result
+        print("[Sprint134-1 Viral One Click] Source Count:", len(viral_video_sources), flush=True)
+        print("[Sprint134-1 Viral One Click] Library Status:", viral_library_result.get("status"), flush=True)
+        print("[Sprint134-1 Viral One Click] Scene Status:", viral_scene_analysis_result.get("status"), flush=True)
+        print("[Sprint134-1 Viral One Click] Pattern Status:", viral_editing_patterns_result.get("status"), flush=True)
 
         # 1. Product Plan
         try:
@@ -2711,6 +4876,17 @@ class WorkflowEngine:
             "scenes": [],
             "errors": [],
         }
+        image_director_blueprint_result = {
+            "ok": False,
+            "ready": False,
+            "version": ImageDirector.VERSION,
+            "status": "not_run",
+            "scene_count": 0,
+            "blueprints": [],
+            "output_path": "",
+            "warnings": [],
+            "errors": [],
+        }
         ai_image_director_result = {
             "ok": False,
             "ready": False,
@@ -2761,6 +4937,65 @@ class WorkflowEngine:
             "errors": [],
         }
 
+        # Sprint135-4: Vision Analyzer 호출 전/후를 분리해 기록합니다.
+        # 기존 코드는 analyze()가 반환된 뒤에만 로그를 남겼기 때문에,
+        # 내부 지연·정지·예외가 발생하면 호출 자체가 안 된 것처럼 보였습니다.
+        vision_input_summary = []
+        for vision_index, vision_item in enumerate(list(product_images or []), start=1):
+            if isinstance(vision_item, dict):
+                vision_path = str(
+                    vision_item.get("path")
+                    or vision_item.get("output_path")
+                    or vision_item.get("source_path")
+                    or ""
+                )
+                vision_input_summary.append(
+                    {
+                        "index": vision_index,
+                        "type": "dict",
+                        "path": vision_path,
+                        "exists": bool(vision_path and Path(vision_path).is_file()),
+                    }
+                )
+            else:
+                vision_path = str(vision_item or "")
+                vision_input_summary.append(
+                    {
+                        "index": vision_index,
+                        "type": type(vision_item).__name__,
+                        "path": vision_path,
+                        "exists": bool(vision_path and Path(vision_path).is_file()),
+                    }
+                )
+
+        print(
+            "[Sprint135-4 Vision Trace] CALL BEGIN",
+            flush=True,
+        )
+        print(
+            "[Sprint135-4 Vision Trace] Input Count:",
+            len(vision_input_summary),
+            flush=True,
+        )
+        print(
+            "[Sprint135-4 Vision Trace] Manifest:",
+            multi_image_result.get("manifest_path", ""),
+            flush=True,
+        )
+        print(
+            "[Sprint135-4 Vision Trace] Output Dir:",
+            director_output_dir,
+            flush=True,
+        )
+        for vision_item in vision_input_summary:
+            print(
+                f"[Sprint135-4 Vision Trace] INPUT {vision_item['index']:02d}: "
+                f"type={vision_item['type']} exists={vision_item['exists']} "
+                f"path={vision_item['path']}",
+                flush=True,
+            )
+
+        vision_started_at = time.perf_counter()
         try:
             vision_analysis_result = ImageVisionAnalyzer().analyze(
                 images=product_images,
@@ -2770,13 +5005,29 @@ class WorkflowEngine:
                 project_id=project_id_for_director,
                 save_result=True,
             )
+            print(
+                "[Sprint135-4 Vision Trace] CALL RETURNED:",
+                f"{time.perf_counter() - vision_started_at:.3f}s",
+                flush=True,
+            )
         except Exception as exc:
             vision_analysis_result.update(
                 status="failed",
                 errors=[f"{type(exc).__name__}: {exc}"],
             )
+            print(
+                "[Sprint135-4 Vision Trace] CALL ERROR:",
+                f"{type(exc).__name__}: {exc}",
+                flush=True,
+            )
+            print(
+                "[Sprint135-4 Vision Trace] ELAPSED:",
+                f"{time.perf_counter() - vision_started_at:.3f}s",
+                flush=True,
+            )
 
         outputs["vision_analysis"] = vision_analysis_result
+        outputs["vision_input_summary"] = vision_input_summary
         print(
             "[Sprint93-2 Vision Analyzer] Version:",
             vision_analysis_result.get("version", ""),
@@ -2795,6 +5046,109 @@ class WorkflowEngine:
         print(
             "[Sprint93-2 Vision Analyzer] Errors:",
             vision_analysis_result.get("errors", []),
+            flush=True,
+        )
+
+        # Sprint135-2: Product Keeper
+        # 원본 상품 사진은 참조 전용으로 등록하고, 이후 생성 장면에서
+        # 판매 상품의 형태·색상·버튼·디스플레이·포트·비율·구성품을 잠급니다.
+        product_keeper_result = {
+            "ok": False,
+            "ready": False,
+            "version": ProductKeeper.VERSION,
+            "status": "not_run",
+            "product_name": product_name_for_director,
+            "product_identity_id": "",
+            "reference_images": [],
+            "reference_image_count": 0,
+            "identity_features": {},
+            "locked_attributes": [],
+            "generation_rules": {},
+            "manifest_path": "",
+            "errors": [],
+        }
+
+        print(
+            "[Sprint135-4 Product Keeper Trace] CALL BEGIN",
+            flush=True,
+        )
+        product_keeper_started_at = time.perf_counter()
+        try:
+            product_keeper_result = ProductKeeper().build(
+                product_name=product_name_for_director,
+                reference_images=product_images,
+                vision_result=vision_analysis_result,
+                image_role_result=image_extractor_result,
+                output_dir=director_output_dir,
+                save=True,
+            )
+            print(
+                "[Sprint135-4 Product Keeper Trace] CALL RETURNED:",
+                f"{time.perf_counter() - product_keeper_started_at:.3f}s",
+                flush=True,
+            )
+        except Exception as exc:
+            product_keeper_result.update(
+                status="failed",
+                errors=[f"{type(exc).__name__}: {exc}"],
+            )
+            print(
+                "[Sprint135-4 Product Keeper Trace] CALL ERROR:",
+                f"{type(exc).__name__}: {exc}",
+                flush=True,
+            )
+
+        outputs["product_keeper"] = product_keeper_result
+        outputs["product_identity_id"] = str(
+            product_keeper_result.get("product_identity_id", "") or ""
+        )
+        outputs["product_identity_manifest_path"] = str(
+            product_keeper_result.get("manifest_path", "") or ""
+        )
+
+        print(
+            "[Sprint135-2 Product Keeper] Version:",
+            product_keeper_result.get("version", ""),
+            flush=True,
+        )
+        print(
+            "[Sprint135-2 Product Keeper] Status:",
+            product_keeper_result.get("status", ""),
+            flush=True,
+        )
+        print(
+            "[Sprint135-2 Product Keeper] Ready:",
+            product_keeper_result.get("ready", False),
+            flush=True,
+        )
+        print(
+            "[Sprint135-2 Product Keeper] Identity:",
+            product_keeper_result.get("product_identity_id", ""),
+            flush=True,
+        )
+        print(
+            "[Sprint135-2 Product Keeper] References:",
+            product_keeper_result.get("reference_image_count", 0),
+            flush=True,
+        )
+        print(
+            "[Sprint135-2 Product Keeper] Product Locked:",
+            bool(
+                product_keeper_result.get("reference_policy", {}).get(
+                    "product_must_remain_unchanged",
+                    False,
+                )
+            ),
+            flush=True,
+        )
+        print(
+            "[Sprint135-2 Product Keeper] Manifest:",
+            product_keeper_result.get("manifest_path", ""),
+            flush=True,
+        )
+        print(
+            "[Sprint135-2 Product Keeper] Errors:",
+            product_keeper_result.get("errors", []),
             flush=True,
         )
 
@@ -3042,6 +5396,133 @@ class WorkflowEngine:
             flush=True,
         )
 
+        # Sprint132-2 Viral Collector Bridge
+        # 상품명과 핵심 키워드로 공개 바이럴 후보 메타데이터를 수집합니다.
+        # 수집 결과는 outputs에 저장하고 Story Intelligence의 product_info 및
+        # analysis_bundle에 전달합니다. StoryIntelligenceEngine의 기존 공개
+        # 메서드 시그니처는 변경하지 않습니다.
+        viral_keywords = []
+        for viral_keyword_value in (
+            getattr(project, "keyword", ""),
+            getattr(project, "category", ""),
+            project_data.get("keyword", "") if isinstance(project_data, dict) else "",
+            project_data.get("category", "") if isinstance(project_data, dict) else "",
+        ):
+            if isinstance(viral_keyword_value, (list, tuple, set)):
+                viral_keywords.extend(
+                    str(item or "").strip()
+                    for item in viral_keyword_value
+                    if str(item or "").strip()
+                )
+            else:
+                viral_keyword_text = str(viral_keyword_value or "").strip()
+                if viral_keyword_text:
+                    viral_keywords.extend(
+                        item.strip()
+                        for item in re.split(r"[,|/\n]+", viral_keyword_text)
+                        if item.strip()
+                    )
+
+        viral_platforms = ["youtube"]
+        viral_search_limit = 10
+        viral_top_k = 5
+        if isinstance(project_data, dict):
+            configured_platforms = project_data.get("viral_platforms")
+            if isinstance(configured_platforms, str):
+                configured_platforms = [
+                    item.strip().lower()
+                    for item in re.split(r"[,|/\n]+", configured_platforms)
+                    if item.strip()
+                ]
+            if isinstance(configured_platforms, (list, tuple, set)):
+                supported_platforms = {"youtube", "tiktok", "instagram"}
+                selected_platforms = [
+                    str(item or "").strip().lower()
+                    for item in configured_platforms
+                    if str(item or "").strip().lower() in supported_platforms
+                ]
+                if selected_platforms:
+                    viral_platforms = selected_platforms
+            try:
+                viral_search_limit = max(1, min(30, int(
+                    project_data.get("viral_search_limit", viral_search_limit)
+                )))
+            except Exception:
+                viral_search_limit = 10
+            try:
+                viral_top_k = max(1, min(20, int(
+                    project_data.get("viral_top_k", viral_top_k)
+                )))
+            except Exception:
+                viral_top_k = 5
+
+        viral_collection_result = {
+            "ok": False,
+            "ready": False,
+            "version": getattr(ViralCollector, "VERSION", "viral-collector-132-1"),
+            "status": "not_run",
+            "product_name": product_name_for_director,
+            "keywords": viral_keywords,
+            "platforms": viral_platforms,
+            "query_count": 0,
+            "candidate_count": 0,
+            "selected_count": 0,
+            "output_path": "",
+            "videos": [],
+            "warnings": [],
+            "errors": [],
+        }
+
+        try:
+            viral_collection_result = ViralCollector(
+                output_root=Path("assets") / "viral",
+                search_limit=viral_search_limit,
+                top_k=viral_top_k,
+            ).collect(
+                product_name=product_name_for_director,
+                keywords=viral_keywords,
+                platforms=viral_platforms,
+                project_id=project_id_for_director,
+                save=True,
+            )
+        except Exception as exc:
+            viral_collection_result.update(
+                status="failed",
+                errors=[f"{type(exc).__name__}: {exc}"],
+            )
+
+        outputs["viral_collection"] = viral_collection_result
+        print(
+            "[Sprint132-2 Viral Collector] Version:",
+            viral_collection_result.get("version", ""),
+            flush=True,
+        )
+        print(
+            "[Sprint132-2 Viral Collector] Status:",
+            viral_collection_result.get("status", ""),
+            flush=True,
+        )
+        print(
+            "[Sprint132-2 Viral Collector] Candidates:",
+            viral_collection_result.get("candidate_count", 0),
+            flush=True,
+        )
+        print(
+            "[Sprint132-2 Viral Collector] Selected:",
+            viral_collection_result.get("selected_count", 0),
+            flush=True,
+        )
+        print(
+            "[Sprint132-2 Viral Collector] Output:",
+            viral_collection_result.get("output_path", ""),
+            flush=True,
+        )
+        print(
+            "[Sprint132-2 Viral Collector] Errors:",
+            viral_collection_result.get("errors", []),
+            flush=True,
+        )
+
         # Sprint100-4: Story 실행 전에 리뷰 OCR/정제/Insight를 먼저 준비합니다.
         pre_story_review_ocr = {
             "ok": False,
@@ -3173,6 +5654,14 @@ class WorkflowEngine:
             "keyword": getattr(project, "keyword", ""),
             "price": getattr(project, "price", ""),
             "product_plan": product_plan,
+            "viral_collection": viral_collection_result,
+            "manual_viral_library": viral_library_result,
+            "manual_viral_scene_analysis": viral_scene_analysis_result,
+            "manual_viral_editing_patterns": viral_editing_patterns_result,
+            "viral_editing_template": viral_editing_patterns_result.get("project_patterns", {}),
+            "viral_top_videos": list(
+                viral_collection_result.get("videos", []) or []
+            ),
         }
         story_ocr_result = (
             outputs.get("review_ocr", {}).get("reviews", [])
@@ -3185,6 +5674,10 @@ class WorkflowEngine:
             "product_name": product_name_for_director,
             "category": getattr(project, "category", ""),
             "keyword": getattr(project, "keyword", ""),
+            "viral_collection": viral_collection_result,
+            "viral_top_videos": list(
+                viral_collection_result.get("videos", []) or []
+            ),
         }
         story_build_input = {
             "workflow_version": self.WORKFLOW_VERSION,
@@ -3196,6 +5689,8 @@ class WorkflowEngine:
             "image_tags": image_tags_result,
             "ocr_result": story_ocr_result,
             "analysis_bundle": story_analysis_bundle,
+            "viral_collection": viral_collection_result,
+            "manual_viral_editing_patterns": viral_editing_patterns_result,
             "scene_count": 6,
         }
 
@@ -3473,101 +5968,236 @@ class WorkflowEngine:
             "scripts": [],
             "errors": [],
         }
-        try:
-            pre_scene_quote_result = ReviewQuoteSelector().select(
-                reviews=pre_story_reviews,
-                product_name=product_name_for_director,
-                top_n=5,
-            )
-            pre_scene_hook_result = ReviewHookGenerator().generate(
-                review_quotes=pre_scene_quote_result,
-                review_insight=pre_story_review_insight,
-                product_name=product_name_for_director,
-                review_count=len(pre_story_reviews),
-            )
-            pre_scene_hook_result = HookOptimizer().apply_to_review_hooks(
-                review_hooks=pre_scene_hook_result,
-                review_insight=pre_story_review_insight,
-                product_name=product_name_for_director,
-                review_count=len(pre_story_reviews),
-            )
-            pre_scene_script_result = ReviewScriptGenerator().generate(
-                review_hooks=pre_scene_hook_result,
-                review_quotes=pre_scene_quote_result,
-                review_insight=pre_story_review_insight,
-                product_name=product_name_for_director,
-                review_count=len(pre_story_reviews),
-                story_intelligence=story_intelligence_result,
-            )
-            print(
-                "[UTF8 TRACE pre_scene_script_result RAW]",
-                repr(pre_scene_script_result),
-                flush=True,
-            ) 
-
-            outputs["review_quotes"] = pre_scene_quote_result
-            outputs["review_hooks"] = pre_scene_hook_result
+        if locked_script:
+            pre_scene_script_result = dict(approved_review_scripts)
             outputs["review_scripts"] = pre_scene_script_result
             outputs["script_first_input"] = {
-                "ok": bool(pre_scene_script_result.get("ok")),
-                "version": "script-first-workflow-124-5",
-                "review_count": len(pre_story_reviews),
+                "ok": True,
+                "version": "locked-script-first-bypass-146-11",
+                "review_count": int(declared_review_count or 0),
+                "script_type": "locked_user_script",
+                "scene_subtitle_count": len(scene_subtitles),
+                "status": "SKIPPED_GENERATOR_USING_LOCKED_SCRIPT",
+            }
+            print("[Sprint146-10 Pre Scene Script] ReviewScriptGenerator: SKIPPED", flush=True)
+
+            # Sprint146-16: 잠금 대본을 12개 영상 장면의 유일한 자막 원본으로 사용합니다.
+            # 장면 연출(scene_goal, visual_direction, must_show 등)은 절대 자막 필드에 넣지 않습니다.
+            target_locked_scene_count = 10
+            locked_scene_duration = 2.5
+
+            normalized_locked_lines = [
+                " ".join(str(item.get("subtitle") or "").split()).strip()
+                for item in list(pre_scene_script_result.get("scene_subtitles") or [])
+                if isinstance(item, dict)
+                and " ".join(str(item.get("subtitle") or "").split()).strip()
+            ]
+            if not normalized_locked_lines:
+                normalized_locked_lines = [approved_script_text]
+
+            # 문장이 12개보다 적으면 단어 단위로 균등 분할해 대본 전체를 빠짐없이 배치합니다.
+            if len(normalized_locked_lines) < target_locked_scene_count:
+                words = approved_script_text.split()
+                locked_chunks = []
+                if words:
+                    for chunk_index in range(target_locked_scene_count):
+                        start = round(chunk_index * len(words) / target_locked_scene_count)
+                        end = round((chunk_index + 1) * len(words) / target_locked_scene_count)
+                        chunk = " ".join(words[start:end]).strip()
+                        if chunk:
+                            locked_chunks.append(chunk)
+                normalized_locked_lines = locked_chunks or normalized_locked_lines
+
+            locked_scene_texts = normalized_locked_lines[:target_locked_scene_count]
+            while len(locked_scene_texts) < target_locked_scene_count:
+                locked_scene_texts.append("")
+
+            locked_plan_scenes = []
+            locked_subtitle_plan = []
+            for locked_index in range(target_locked_scene_count):
+                scene_number = locked_index + 1
+                start_seconds = round(locked_index * locked_scene_duration, 2)
+                end_seconds = round(start_seconds + locked_scene_duration, 2)
+                subtitle_text = locked_scene_texts[locked_index]
+                purpose = (
+                    "hook" if scene_number == 1
+                    else "cta" if scene_number == target_locked_scene_count
+                    else "proof"
+                )
+                locked_plan_scenes.append({
+                    "scene_id": f"scene_{scene_number:02d}",
+                    "scene_index": scene_number,
+                    "scene_type": purpose,
+                    "purpose": purpose,
+                    "dialogue": subtitle_text,
+                    "subtitle_text": subtitle_text,
+                    "duration_seconds": locked_scene_duration,
+                    "subtitle_start": start_seconds,
+                    "subtitle_end": end_seconds,
+                    "subtitle_duration": locked_scene_duration,
+                    "script_section_key": purpose,
+                    "current_run_locked": True,
+                    "subtitle_source": "locked_user_script_only",
+                    "scene_goal": "",
+                    "visual_direction": "",
+                    "must_show": "",
+                })
+                if subtitle_text:
+                    locked_subtitle_plan.append({
+                        "scene_id": f"scene_{scene_number:02d}",
+                        "scene_index": scene_number,
+                        "text": subtitle_text,
+                        "start": start_seconds,
+                        "end": end_seconds,
+                        "duration": locked_scene_duration,
+                        "emphasis_words": [],
+                        "source": "locked_user_script_only",
+                    })
+
+            scene_plan_result = {
+                "ok": True,
+                "ready": True,
+                "version": "locked-script-scene-plan-150-5",
+                "status": "locked_script_scene_plan_ready",
+                "planning_mode": "locked_script_only",
+                "script_line_count": len(locked_subtitle_plan),
+                "scene_count": len(locked_plan_scenes),
+                "target_duration_seconds": 25.0,
+                "scenes": locked_plan_scenes,
+                "subtitle_plan": locked_subtitle_plan,
+                "errors": [],
+            }
+            outputs["scene_plan"] = scene_plan_result
+            print("[Sprint150-5 Locked Subtitle] Applied: True", flush=True)
+            print("[Sprint150-5 Locked Subtitle] Scene Count:", len(locked_plan_scenes), flush=True)
+            print("[Sprint150-5 Locked Subtitle] Subtitle Count:", len(locked_subtitle_plan), flush=True)
+            print("[Sprint150-5 Locked Subtitle] Source: locked_user_script_only", flush=True)
+        else:
+            try:
+                pre_scene_quote_result = ReviewQuoteSelector().select(
+                    reviews=pre_story_reviews,
+                    product_name=product_name_for_director,
+                    top_n=5,
+                )
+                pre_scene_hook_result = ReviewHookGenerator().generate(
+                    review_quotes=pre_scene_quote_result,
+                    review_insight=pre_story_review_insight,
+                    product_name=product_name_for_director,
+                    review_count=len(pre_story_reviews),
+                )
+                pre_scene_hook_result = HookOptimizer().apply_to_review_hooks(
+                    review_hooks=pre_scene_hook_result,
+                    review_insight=pre_story_review_insight,
+                    product_name=product_name_for_director,
+                    review_count=len(pre_story_reviews),
+                )
+                pre_scene_script_result = ReviewScriptGenerator().generate(
+                    review_hooks=pre_scene_hook_result,
+                    review_quotes=pre_scene_quote_result,
+                    review_insight=pre_story_review_insight,
+                    product_name=product_name_for_director,
+                    review_count=len(pre_story_reviews),
+                    story_intelligence=story_intelligence_result,
+                )
+                print(
+                    "[UTF8 TRACE pre_scene_script_result SAFE]",
+                    ascii(pre_scene_script_result),
+                    flush=True,
+                ) 
+    
+                outputs["review_quotes"] = pre_scene_quote_result
+                outputs["review_hooks"] = pre_scene_hook_result
+                outputs["review_scripts"] = pre_scene_script_result
+                outputs["script_first_input"] = {
+                    "ok": bool(pre_scene_script_result.get("ok")),
+                    "version": "script-first-workflow-124-5",
+                    "review_count": len(pre_story_reviews),
+                    "script_type": pre_scene_script_result.get("best_script_type", ""),
+                    "scene_subtitle_count": pre_scene_script_result.get("scene_subtitle_count", 0),
+                }
+                print(
+                    "[Sprint124-2 Script First] Ready:",
+                    bool(pre_scene_script_result.get("ok")),
+                    flush=True,
+                )
+                print(
+                    "[Sprint124-2 Script First] Type:",
+                    pre_scene_script_result.get("best_script_type", ""),
+                    flush=True,
+                )
+                print(
+                    "[Sprint124-2 Script First] Scene Subtitles:",
+                    pre_scene_script_result.get("scene_subtitle_count", 0),
+                    flush=True,
+                )
+            except Exception as exc:
+                pre_scene_script_result.update(
+                    status="failed",
+                    errors=[f"{type(exc).__name__}: {exc}"],
+                )
+                outputs["script_first_input"] = {
+                    "ok": False,
+                    "version": "script-first-workflow-124-5",
+                    "review_count": len(pre_story_reviews),
+                    "errors": list(pre_scene_script_result.get("errors") or []),
+                }
+    
+            # Sprint146-4: 장면 설계 입력도 승인 완료 대본으로 강제 고정합니다.
+        if approved_review_scripts and approved_script_text:
+            pre_scene_script_result = dict(approved_review_scripts)
+            pre_scene_script_result["best_script"] = approved_script_text
+            pre_scene_script_result["status"] = "approved_script_locked"
+            outputs["review_scripts"] = pre_scene_script_result
+            outputs["script_first_input"] = {
+                "ok": True,
+                "version": "locked-script-scene-bridge-146-5",
+                "status": "approved_script_locked",
+                "review_count": int(declared_review_count or len(pre_story_reviews)),
                 "script_type": pre_scene_script_result.get("best_script_type", ""),
                 "scene_subtitle_count": pre_scene_script_result.get("scene_subtitle_count", 0),
             }
             print(
-                "[Sprint124-2 Script First] Ready:",
-                bool(pre_scene_script_result.get("ok")),
+                "[Sprint146-5 Locked Script Scene Bridge] LOCKED:",
+                len(approved_script_text),
                 flush=True,
             )
             print(
-                "[Sprint124-2 Script First] Type:",
-                pre_scene_script_result.get("best_script_type", ""),
-                flush=True,
-            )
-            print(
-                "[Sprint124-2 Script First] Scene Subtitles:",
+                "[Sprint146-5D Locked Script Scene Bridge] Scene Subtitles:",
                 pre_scene_script_result.get("scene_subtitle_count", 0),
                 flush=True,
             )
-        except Exception as exc:
-            pre_scene_script_result.update(
-                status="failed",
-                errors=[f"{type(exc).__name__}: {exc}"],
-            )
-            outputs["script_first_input"] = {
-                "ok": False,
-                "version": "script-first-workflow-124-5",
-                "review_count": len(pre_story_reviews),
-                "errors": list(pre_scene_script_result.get("errors") or []),
-            }
+        # Sprint150-5: locked_script 경로에서는 위에서 만든 잠금 대본 전용
+        # scene_plan_result를 그대로 유지합니다. ScenePlanner의 장면 연출 문구가
+        # dialogue/subtitle_text를 덮어쓰는 것을 차단합니다.
+        if locked_script:
             print(
-                "[Sprint124-2 Script First] ERROR:",
-                repr(exc),
+                "[Sprint150-5 Locked Subtitle Guard] ScenePlanner: SKIPPED",
                 flush=True,
             )
-
-        try:
-            scene_plan_result = ScenePlanner().plan(
-                tag_result=image_tags_result,
-                image_tags_path=image_tags_result.get(
-                    "tag_manifest_path",
-                    "",
-                ),
-                output_dir=director_output_dir,
-                product_name=product_name_for_director,
-                project_id=project_id_for_director,
-                target_duration_seconds=36,
-                target_scene_count=6,
-                script_result=pre_scene_script_result,
-                story_result=story_intelligence_result,
-                save_result=True,
+            print(
+                "[Sprint150-5 Locked Subtitle Guard] Subtitle Source: locked_user_script_only",
+                flush=True,
             )
-        except Exception as exc:
-            scene_plan_result.update(
-                status="failed",
-                errors=[f"{type(exc).__name__}: {exc}"],
-            )
+        else:
+            try:
+                scene_plan_result = ScenePlanner().plan(
+                    tag_result=image_tags_result,
+                    image_tags_path=image_tags_result.get(
+                        "tag_manifest_path",
+                        "",
+                    ),
+                    output_dir=director_output_dir,
+                    product_name=product_name_for_director,
+                    project_id=project_id_for_director,
+                    target_duration_seconds=25,
+                    target_scene_count=10,
+                    save_result=True,
+                )
+            except Exception as exc:
+                scene_plan_result.update(
+                    status="failed",
+                    errors=[f"{type(exc).__name__}: {exc}"],
+                )
 
         # Sprint124-5: 현재 실행의 Sprint120-7 장면 자막과 Scene Planner 결과가
         # 완전히 동일한지 검증합니다. 불일치하면 현재 실행 자막을 강제로 복구합니다.
@@ -3745,6 +6375,11 @@ class WorkflowEngine:
             planned_scenes and bridged_scene_count == len(planned_scenes)
         )
 
+        # Sprint150-6: 장면 환경을 현관/실내/베란다/욕실로 다양화합니다.
+        scene_plan_result = self._sprint151_1_apply_scene_director(
+            scene_plan_result
+        )
+
         print(
             "[Sprint101-3 Scene Goal Bridge] Count:",
             bridged_scene_count,
@@ -3794,13 +6429,225 @@ class WorkflowEngine:
 
         outputs["scene_image_plan"] = scene_image_plan_result
 
-        # Sprint131-3: 장면별 기존 상품 이미지 재사용, AI 보완 이미지 프롬프트, 모션 계획을 연결합니다.
-        # 프롬프트는 이미지 생성 API 내부 데이터로만 저장하며 Motion/Render에는 전달하지 않습니다.
+        # Sprint135-3: Product Keeper의 동일 상품 잠금 규칙을 모든 생성 장면에 연결합니다.
+        product_identity_context = dict(story_product_info or {})
+        product_identity_context["product_keeper_version"] = str(
+            product_keeper_result.get("version", "") or ""
+        )
+        product_identity_context["product_identity_id"] = str(
+            product_keeper_result.get("product_identity_id", "") or ""
+        )
+        product_identity_context["product_identity_manifest_path"] = str(
+            product_keeper_result.get("manifest_path", "") or ""
+        )
+        product_identity_context["product_reference_images"] = list(
+            product_keeper_result.get("reference_images") or []
+        )
+        product_identity_context["product_locked_attributes"] = list(
+            product_keeper_result.get("locked_attributes") or []
+        )
+        product_identity_context["product_generation_rules"] = dict(
+            product_keeper_result.get("generation_rules") or {}
+        )
+        product_identity_context["product_verification_policy"] = dict(
+            product_keeper_result.get("verification_policy") or {}
+        )
+        product_identity_context["source_images_are_reference_only"] = bool(
+            product_keeper_result.get("reference_policy", {}).get(
+                "source_images_are_reference_only",
+                True,
+            )
+        )
+        product_identity_context["allow_reference_image_in_final_video"] = bool(
+            product_keeper_result.get("reference_policy", {}).get(
+                "allow_reference_image_in_final_video",
+                False,
+            )
+        )
+        product_identity_context["product_must_remain_unchanged"] = bool(
+            product_keeper_result.get("reference_policy", {}).get(
+                "product_must_remain_unchanged",
+                True,
+            )
+        )
+
+        scene_product_constraints = []
+        for scene_item in list(scene_image_plan_result.get("scenes") or []):
+            if not isinstance(scene_item, dict):
+                continue
+            try:
+                constraint = ProductKeeper().build_scene_constraints(
+                    product_identity=product_keeper_result,
+                    scene=scene_item,
+                )
+                scene_product_constraints.append(constraint)
+                scene_item["product_identity_id"] = constraint.get(
+                    "product_identity_id",
+                    "",
+                )
+                scene_item["product_keeper_constraints"] = constraint
+            except Exception as exc:
+                print(
+                    "[Sprint135-3 Product Constraints] ERROR:",
+                    repr(exc),
+                    flush=True,
+                )
+
+        outputs["scene_product_constraints"] = scene_product_constraints
+        outputs["product_identity_context"] = product_identity_context
+
+        print(
+            "[Sprint135-3 Product Identity] Ready:",
+            product_keeper_result.get("ready", False),
+            flush=True,
+        )
+        print(
+            "[Sprint135-3 Product Identity] Identity:",
+            product_identity_context.get("product_identity_id", ""),
+            flush=True,
+        )
+        print(
+            "[Sprint135-3 Product Identity] Scene Constraints:",
+            len(scene_product_constraints),
+            flush=True,
+        )
+        print(
+            "[Sprint135-3 Product Identity] Reference Only:",
+            product_identity_context.get("source_images_are_reference_only", True),
+            flush=True,
+        )
+        print(
+            "[Sprint135-3 Product Identity] Final Reference Allowed:",
+            product_identity_context.get("allow_reference_image_in_final_video", False),
+            flush=True,
+        )
+
+        # Sprint142-3: SceneImagePlanner 결과를 광고 연출 Blueprint로 변환합니다.
+        # Blueprint 실행 여부를 로그에서 즉시 확인할 수 있도록 START/INPUT/RESULT를 출력합니다.
+        # 기존 AIImageDirector는 이미지 프롬프트, 모션 계획, Closed Loop를 계속 담당합니다.
+        print(
+            "[Sprint142-3 Image Director] START",
+            flush=True,
+        )
+        print(
+            "[Sprint142-3 Image Director] Input Scenes:",
+            len(list(scene_image_plan_result.get("scenes") or [])),
+            flush=True,
+        )
+        print(
+            "[Sprint142-3 Image Director] Product Images:",
+            len(list(product_image_paths or [])),
+            flush=True,
+        )
+
+        try:
+            blueprint_output_path = (
+                Path(str(director_output_dir)) / "scene_blueprints.json"
+            )
+            image_director_blueprint_result = ImageDirector().build(
+                scenes=list(scene_image_plan_result.get("scenes") or []),
+                product_name=product_name_for_director,
+                product_context=product_identity_context,
+                product_images=list(product_image_paths or []),
+                output_path=str(blueprint_output_path),
+                aspect_ratio="9:16",
+                visual_style="premium_realistic_shopping_ad",
+            )
+
+            blueprints = list(
+                image_director_blueprint_result.get("blueprints") or []
+            )
+            blueprint_map = {
+                str(item.get("scene_id") or ""): item
+                for item in blueprints
+                if isinstance(item, dict) and item.get("scene_id")
+            }
+
+            attached_count = 0
+            for scene_item in list(scene_image_plan_result.get("scenes") or []):
+                if not isinstance(scene_item, dict):
+                    continue
+                scene_id = str(scene_item.get("scene_id") or "")
+                blueprint = blueprint_map.get(scene_id)
+                if blueprint:
+                    scene_item["image_director_blueprint"] = dict(blueprint)
+                    attached_count += 1
+
+            # AIImageDirector가 Scene 내부와 product_context 양쪽에서 Blueprint를
+            # 안정적으로 찾을 수 있도록 동일 데이터를 명시적으로 연결합니다.
+            scene_image_plan_result["image_director_version"] = str(
+                image_director_blueprint_result.get("version") or ""
+            )
+            scene_image_plan_result["image_director_blueprints"] = blueprints
+            scene_image_plan_result["image_director_blueprint_count"] = len(
+                blueprints
+            )
+            scene_image_plan_result["image_director_attached_count"] = (
+                attached_count
+            )
+
+            product_identity_context["image_director_version"] = str(
+                image_director_blueprint_result.get("version") or ""
+            )
+            product_identity_context["scene_blueprints"] = blueprints
+            product_identity_context["scene_blueprint_count"] = len(blueprints)
+
+            outputs["scene_image_plan"] = scene_image_plan_result
+            outputs["image_director_blueprint"] = (
+                image_director_blueprint_result
+            )
+
+            print(
+                "[Sprint142-3 Image Director] Version:",
+                image_director_blueprint_result.get("version", ""),
+                flush=True,
+            )
+            print(
+                "[Sprint142-3 Image Director] Status:",
+                image_director_blueprint_result.get("status", ""),
+                flush=True,
+            )
+            print(
+                "[Sprint142-3 Image Director] Blueprint Count:",
+                len(blueprints),
+                flush=True,
+            )
+            print(
+                "[Sprint142-3 Image Director] Attached Count:",
+                attached_count,
+                flush=True,
+            )
+            print(
+                "[Sprint142-3 Image Director] Output:",
+                image_director_blueprint_result.get("output_path", ""),
+                flush=True,
+            )
+            print(
+                "[Sprint142-3 Image Director] Errors:",
+                image_director_blueprint_result.get("errors", []),
+                flush=True,
+            )
+        except Exception as exc:
+            image_director_blueprint_result.update(
+                status="failed",
+                errors=[f"{type(exc).__name__}: {exc}"],
+            )
+            outputs["image_director_blueprint"] = (
+                image_director_blueprint_result
+            )
+            print(
+                "[Sprint142-3 Image Director] ERROR:",
+                repr(exc),
+                flush=True,
+            )
+
+        # Sprint131-3: 장면별 AI 이미지 프롬프트와 모션 계획을 만듭니다.
+        # Sprint135-3부터 Product Keeper의 상품 잠금 정보를 product_context로 전달합니다.
         try:
             ai_image_director_result = AIImageDirector().build(
                 scene_image_plan=scene_image_plan_result,
                 product_name=product_name_for_director,
-                product_context=story_product_info,
+                product_context=product_identity_context,
                 output_dir=director_output_dir,
                 project_id=project_id_for_director,
                 save_result=True,
@@ -3816,7 +6663,85 @@ class WorkflowEngine:
                 flush=True,
             )
 
+        # Sprint150-6: Gemini 생성 전에 Product DNA 형태 잠금을 최종 프롬프트에 강제합니다.
+        ai_image_director_result = self._sprint150_6_strengthen_product_dna(
+            ai_image_director_result,
+            product_identity_context,
+        )
+
+        ai_image_director_result = self._sprint151_1_apply_product_dna_2(
+            ai_image_director_result,
+            product_identity_context,
+        )
+
+        # Sprint141-6: 생성 → Vision 검증 → 재생성 Closed Loop 단일 실행 진입점 연결
+        ai_image_closed_loop_result = (
+            self._run_sprint141_6_ai_image_closed_loop(
+                director_result=ai_image_director_result,
+                output_dir=director_output_dir,
+            )
+        )
+        outputs["ai_image_closed_loop"] = ai_image_closed_loop_result
+
+        closed_loop_director_result = (
+            ai_image_closed_loop_result.get("closed_loop_result")
+        )
+        if (
+            isinstance(closed_loop_director_result, dict)
+            and closed_loop_director_result.get("scenes")
+        ):
+            ai_image_director_result = closed_loop_director_result
+
         outputs["ai_image_director"] = ai_image_director_result
+
+        print(
+            "[Sprint141-5A Closed Loop] Version:",
+            ai_image_closed_loop_result.get("version", ""),
+            flush=True,
+        )
+        print(
+            "[Sprint141-5A Closed Loop] Status:",
+            ai_image_closed_loop_result.get("status", ""),
+            flush=True,
+        )
+        print(
+            "[Sprint141-5A Closed Loop] Generator:",
+            ai_image_closed_loop_result.get("generator", {}),
+            flush=True,
+        )
+        print(
+            "[Sprint141-5A Closed Loop] Validator:",
+            ai_image_closed_loop_result.get("validator", {}),
+            flush=True,
+        )
+        print(
+            "[Sprint141-5A Closed Loop] Selected:",
+            ai_image_closed_loop_result.get("selected_image_count", 0),
+            flush=True,
+        )
+        print(
+            "[Sprint141-5A Closed Loop] Passed:",
+            ai_image_closed_loop_result.get("passed_scene_count", 0),
+            flush=True,
+        )
+        print(
+            "[Sprint141-5A Closed Loop] Failed:",
+            ai_image_closed_loop_result.get("failed_scene_count", 0),
+            flush=True,
+        )
+        print(
+            "[Sprint141-5A Closed Loop] Errors:",
+            ai_image_closed_loop_result.get("errors", []),
+            flush=True,
+        )
+        print("[Sprint150-6 Vision Closed Loop] Threshold:", 94.0, flush=True)
+        print("[Sprint150-6 Vision Closed Loop] Max Attempts:", 4, flush=True)
+        print(
+            "[Sprint150-6 Vision Closed Loop] Auto Regeneration:",
+            ai_image_closed_loop_result.get("failed_scene_count", 0) == 0,
+            flush=True,
+        )
+
         print(
             "[Sprint131-3 AI Image Director] Version:",
             ai_image_director_result.get("version", ""),
@@ -3882,7 +6807,169 @@ class WorkflowEngine:
             flush=True,
         )
 
+        # Sprint147-1: 최초 원클릭에서는 장면별 AI 이미지 생성까지만 실행하고
+        # 사용자의 승인/재생성을 기다립니다. 승인된 이미지로 다시 실행할 때만
+        # Image Motion, 자막, 최종 영상 단계로 진행합니다.
+        print(
+            "[Sprint147-7 HARD GATE REACHED]",
+            {
+                "requested": image_generation_only_requested,
+                "prompt_count": len(list(ai_image_director_result.get("image_prompts") or [])),
+                "director_status": str(ai_image_director_result.get("status") or ""),
+                "closed_loop_status": str(ai_image_closed_loop_result.get("status") or ""),
+            },
+            flush=True,
+        )
+        if image_generation_only_requested:
+            print("[Sprint147-7 HARD GATE ENTERED]", flush=True)
+            closed_loop_payload = (
+                ai_image_closed_loop_result.get("closed_loop_result", {})
+                if isinstance(ai_image_closed_loop_result.get("closed_loop_result"), dict)
+                else {}
+            )
+            generation_runs = [
+                dict(item)
+                for item in list(closed_loop_payload.get("generation_runs") or [])
+                if isinstance(item, dict)
+            ]
+            image_review_scenes = []
+            prompt_map = {
+                str(item.get("scene_id") or ""): dict(item)
+                for item in list(ai_image_director_result.get("image_prompts") or [])
+                if isinstance(item, dict)
+            }
+            scene_map = {
+                str(item.get("scene_id") or ""): dict(item)
+                for item in list(scene_plan_result.get("scenes") or [])
+                if isinstance(item, dict)
+            }
+
+            # Sprint147-3: Closed Loop 결과가 비어 있어도 장면당 1장 생성은 반드시 시도합니다.
+            usable_run_ids = {
+                str(item.get("scene_id") or "")
+                for item in generation_runs
+                if str(item.get("selected_image_path") or item.get("generated_image_path") or "").strip()
+            }
+            direct_generation_errors = []
+            direct_output_dir = Path(str(director_output_dir or ".")) / "generated_review"
+            direct_output_dir.mkdir(parents=True, exist_ok=True)
+            for prompt_index, prompt_item in enumerate(list(ai_image_director_result.get("image_prompts") or []), start=1):
+                if not isinstance(prompt_item, dict):
+                    continue
+                scene_id = str(prompt_item.get("scene_id") or f"scene_{prompt_index:02d}")
+                if scene_id in usable_run_ids:
+                    continue
+                existing_path = str(prompt_item.get("selected_image_path") or prompt_item.get("existing_image_path") or "").strip()
+                if existing_path and Path(existing_path).is_file():
+                    generation_runs.append({
+                        "scene_id": scene_id,
+                        "selected_image_path": existing_path,
+                        "generated_image_path": existing_path,
+                        "passed": True,
+                        "attempt_count": 1,
+                        "source": "existing_product_image",
+                    })
+                    usable_run_ids.add(scene_id)
+                    continue
+                try:
+                    generated_path = self._sprint147_3_generate_one_image(
+                        prompt_item,
+                        direct_output_dir / f"{scene_id}_attempt_01.png",
+                    )
+                except Exception as exc:
+                    direct_generation_errors.append(f"{scene_id}: {type(exc).__name__}: {exc}")
+                    print("[Sprint147-6 Direct Image] FAILED:", scene_id, repr(exc), flush=True)
+                else:
+                    generation_runs.append({
+                        "scene_id": scene_id,
+                        "selected_image_path": generated_path,
+                        "generated_image_path": generated_path,
+                        "passed": True,
+                        "attempt_count": 1,
+                        "source": "direct_single_generation",
+                    })
+                    usable_run_ids.add(scene_id)
+                    print("[Sprint147-6 Direct Image] GENERATED:", scene_id, generated_path, flush=True)
+
+            for index, run_item in enumerate(generation_runs, start=1):
+                scene_id = str(run_item.get("scene_id") or f"scene_{index:02d}")
+                prompt_item = prompt_map.get(scene_id, {})
+                scene_item = scene_map.get(scene_id, {})
+                selected_path = str(
+                    run_item.get("selected_image_path")
+                    or run_item.get("generated_image_path")
+                    or prompt_item.get("selected_image_path")
+                    or ""
+                )
+                image_review_scenes.append({
+                    "scene_id": scene_id,
+                    "scene_index": int(scene_item.get("scene_index") or index),
+                    "subtitle_text": str(
+                        scene_item.get("subtitle_text")
+                        or scene_item.get("dialogue")
+                        or ""
+                    ),
+                    "prompt": str(
+                        prompt_item.get("prompt")
+                        or prompt_item.get("image_prompt")
+                        or run_item.get("prompt")
+                        or ""
+                    ),
+                    "negative_prompt": str(
+                        prompt_item.get("negative_prompt")
+                        or run_item.get("negative_prompt")
+                        or ""
+                    ),
+                    "reference_image_path": str(
+                        prompt_item.get("reference_image_path")
+                        or run_item.get("reference_image_path")
+                        or ""
+                    ),
+                    "image_path": selected_path,
+                    "passed": bool(run_item.get("passed")),
+                    "attempt_count": int(run_item.get("attempt_count") or run_item.get("attempt") or 1),
+                })
+
+            outputs["image_review"] = {
+                "ok": bool(image_review_scenes),
+                "ready": bool(image_review_scenes),
+                "version": "ai-image-review-gate-147-6",
+                "status": "WAITING_USER_APPROVAL" if image_review_scenes else "NO_GENERATED_IMAGES",
+                "project_id": str(project_id_for_director or ""),
+                "scene_count": len(image_review_scenes),
+                "scenes": image_review_scenes,
+                "all_approved": False,
+                "generation_errors": direct_generation_errors,
+                "closed_loop_status": str(ai_image_closed_loop_result.get("status") or ""),
+                "director_status": str(ai_image_director_result.get("status") or ""),
+            }
+            outputs["next_stage_gate"] = {
+                "version": "ai-image-review-gate-147-6",
+                "status": "WAITING_IMAGE_APPROVAL",
+                "scene_image_motion_video_executed": False,
+                "reason": "장면별 이미지를 확인한 뒤 승인된 이미지로 최종 영상을 제작합니다.",
+            }
+            print("[Sprint147-6 Image Review] Status: WAITING_IMAGE_APPROVAL", flush=True)
+            print("[Sprint147-6 Image Review] Scene Count:", len(image_review_scenes), flush=True)
+            print("[Sprint147-6 Image Review] Video Executed: False", flush=True)
+            return {
+                "job_id": uuid4().hex[:12],
+                "state": {},
+                "outputs": outputs,
+                "summary": "장면별 AI 이미지 생성 완료 - 사용자 승인 대기",
+                "script_status": "APPROVED",
+                "next_stage_status": "WAITING_IMAGE_APPROVAL",
+            }
+
         # Sprint124-3A: Scene Planner가 만든 자막 타임라인을 영상 생성과 분리해 보존합니다.
+        # Sprint146-12: 실제 scene_plan_result를 기준으로 공통 장면 목록을 동기화합니다.
+        # 일반 경로와 잠금 대본 우회 경로 모두 이 지점부터 동일한 값을 사용합니다.
+        planned_scenes = list(scene_plan_result.get("scenes", []) or [])
+        print(
+            "[Sprint146-12 Planned Scenes] Count:",
+            len(planned_scenes),
+            flush=True,
+        )
         scene_subtitle_plan = [
             dict(item)
             for item in list(scene_plan_result.get("subtitle_plan") or [])
@@ -4516,6 +7603,12 @@ class WorkflowEngine:
             if isinstance(item, dict)
         ]
 
+        # Sprint146-7: 대본과 함께 넣은 장면별 이미지는 최종 렌더 소스입니다.
+        # AI Director 결과는 모션 참고만 허용하고 이미지 자체는 교체하지 않습니다.
+        if scene_image_direct_mode:
+            director_motion_scenes = []
+            print("[Sprint146-7 Scene Image Direct] AI image replacement: BYPASSED", flush=True)
+
         fresh_product_images = []
         fresh_seen_paths = set()
         for image_value in list(manual_product_image_paths or []):
@@ -4540,133 +7633,352 @@ class WorkflowEngine:
             "strong_push_in",
         )
 
+        # Sprint136-1:
+        # AI Director가 지나치게 slow 위주로 모션 속도를 선택하더라도
+        # 장면 목적에 맞는 쇼츠용 속도 분포를 최종 렌더 계획에 적용합니다.
+        # hook / feature / proof는 fast,
+        # pain / usage / comparison은 medium,
+        # cta는 slow를 기본값으로 사용합니다.
+        planned_motion_source_scenes = [
+            item
+            for item in list(scene_plan_result.get("scenes") or [])
+            if isinstance(item, dict)
+        ]
+
+        def resolve_motion_purpose(
+            scene_index_value,
+            director_scene_value,
+            director_plan_value,
+        ):
+            planner_scene_value = (
+                planned_motion_source_scenes[scene_index_value]
+                if scene_index_value < len(planned_motion_source_scenes)
+                else {}
+            )
+            raw_purpose_value = str(
+                director_scene_value.get("purpose")
+                or director_scene_value.get("story_purpose")
+                or director_scene_value.get("scene_purpose")
+                or director_scene_value.get("role")
+                or director_plan_value.get("purpose")
+                or director_plan_value.get("story_purpose")
+                or director_plan_value.get("scene_purpose")
+                or director_plan_value.get("role")
+                or planner_scene_value.get("purpose")
+                or planner_scene_value.get("story_purpose")
+                or planner_scene_value.get("scene_purpose")
+                or planner_scene_value.get("role")
+                or ""
+            ).strip().lower()
+
+            purpose_aliases = {
+                "intro": "hook",
+                "opening": "hook",
+                "problem": "pain",
+                "empathy": "pain",
+                "benefit": "feature",
+                "solution": "feature",
+                "demonstration": "usage",
+                "demo": "usage",
+                "evidence": "proof",
+                "trust": "proof",
+                "compare": "comparison",
+                "ending": "cta",
+                "close": "cta",
+            }
+            return purpose_aliases.get(raw_purpose_value, raw_purpose_value)
+
+        def resolve_motion_speed(
+            scene_index_value,
+            scene_purpose_value,
+            requested_speed_value,
+        ):
+            purpose_value = str(scene_purpose_value or "").strip().lower()
+            requested_value = str(requested_speed_value or "").strip().lower()
+
+            fast_tokens = (
+                "hook",
+                "feature",
+                "proof",
+                "result",
+                "reveal",
+                "후킹",
+                "기능",
+                "증명",
+                "결과",
+            )
+            medium_tokens = (
+                "pain",
+                "usage",
+                "comparison",
+                "problem",
+                "empathy",
+                "demo",
+                "사용",
+                "비교",
+                "불편",
+                "공감",
+            )
+            slow_tokens = (
+                "cta",
+                "ending",
+                "close",
+                "마무리",
+                "구매",
+            )
+
+            if any(token in purpose_value for token in fast_tokens):
+                return "fast"
+            if any(token in purpose_value for token in medium_tokens):
+                return "medium"
+            if any(token in purpose_value for token in slow_tokens):
+                return "slow"
+
+            # 업로드 이미지가 Director 장면 수보다 많아 목적이 없는 확장 장면은
+            # fast가 전혀 사라지지 않도록 리듬형 기본 분포를 적용합니다.
+            fallback_speed_sequence = (
+                "fast",
+                "medium",
+                "fast",
+                "medium",
+                "fast",
+                "medium",
+                "medium",
+                "slow",
+            )
+            fallback_value = fallback_speed_sequence[
+                scene_index_value % len(fallback_speed_sequence)
+            ]
+
+            if requested_value in {"fast", "medium", "slow"}:
+                # 목적이 없더라도 Director가 fast/medium을 준 경우는 유지합니다.
+                # slow만 반복되는 경우에는 리듬형 fallback으로 보강합니다.
+                if requested_value != "slow":
+                    return requested_value
+
+            return fallback_value
+
         director_scene_count = max(
             len(director_motion_scenes),
             len(director_motion_plan),
             int(scene_plan_result.get("scene_count") or 0),
             len(list(scene_plan_result.get("scenes") or [])),
         )
-        target_motion_scene_count = max(
-            director_scene_count,
-            len(fresh_product_images),
+
+        # Sprint144-2:
+        # 업로드 상품 이미지는 AI 생성의 기준(reference)으로만 사용합니다.
+        # Image Motion 입력은 장면별 Closed Loop 최종 생성 이미지를 최우선으로 사용하고,
+        # 생성 실패 또는 파일 누락 장면에만 실제 상품 이미지를 fallback으로 배정합니다.
+        # Sprint150-5: 쇼츠 영상은 10장면 × 2.5초 = 25초로 고정합니다.
+        # 업로드 이미지가 10장보다 적으면 아래 장면 루프에서 순환 배정합니다.
+        short_motion_scene_count = 10
+        short_scene_duration = 2.5
+        target_motion_scene_count = (
+            short_motion_scene_count
+            if fresh_product_images or director_scene_count > 0
+            else 0
+        )
+        print(
+            "[Sprint150-5 Short Motion] Render Scene Count:",
+            target_motion_scene_count,
+            flush=True,
+        )
+        print(
+            "[Sprint150-5 Short Motion] Seconds Per Scene:",
+            short_scene_duration,
+            flush=True,
+        )
+        print(
+            "[Sprint150-5 Short Motion] Target Duration:",
+            target_motion_scene_count * short_scene_duration,
+            flush=True,
         )
 
+        def resolve_generated_motion_image(scene_value):
+            if not isinstance(scene_value, dict):
+                return ""
+            candidates = (
+                scene_value.get("selected_generated_image_path"),
+                scene_value.get("validated_image_path"),
+                scene_value.get("generated_image_path"),
+                scene_value.get("final_image_path"),
+                scene_value.get("resolved_image_path"),
+                scene_value.get("output_image_path"),
+                scene_value.get("selected_image_path"),
+            )
+            for candidate in candidates:
+                candidate_text = str(candidate or "").strip()
+                if not candidate_text:
+                    continue
+                candidate_path = Path(candidate_text)
+                if candidate_path.is_file():
+                    return str(candidate_path)
+            return ""
+
         existing_motion_scenes = []
-        if fresh_product_images and target_motion_scene_count > 0:
-            for scene_index in range(target_motion_scene_count):
-                director_scene = (
-                    director_motion_scenes[scene_index]
-                    if scene_index < len(director_motion_scenes)
-                    else {}
-                )
-                director_plan_item = (
-                    director_motion_plan[scene_index]
-                    if scene_index < len(director_motion_plan)
-                    else {}
-                )
+        generated_motion_count = 0
+        fallback_motion_count = 0
+        missing_motion_count = 0
+
+        for scene_index in range(target_motion_scene_count):
+            director_scene = (
+                director_motion_scenes[scene_index]
+                if scene_index < len(director_motion_scenes)
+                else {}
+            )
+            director_plan_item = (
+                director_motion_plan[scene_index]
+                if scene_index < len(director_motion_plan)
+                else {}
+            )
+
+            if scene_image_direct_mode and scene_index < len(fresh_product_images):
+                image_path_value = fresh_product_images[scene_index]
+                motion_source_value = "sprint146_7_uploaded_scene_image_direct"
+            else:
+                image_path_value = resolve_generated_motion_image(director_scene)
+                motion_source_value = "sprint144_2_closed_loop_generated_image"
+
+            if image_path_value:
+                generated_motion_count += 1
+            elif fresh_product_images:
                 image_path_value = fresh_product_images[
                     scene_index % len(fresh_product_images)
                 ]
-                recommended_motion = str(
-                    director_scene.get("recommended_motion")
-                    or director_plan_item.get("recommended_motion")
-                    or default_motions[scene_index % len(default_motions)]
+                motion_source_value = "sprint144_2_product_reference_fallback"
+                fallback_motion_count += 1
+            else:
+                missing_motion_count += 1
+                print(
+                    f"[Sprint144-2 AI Image Motion] Scene{scene_index + 1:02d} "
+                    "SKIPPED: generated image and product fallback are missing",
+                    flush=True,
                 )
-                existing_motion_scenes.append(
-                    {
-                        "scene_id": str(
-                            director_scene.get("scene_id")
-                            or director_plan_item.get("scene_id")
-                            or f"scene_{scene_index + 1:02d}"
-                        ),
-                        "scene_index": scene_index,
-                        "image_path": image_path_value,
-                        "recommended_motion": recommended_motion,
-                        "motion_speed": str(
-                            director_scene.get("motion_speed")
-                            or director_plan_item.get("motion_speed")
-                            or "slow"
-                        ),
-                        "motion_reason": str(
-                            director_scene.get("motion_reason")
-                            or director_plan_item.get("motion_reason")
-                            or "full_product_image_sequential_assignment"
-                        ),
-                        "camera_style": str(
-                            director_scene.get("camera_style")
-                            or director_plan_item.get("camera_style")
-                            or "product_focus"
-                        ),
-                        "motion_source": "sprint131_7_full_product_image_sequence",
-                        "duration": float(
-                            director_scene.get("duration")
-                            or director_scene.get("duration_seconds")
-                            or director_plan_item.get("duration")
-                            or 3.0
-                        ),
-                    }
-                )
-        else:
-            # 업로드 이미지가 없을 때만 기존 Director 선택 결과를 안전하게 유지합니다.
-            for scene_item in director_motion_scenes:
-                image_path_value = str(
-                    scene_item.get("resolved_image_path")
-                    or scene_item.get("selected_image_path")
-                    or ""
-                ).strip()
-                if not image_path_value:
-                    continue
-                image_path_object = Path(image_path_value)
-                if not image_path_object.is_file():
-                    continue
-                if not bool(scene_item.get("motion_input_allowed", True)):
-                    continue
-                existing_motion_scenes.append(
-                    {
-                        "scene_id": str(scene_item.get("scene_id") or ""),
-                        "scene_index": len(existing_motion_scenes),
-                        "image_path": str(image_path_object),
-                        "recommended_motion": str(
-                            scene_item.get("recommended_motion") or ""
-                        ),
-                        "motion_speed": str(scene_item.get("motion_speed") or ""),
-                        "motion_reason": str(scene_item.get("motion_reason") or ""),
-                        "camera_style": str(scene_item.get("camera_style") or ""),
-                        "motion_source": str(scene_item.get("motion_source") or ""),
-                        "duration": float(
-                            scene_item.get("duration")
-                            or scene_item.get("duration_seconds")
-                            or 3.0
-                        ),
-                    }
-                )
+                continue
+
+            recommended_motion = str(
+                director_scene.get("recommended_motion")
+                or director_plan_item.get("recommended_motion")
+                or default_motions[scene_index % len(default_motions)]
+            )
+            motion_purpose = resolve_motion_purpose(
+                scene_index,
+                director_scene,
+                director_plan_item,
+            )
+            director_requested_speed = str(
+                director_scene.get("motion_speed")
+                or director_plan_item.get("motion_speed")
+                or ""
+            )
+            resolved_motion_speed = resolve_motion_speed(
+                scene_index,
+                motion_purpose,
+                director_requested_speed,
+            )
+
+            existing_motion_scenes.append(
+                {
+                    "scene_id": str(
+                        director_scene.get("scene_id")
+                        or director_plan_item.get("scene_id")
+                        or f"scene_{scene_index + 1:02d}"
+                    ),
+                    "scene_index": scene_index,
+                    "image_path": image_path_value,
+                    "recommended_motion": recommended_motion,
+                    "motion_speed": resolved_motion_speed,
+                    "requested_motion_speed": director_requested_speed,
+                    "motion_purpose": motion_purpose,
+                    "motion_reason": str(
+                        director_scene.get("motion_reason")
+                        or director_plan_item.get("motion_reason")
+                        or (
+                            "sprint144_2_generated_image_motion_"
+                            f"{motion_purpose or 'fallback'}"
+                        )
+                    ),
+                    "camera_style": str(
+                        director_scene.get("camera_style")
+                        or director_plan_item.get("camera_style")
+                        or "product_focus"
+                    ),
+                    "motion_source": motion_source_value,
+                    # Sprint150-5: Director 장면 길이보다 쇼츠 25초 타임라인을 우선합니다.
+                    "duration": short_scene_duration,
+                }
+            )
 
         print(
-            "[Sprint131-7 Image Sequence] Uploaded Count:",
-            len(fresh_product_images),
+            "[Sprint144-2 AI Image Motion] Version:",
+            "workflow-ai-image-motion-144-2",
             flush=True,
         )
         print(
-            "[Sprint131-7 Image Sequence] Director Scene Count:",
+            "[Sprint144-2 AI Image Motion] Director Scenes:",
             director_scene_count,
             flush=True,
         )
         print(
-            "[Sprint131-7 Image Sequence] Render Scene Count:",
+            "[Sprint144-2 AI Image Motion] Generated Images:",
+            generated_motion_count,
+            flush=True,
+        )
+        print(
+            "[Sprint144-2 AI Image Motion] Product Fallbacks:",
+            fallback_motion_count,
+            flush=True,
+        )
+        print(
+            "[Sprint144-2 AI Image Motion] Missing:",
+            missing_motion_count,
+            flush=True,
+        )
+
+        print(
+            "[Sprint144-2 Image Sequence] Uploaded Reference Count:",
+            len(fresh_product_images),
+            flush=True,
+        )
+        print(
+            "[Sprint144-2 Image Sequence] Director Scene Count:",
+            director_scene_count,
+            flush=True,
+        )
+        print(
+            "[Sprint144-2 Image Sequence] Render Scene Count:",
             len(existing_motion_scenes),
             flush=True,
         )
         print(
-            "[Sprint131-7 Image Sequence] Unique Render Images:",
+            "[Sprint144-2 Image Sequence] Unique Render Images:",
             len({item["image_path"] for item in existing_motion_scenes}),
             flush=True,
         )
         for sequence_index, sequence_item in enumerate(existing_motion_scenes, start=1):
             print(
-                f"[Sprint131-7 Image Sequence] Scene{sequence_index:02d} -> "
+                f"[Sprint144-2 Image Sequence] Scene{sequence_index:02d} -> "
                 f"{sequence_item.get('image_path', '')}",
                 flush=True,
             )
+            print(
+                f"[Sprint136-1 Purpose Motion] Scene{sequence_index:02d}: "
+                f"purpose={sequence_item.get('motion_purpose', '') or 'fallback'} "
+                f"motion={sequence_item.get('recommended_motion', '')} "
+                f"requested_speed="
+                f"{sequence_item.get('requested_motion_speed', '') or 'empty'} "
+                f"resolved_speed={sequence_item.get('motion_speed', '')}",
+                flush=True,
+            )
+
+        print(
+            "[Sprint136-1 Purpose Motion] Speed Distribution:",
+            [
+                item.get("motion_speed")
+                for item in existing_motion_scenes
+            ],
+            flush=True,
+        )
 
         motion_image_paths = [
             item["image_path"]
@@ -4678,6 +7990,11 @@ class WorkflowEngine:
                 "scene_index": item["scene_index"],
                 "recommended_motion": item["recommended_motion"],
                 "motion_speed": item["motion_speed"],
+                "requested_motion_speed": item.get(
+                    "requested_motion_speed",
+                    "",
+                ),
+                "motion_purpose": item.get("motion_purpose", ""),
                 "motion_reason": item["motion_reason"],
                 "camera_style": item["camera_style"],
                 "motion_source": item["motion_source"] or "ai_image_director",
@@ -4705,7 +8022,7 @@ class WorkflowEngine:
                 image_motion_result = ImageMotionGenerator().generate_many(
                     image_paths=motion_image_paths,
                     output_dir=motion_render_dir,
-                    duration=3.0,
+                    duration=short_scene_duration,
                     start_index=0,
                     overwrite=True,
                     motion_plan=motion_plan_for_render,
@@ -5188,6 +8505,78 @@ class WorkflowEngine:
             flush=True,
         )
 
+        # Sprint132-3 Viral Pattern Candidate Bridge
+        # 기존 영상 후보와 Sprint132 Viral Collector의 선택 영상을 하나의 후보 풀로 합칩니다.
+        # ViralPatternEngine이 Collector 결과를 실제 입력으로 받도록 연결합니다.
+        original_video_candidates = [
+            dict(item)
+            for item in (outputs.get("video_candidates", []) or [])
+            if isinstance(item, dict)
+        ]
+        collected_viral_candidates = [
+            dict(item)
+            for item in (
+                outputs.get("viral_collection", {}).get("videos", [])
+                if isinstance(outputs.get("viral_collection", {}), dict)
+                else []
+            )
+            if isinstance(item, dict)
+        ]
+
+        combined_video_candidates = []
+        combined_candidate_keys = set()
+
+        for candidate_source, candidate_items in (
+            ("video_candidates", original_video_candidates),
+            ("viral_collector", collected_viral_candidates),
+        ):
+            for candidate_item in candidate_items:
+                candidate = dict(candidate_item)
+                candidate.setdefault("candidate_source", candidate_source)
+
+                candidate_key = str(
+                    candidate.get("url")
+                    or candidate.get("video_url")
+                    or candidate.get("webpage_url")
+                    or candidate.get("video_id")
+                    or candidate.get("id")
+                    or ""
+                ).strip().lower()
+
+                if not candidate_key:
+                    candidate_key = "|".join(
+                        [
+                            str(candidate.get("platform") or "").strip().lower(),
+                            str(candidate.get("channel_name") or candidate.get("channel") or "").strip().lower(),
+                            str(candidate.get("title") or "").strip().lower(),
+                        ]
+                    )
+
+                if candidate_key and candidate_key in combined_candidate_keys:
+                    continue
+                if candidate_key:
+                    combined_candidate_keys.add(candidate_key)
+
+                combined_video_candidates.append(candidate)
+
+        outputs["viral_pattern_input_candidates"] = combined_video_candidates
+
+        print(
+            "[Sprint132-3 Viral Pattern Bridge] Existing Candidates:",
+            len(original_video_candidates),
+            flush=True,
+        )
+        print(
+            "[Sprint132-3 Viral Pattern Bridge] Collector Candidates:",
+            len(collected_viral_candidates),
+            flush=True,
+        )
+        print(
+            "[Sprint132-3 Viral Pattern Bridge] Combined Candidates:",
+            len(combined_video_candidates),
+            flush=True,
+        )
+
         # 6. Shopping Shorts Fit
         try:
             outputs["shopping_shorts_fit"] = (
@@ -5201,10 +8590,7 @@ class WorkflowEngine:
                         "real_vision",
                         {},
                     ),
-                    candidates=outputs.get(
-                        "video_candidates",
-                        [],
-                    ),
+                    candidates=combined_video_candidates,
                 )
             )
 
@@ -5232,10 +8618,7 @@ class WorkflowEngine:
         # 7. Candidate Enrichment
         enriched_candidates = []
 
-        for item in outputs.get(
-            "video_candidates",
-            [],
-        ):
+        for item in combined_video_candidates:
             if not isinstance(item, dict):
                 continue
 
@@ -5326,7 +8709,33 @@ class WorkflowEngine:
                 )
                 else {}
             )
+            outputs["viral_scene_plan"] = (
+                viral_pattern.get(
+                    "best_scene_plan",
+                    {},
+                )
+                if isinstance(
+                    viral_pattern,
+                    dict,
+                )
+                else {}
+            )
 
+            print(
+                "[Sprint133-1 Viral Scene Structure] Version:",
+                outputs.get("viral_scene_plan", {}).get("version", ""),
+                flush=True,
+            )
+            print(
+                "[Sprint133-1 Viral Scene Structure] Status:",
+                outputs.get("viral_scene_plan", {}).get("status", ""),
+                flush=True,
+            )
+            print(
+                "[Sprint133-1 Viral Scene Structure] Scene Count:",
+                outputs.get("viral_scene_plan", {}).get("scene_count", 0),
+                flush=True,
+            )
             print(
                 "[Sprint62] ViralPattern version:",
                 viral_pattern.get(
@@ -5372,6 +8781,7 @@ class WorkflowEngine:
                 "best_pattern": {},
             }
             outputs["viral_pattern_best"] = {}
+            outputs["viral_scene_plan"] = {}
 
         # 9. Selector + Ranker
         try:
@@ -6228,201 +9638,397 @@ class WorkflowEngine:
             )
 
         # =====================================
-        # 10-3. Sprint73-4 Review Script Generator
+        # Sprint137-1 Viral Purpose Pipeline
         # =====================================
+        viral_pipeline_result = {
+            "ok": False,
+            "ready": False,
+            "version": "viral-pipeline-137-1",
+            "status": "skipped_no_local_viral_video",
+            "video_path": "",
+            "output_dir": "",
+            "steps": {},
+            "errors": [],
+            "warnings": [],
+        }
+
         try:
-            import inspect
-
-            print(
-                "[UTF8 TRACE ReviewScriptGenerator FILE]",
-                inspect.getfile(ReviewScriptGenerator),
-                flush=True,
+            sprint137_video_path = self._resolve_sprint137_viral_video_path(
+                viral_video_sources=viral_video_sources,
+                viral_library_result=viral_library_result,
             )
-            print(
-                "[UTF8 TRACE ReviewScriptGenerator MODULE]",
-                ReviewScriptGenerator.__module__,
-                flush=True,
-            )
-            script_trace_payload = {
-                "workflow_version": self.WORKFLOW_VERSION,
-                "project_id": str(getattr(project, "id", "") or ""),
-                "product_name": (
-                    getattr(project, "product_name", "")
-                    or getattr(project, "title", "")
-                    or "선택 상품"
-                ),
-                "review_count": len(merged_reviews),
-                "review_hooks": outputs.get("review_hooks", {}),
-                "review_quotes": outputs.get("review_quotes", {}),
-                "review_insight": outputs.get("review_insight", {}),
-                "story_intelligence": outputs.get("story_intelligence", {}),
-            }
-
-            print(
-                "[UTF8 BEFORE SCRIPT product_name]",
-                repr(script_trace_payload.get("product_name", "")),
-                flush=True,
-            )
-            print(
-                "[UTF8 BEFORE SCRIPT review_insight.product_name]",
-                repr(
-                    (script_trace_payload.get("review_insight") or {}).get(
-                        "product_name",
-                        "",
-                    )
-                    if isinstance(
-                        script_trace_payload.get("review_insight"),
-                        dict,
-                    )
-                    else ""
-                ),
-                flush=True,
-            )
-            print(
-                "[UTF8 BEFORE SCRIPT review_hooks.best_hook]",
-                repr(
-                    (script_trace_payload.get("review_hooks") or {}).get(
-                        "best_hook",
-                        "",
-                    )
-                    if isinstance(
-                        script_trace_payload.get("review_hooks"),
-                        dict,
-                    )
-                    else ""
-                ),
-                flush=True,
-            )
-
-            script_trace_dir = (
+            sprint137_output_dir = (
                 Path("assets")
                 / "products"
                 / f"project_{getattr(project, 'id', '')}"
-            )
-            script_trace_dir.mkdir(parents=True, exist_ok=True)
-            script_input_trace_path = (
-                script_trace_dir
-                / "utf8_before_review_script_generator.json"
-            )
-            script_input_trace_path.write_text(
-                json.dumps(
-                    script_trace_payload,
-                    ensure_ascii=False,
-                    indent=2,
-                    default=str,
-                ),
-                encoding="utf-8",
-            )
-            print(
-                "[UTF8 BEFORE SCRIPT JSON]",
-                str(script_input_trace_path),
-                flush=True,
+                / "viral_pipeline_137_1"
             )
 
-            review_script_result = ReviewScriptGenerator().generate(
-                review_hooks=outputs.get(
-                    "review_hooks",
-                    {},
-                ),
-                review_quotes=outputs.get(
-                    "review_quotes",
-                    {},
-                ),
-                review_insight=outputs.get(
-                    "review_insight",
-                    {},
-                ),
-                product_name=(
+            if sprint137_video_path:
+                current_review_insight = (
+                    outputs.get("review_insight", {})
+                    if isinstance(outputs.get("review_insight", {}), dict)
+                    else {}
+                )
+                current_review_quotes = (
+                    outputs.get("review_quotes", {})
+                    if isinstance(outputs.get("review_quotes", {}), dict)
+                    else {}
+                )
+                current_review_hooks = (
+                    outputs.get("review_hooks", {})
+                    if isinstance(outputs.get("review_hooks", {}), dict)
+                    else {}
+                )
+                resolved_product_name = (
                     getattr(project, "product_name", "")
                     or getattr(project, "title", "")
+                    or project_data.get("product_name", "")
                     or "선택 상품"
-                ),
-                review_count=len(merged_reviews),
-                story_intelligence=outputs.get(
-                    "story_intelligence",
-                    {},
-                ),
-            )
-            print(
-                "[UTF8 TRACE review_script_result RAW]",
-                repr(review_script_result),
-                flush=True,
-            )
+                )
+                resolved_description = str(
+                    project_data.get("product_description")
+                    or project_data.get("description")
+                    or getattr(project, "description", "")
+                    or ""
+                ).strip()
+                resolved_brand = str(
+                    project_data.get("brand_name")
+                    or project_data.get("brand")
+                    or getattr(project, "brand_name", "")
+                    or ""
+                ).strip()
 
-            script_result_trace_path = (
-                script_trace_dir
-                / "utf8_after_review_script_generator.json"
-            )
-            script_result_trace_path.write_text(
-                json.dumps(
-                    review_script_result,
-                    ensure_ascii=False,
-                    indent=2,
-                    default=str,
-                ),
-                encoding="utf-8",
-            )
-            print(
-                "[UTF8 AFTER SCRIPT JSON]",
-                str(script_result_trace_path),
-                flush=True,
-            )
-
-            outputs["review_scripts"] = review_script_result
-
-            print(
-                "[Sprint120-4 Script Bridge] Version:",
-                review_script_result.get("scene_script_bridge_version", ""),
-                flush=True,
-            )
-            print(
-                "[Sprint120-4 Script Bridge] Scene Subtitles:",
-                review_script_result.get("scene_subtitle_count", 0),
-                flush=True,
-            )
-            print(
-                "[Sprint120-4 Script Bridge] Template:",
-                {
-                    "version": review_script_result.get("story_template_version", ""),
-                    "category": review_script_result.get("story_template_category", ""),
-                    "key": review_script_result.get("story_template_key", ""),
-                },
-                flush=True,
-            )
-
-            print(
-                "[Sprint73-4] Script Generator:",
-                bool(review_script_result.get("ok")),
-                flush=True,
-            )
-            print(
-                "[Sprint73-4] Script Count:",
-                review_script_result.get("script_count"),
-                flush=True,
-            )
-            print(
-                "[Sprint73-4] Best Script:",
-                review_script_result.get("best_script"),
-                flush=True,
-            )
-            print(
-                "[Sprint73-4] Script Type:",
-                review_script_result.get("best_script_type"),
-                flush=True,
-            )
+                viral_pipeline_result = run_viral_pipeline(
+                    video_path=sprint137_video_path,
+                    output_dir=sprint137_output_dir,
+                    product_name=resolved_product_name,
+                    product_description=resolved_description,
+                    brand_name=resolved_brand,
+                    best_hook=str(
+                        current_review_hooks.get("best_hook")
+                        or current_review_insight.get("best_hook")
+                        or ""
+                    ).strip(),
+                    best_pain=str(
+                        current_review_quotes.get("best_pain")
+                        or current_review_insight.get("best_pain")
+                        or current_review_insight.get("best_pain_point")
+                        or ""
+                    ).strip(),
+                    best_benefit=str(
+                        current_review_quotes.get("best_benefit")
+                        or current_review_insight.get("best_benefit")
+                        or ""
+                    ).strip(),
+                    best_evidence=str(
+                        current_review_quotes.get("best_quote")
+                        or current_review_insight.get("best_evidence")
+                        or ""
+                    ).strip(),
+                    cta_text="구매 전에는 상세 정보와 실제 사용 조건을 확인해보세요",
+                    frame_interval_seconds=2.0,
+                    max_thumbnail_count=30,
+                    overwrite=True,
+                )
+            else:
+                viral_pipeline_result["warnings"] = [
+                    "Sprint137 분석에 사용할 로컬 바이럴 영상 파일이 없습니다."
+                ]
 
         except Exception as exc:
-            outputs["review_scripts"] = {
+            viral_pipeline_result = {
+                **viral_pipeline_result,
                 "ok": False,
-                "version": "review-script-generator-73-4",
-                "best_script": "",
-                "scripts": [],
-                "error": str(exc),
+                "ready": False,
+                "status": "exception",
+                "errors": [f"{type(exc).__name__}: {exc}"],
             }
 
+        outputs["viral_pipeline"] = viral_pipeline_result
+        outputs["viral_image_prompts"] = (
+            viral_pipeline_result.get("steps", {}).get(
+                "image_prompt_generator",
+                {},
+            )
+            if isinstance(viral_pipeline_result, dict)
+            else {}
+        )
+        print(
+            "[Sprint137-1 Viral Pipeline] Version:",
+            viral_pipeline_result.get("version", ""),
+            flush=True,
+        )
+        print(
+            "[Sprint137-1 Viral Pipeline] Status:",
+            viral_pipeline_result.get("status", ""),
+            flush=True,
+        )
+        print(
+            "[Sprint137-1 Viral Pipeline] Video:",
+            viral_pipeline_result.get("video_path", ""),
+            flush=True,
+        )
+        print(
+            "[Sprint137-1 Viral Pipeline] Final Output:",
+            viral_pipeline_result.get("final_output_path", ""),
+            flush=True,
+        )
+        print(
+            "[Sprint137-1 Viral Pipeline] Errors:",
+            viral_pipeline_result.get("errors", []),
+            flush=True,
+        )
+
+        if locked_script:
+            outputs["review_scripts"] = dict(approved_review_scripts)
+            outputs["viral_script_director_feedback"] = {
+                "ready": False,
+                "status": "skipped_locked_script",
+                "version": "locked-script-feedback-bypass-146-11",
+            }
+            print("[Sprint146-10 Late Script Generator] ReviewScriptGenerator: SKIPPED", flush=True)
+        else:
+            # =====================================
+            # 10-3. Sprint73-4 Review Script Generator
+            # =====================================
+            try:
+                import inspect
+
+                print(
+                    "[UTF8 TRACE ReviewScriptGenerator FILE]",
+                    inspect.getfile(ReviewScriptGenerator),
+                    flush=True,
+                )
+                print(
+                    "[UTF8 TRACE ReviewScriptGenerator MODULE]",
+                    ReviewScriptGenerator.__module__,
+                    flush=True,
+                )
+                script_trace_payload = {
+                    "workflow_version": self.WORKFLOW_VERSION,
+                    "project_id": str(getattr(project, "id", "") or ""),
+                    "product_name": (
+                        getattr(project, "product_name", "")
+                        or getattr(project, "title", "")
+                        or "선택 상품"
+                    ),
+                    "review_count": len(merged_reviews),
+                    "review_hooks": outputs.get("review_hooks", {}),
+                    "review_quotes": outputs.get("review_quotes", {}),
+                    "review_insight": outputs.get("review_insight", {}),
+                    "story_intelligence": outputs.get("story_intelligence", {}),
+                    "viral_pipeline": outputs.get("viral_pipeline", {}),
+                }
+
+                print(
+                    "[UTF8 BEFORE SCRIPT product_name]",
+                    repr(script_trace_payload.get("product_name", "")),
+                    flush=True,
+                )
+                print(
+                    "[UTF8 BEFORE SCRIPT review_insight.product_name]",
+                    repr(
+                        (script_trace_payload.get("review_insight") or {}).get(
+                            "product_name",
+                            "",
+                        )
+                        if isinstance(
+                            script_trace_payload.get("review_insight"),
+                            dict,
+                        )
+                        else ""
+                    ),
+                    flush=True,
+                )
+                print(
+                    "[UTF8 BEFORE SCRIPT review_hooks.best_hook]",
+                    repr(
+                        (script_trace_payload.get("review_hooks") or {}).get(
+                            "best_hook",
+                            "",
+                        )
+                        if isinstance(
+                            script_trace_payload.get("review_hooks"),
+                            dict,
+                        )
+                        else ""
+                    ),
+                    flush=True,
+                )
+
+                script_trace_dir = (
+                    Path("assets")
+                    / "products"
+                    / f"project_{getattr(project, 'id', '')}"
+                )
+                script_trace_dir.mkdir(parents=True, exist_ok=True)
+                script_input_trace_path = (
+                    script_trace_dir
+                    / "utf8_before_review_script_generator.json"
+                )
+                script_input_trace_path.write_text(
+                    json.dumps(
+                        script_trace_payload,
+                        ensure_ascii=False,
+                        indent=2,
+                        default=str,
+                    ),
+                    encoding="utf-8",
+                )
+                print(
+                    "[UTF8 BEFORE SCRIPT JSON]",
+                    str(script_input_trace_path),
+                    flush=True,
+                )
+
+                review_script_result = ReviewScriptGenerator().generate(
+                    review_hooks=outputs.get(
+                        "review_hooks",
+                        {},
+                    ),
+                    review_quotes=outputs.get(
+                        "review_quotes",
+                        {},
+                    ),
+                    review_insight=outputs.get(
+                        "review_insight",
+                        {},
+                    ),
+                    product_name=(
+                        getattr(project, "product_name", "")
+                        or getattr(project, "title", "")
+                        or "선택 상품"
+                    ),
+                    review_count=len(merged_reviews),
+                    story_intelligence=outputs.get(
+                        "story_intelligence",
+                        {},
+                    ),
+                    viral_pipeline=outputs.get(
+                        "viral_pipeline",
+                        {},
+                    ),
+                )
+                print(
+                    "[UTF8 TRACE review_script_result RAW]",
+                    repr(review_script_result),
+                    flush=True,
+                )
+                print(
+                    "[Sprint143-3 Viral Script Feedback] Used:",
+                    review_script_result.get("viral_influence_used", False),
+                    flush=True,
+                )
+                print(
+                    "[Sprint143-3 Viral Script Feedback] Pattern:",
+                    review_script_result.get("viral_pattern", ""),
+                    flush=True,
+                )
+                print(
+                    "[Sprint143-3 Viral Script Feedback] Scene Subtitles:",
+                    review_script_result.get("scene_subtitle_count", 0),
+                    flush=True,
+                )
+
+                script_result_trace_path = (
+                    script_trace_dir
+                    / "utf8_after_review_script_generator.json"
+                )
+                script_result_trace_path.write_text(
+                    json.dumps(
+                        review_script_result,
+                        ensure_ascii=False,
+                        indent=2,
+                        default=str,
+                    ),
+                    encoding="utf-8",
+                )
+                print(
+                    "[UTF8 AFTER SCRIPT JSON]",
+                    str(script_result_trace_path),
+                    flush=True,
+                )
+
+                outputs["review_scripts"] = review_script_result
+
+                viral_script_feedback_result = self._run_sprint143_2_viral_script_feedback(
+                    viral_pipeline_result=outputs.get("viral_pipeline", {}),
+                    review_script_result=review_script_result,
+                    product_name=(
+                        getattr(project, "product_name", "")
+                        or getattr(project, "title", "")
+                        or "선택 상품"
+                    ),
+                )
+                outputs["viral_script_director_feedback"] = viral_script_feedback_result
+
+                print(
+                    "[Sprint120-4 Script Bridge] Version:",
+                    review_script_result.get("scene_script_bridge_version", ""),
+                    flush=True,
+                )
+                print(
+                    "[Sprint120-4 Script Bridge] Scene Subtitles:",
+                    review_script_result.get("scene_subtitle_count", 0),
+                    flush=True,
+                )
+                print(
+                    "[Sprint120-4 Script Bridge] Template:",
+                    {
+                        "version": review_script_result.get("story_template_version", ""),
+                        "category": review_script_result.get("story_template_category", ""),
+                        "key": review_script_result.get("story_template_key", ""),
+                    },
+                    flush=True,
+                )
+
+                print(
+                    "[Sprint73-4] Script Generator:",
+                    bool(review_script_result.get("ok")),
+                    flush=True,
+                )
+                print(
+                    "[Sprint73-4] Script Count:",
+                    review_script_result.get("script_count"),
+                    flush=True,
+                )
+                print(
+                    "[Sprint73-4] Best Script:",
+                    review_script_result.get("best_script"),
+                    flush=True,
+                )
+                print(
+                    "[Sprint73-4] Script Type:",
+                    review_script_result.get("best_script_type"),
+                    flush=True,
+                )
+
+            except Exception as exc:
+                outputs["review_scripts"] = {
+                    "ok": False,
+                    "version": "review-script-generator-73-4",
+                    "best_script": "",
+                    "scripts": [],
+                    "error": str(exc),
+                }
+
+                print(
+                    "[Sprint73-4] Script Generator ERROR:",
+                    repr(exc),
+                    flush=True,
+                )
+
+        # Sprint146-4: 후반 Legacy ReviewScriptGenerator가 승인 대본을 덮어쓰지 못하게 최종 복원합니다.
+        if approved_review_scripts and approved_script_text:
+            locked_review_scripts = dict(approved_review_scripts)
+            locked_review_scripts["best_script"] = approved_script_text
+            locked_review_scripts["status"] = "approved_script_locked"
+            locked_review_scripts["approved_full_pipeline"] = True
+            outputs["review_scripts"] = locked_review_scripts
             print(
-                "[Sprint73-4] Script Generator ERROR:",
-                repr(exc),
+                "[Sprint146-5 Locked Script Final Lock] READY FOR SUBTITLE/VOICE:",
+                len(approved_script_text),
                 flush=True,
             )
 
@@ -6470,10 +10076,19 @@ class WorkflowEngine:
                     "review_hooks",
                     {},
                 ),
+                # Sprint150-5: 최종 Subtitle/Voice 입력은 잠금 대본 원본만 전달합니다.
+                # AI 이미지용 scene_goal/scene_prompt/camera_direction은 이 경로에
+                # 포함하지 않습니다.
                 "review_scripts": outputs.get(
                     "review_scripts",
                     {},
                 ),
+                "locked_script": approved_script_text if locked_script else "",
+                "subtitle_source": (
+                    "locked_user_script_only" if locked_script
+                    else "review_script_scene_subtitles_only"
+                ),
+                "target_duration_seconds": 25.0,
                 "review_hook": (
                     outputs.get(
                         "review_hooks",
@@ -6576,6 +10191,27 @@ class WorkflowEngine:
                 render_guard_stats.get("director_prompt_removed", 0),
                 flush=True,
             )
+            if locked_script:
+                guarded_review_scripts = content_pack.get("review_scripts") or {}
+                guarded_scene_subtitles = [
+                    " ".join(str(item.get("subtitle") or "").split()).strip()
+                    for item in list(guarded_review_scripts.get("scene_subtitles") or [])
+                    if isinstance(item, dict)
+                    and " ".join(str(item.get("subtitle") or "").split()).strip()
+                ]
+                print(
+                    "[Sprint150-5 Locked Subtitle Guard] Final Subtitle Count:",
+                    len(guarded_scene_subtitles),
+                    flush=True,
+                )
+                print(
+                    "[Sprint150-5 Locked Subtitle Guard] Director Text In Subtitle: False",
+                    flush=True,
+                )
+                print(
+                    "[Sprint150-5 Duration] Target Seconds: 25.0",
+                    flush=True,
+                )
 
             content_factory_result = ContentFactory().apply_edit_assistant(
                 content_pack,
@@ -6854,11 +10490,117 @@ class WorkflowEngine:
             )
 
             if not export_pack:
-                raise ValueError(
-                    "Sprint81-10 export_pack이 없습니다"
+                locked_user_script = bool(
+                    review_scripts.get("locked_user_script")
                 )
-           
-            # Sprint128-1: Publisher 호출 직전 Sprint81-10 Export Pack의
+                locked_script_raw = (
+                    review_scripts.get("best_script")
+                    or review_scripts.get("original_best_script")
+                    or review_scripts.get("long_script")
+                    or review_scripts.get("medium_script")
+                    or review_scripts.get("short_script")
+                    or ""
+                )
+                locked_script_text = str(locked_script_raw).strip()
+
+                if locked_user_script and locked_script_text:
+                    locked_product_raw = (
+                        review_scripts.get("product_name")
+                        or getattr(project, "product_name", "")
+                        or getattr(project, "title", "")
+                        or ""
+                    )
+                    locked_product_name = str(locked_product_raw).strip()
+                    locked_title = (
+                        f"{locked_product_name} 쇼츠"
+                        if locked_product_name
+                        else "쇼핑 쇼츠"
+                    )
+                    locked_description = locked_script_text
+                    locked_hook = next(
+                        (
+                            line.strip()
+                            for line in locked_script_text.splitlines()
+                            if line.strip()
+                            and not re.match(
+                                r"^scene\s*\d+",
+                                line.strip(),
+                                flags=re.IGNORECASE,
+                            )
+                        ),
+                        locked_title,
+                    )
+                    locked_cta = "👉 궁금하시면 클릭! 👇"
+                    locked_hashtags = ["쇼핑쇼츠", "제품리뷰"]
+                    if locked_product_name:
+                        safe_product_tag = re.sub(
+                            r"[^0-9A-Za-z가-힣_]",
+                            "",
+                            locked_product_name.replace(" ", ""),
+                        )
+                        if safe_product_tag:
+                            locked_hashtags.insert(0, safe_product_tag)
+
+                    export_pack = {
+                        "ok": True,
+                        "ready": True,
+                        "version": "locked-user-script-publisher-pack-146-6",
+                        "status": "ready",
+                        "validation_passed": True,
+                        "product_name": locked_product_name,
+                        "title": locked_title,
+                        "description": locked_description,
+                        "best_hook": locked_hook,
+                        "best_script": locked_script_text,
+                        "platform_scripts": {
+                            "tiktok": locked_script_text,
+                            "instagram_reels": locked_script_text,
+                            "youtube_shorts": locked_script_text,
+                        },
+                        "platform_cta": {
+                            "tiktok": locked_cta,
+                            "instagram_reels": locked_cta,
+                            "youtube_shorts": locked_cta,
+                        },
+                        "hashtags": locked_hashtags,
+                        "hashtag_text": " ".join(
+                            f"#{tag}" for tag in locked_hashtags
+                        ),
+                        "thumbnail_prompt": "",
+                        "metadata": {
+                            "generator_version": (
+                                "locked-user-script-publisher-pack-builder-146-6"
+                            ),
+                            "source_script_version": str(
+                                review_scripts.get("version") or ""
+                            ).strip(),
+                            "locked_user_script": True,
+                        },
+                    }
+                    review_scripts["export_pack"] = export_pack
+                    outputs["review_scripts"] = review_scripts
+                    outputs["locked_script_publisher_pack"] = export_pack
+                    print(
+                        "[Sprint146-6 Publisher Pack] Built:",
+                        True,
+                        flush=True,
+                    )
+                    print(
+                        "[Sprint146-6 Publisher Pack] Version:",
+                        export_pack.get("version"),
+                        flush=True,
+                    )
+                    print(
+                        "[Sprint146-6 Publisher Pack] Script Length:",
+                        len(locked_script_text),
+                        flush=True,
+                    )
+                else:
+                    raise ValueError(
+                        "게시용 export_pack과 잠금 사용자 대본이 모두 없습니다"
+                    )
+
+            # Sprint128-1: Publisher 호출 직전 게시 Pack의
             # 제목·본문·해시태그 문자열이 이미 깨져 있는지 원본 그대로 검사합니다.
             print(
                 "[UTF8 TRACE export_pack RAW]",
@@ -7228,6 +10970,49 @@ class WorkflowEngine:
                 repr(exc),
                 flush=True,
             )
+
+        # Sprint146-4: ContentFactory 최종 산출물을 canonical final.mp4로 고정합니다.
+        project_id_final = str(getattr(project, "id", "") or "default")
+        canonical_final_path = Path("exports") / "videos" / f"{project_id_final}_final.mp4"
+        video_pipeline_result = (
+            outputs.get("video_pipeline")
+            if isinstance(outputs.get("video_pipeline"), dict)
+            else {}
+        )
+        produced_final_path = str(video_pipeline_result.get("output_path") or "").strip()
+        finalization_errors = []
+        try:
+            if produced_final_path and Path(produced_final_path).is_file():
+                canonical_final_path.parent.mkdir(parents=True, exist_ok=True)
+                if Path(produced_final_path).resolve() != canonical_final_path.resolve():
+                    shutil.copy2(produced_final_path, canonical_final_path)
+            final_ready = canonical_final_path.is_file() and canonical_final_path.stat().st_size > 1024
+        except Exception as exc:
+            final_ready = False
+            finalization_errors.append(f"{type(exc).__name__}: {exc}")
+
+        outputs["final_video"] = {
+            "ok": final_ready,
+            "ready": final_ready,
+            "version": "locked-script-full-video-finalizer-146-5b",
+            "status": "final_created" if final_ready else "final_missing",
+            "output_path": str(canonical_final_path) if final_ready else produced_final_path,
+            "source_output_path": produced_final_path,
+            "script_status": script_status,
+            "pipeline": ["ImageMotion", "Subtitle", "Voice", "Merge", "final.mp4"],
+            "errors": finalization_errors,
+        }
+        outputs["next_stage_gate"] = {
+            "version": "locked-script-full-pipeline-gate-146-5b",
+            "execution_mode": "locked_script_full_pipeline",
+            "status": "COMPLETED_FINAL_MP4" if final_ready else "PIPELINE_COMPLETED_FINAL_MISSING",
+            "script_approved": True,
+            "scene_image_motion_video_executed": True,
+            "final_video_path": outputs["final_video"].get("output_path", ""),
+        }
+        print("[Sprint146-5 Final Pipeline] ImageMotion:", outputs.get("ai_video_path", ""), flush=True)
+        print("[Sprint146-5 Final Pipeline] Subtitle/Voice/Merge:", produced_final_path, flush=True)
+        print("[Sprint146-5 Final Pipeline] FINAL:", outputs["final_video"]["status"], outputs["final_video"]["output_path"], flush=True)
 
         final_state = state.load(job_id)
 

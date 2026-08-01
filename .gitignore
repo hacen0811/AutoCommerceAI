@@ -32,3 +32,9 @@ Thumbs.db
 .idea/
 
 browser_profile/
+.venv312/
+__pycache__/
+*.pyc
+current.log
+exports/
+assets/products/
