@@ -1,9 +1,12 @@
+import hashlib
 import json
 import os
 import re
 import sys
 import threading
 import traceback
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from pathlib import Path
 from urllib.parse import quote_plus
 
@@ -34,6 +37,7 @@ from modules.project.project_selector import ProjectSelector
 from modules.project.repository import ProjectRepository
 from modules.project.service import ProjectService
 from modules.workflow.workflow_engine import WorkflowEngine
+from modules.audio.typecast_settings_store import TypecastSettingsStore
 from modules.workflow.job_queue import JobQueue
 from modules.workflow.pipeline_state import PipelineState
 
@@ -45,6 +49,17 @@ from app.ui.content_pack.content_pack_view import (
 from app.ui.download_connect import open_with_login_browser
 
 from modules.video.video_path_resolver import VideoPathResolver
+from modules.publisher.reservation_queue import ReservationQueue
+from modules.publisher.scheduled_metadata_builder import ScheduledMetadataBuilder
+from modules.publisher.existing_project_loader import ExistingProjectLoader
+from modules.publisher.content_library import ContentLibrary
+from modules.publisher.youtube_upload_executor import YouTubeUploadExecutor
+from modules.publisher.instagram_upload_executor import InstagramUploadExecutor
+from modules.publisher.meta_business_suite_scheduler import MetaBusinessSuiteScheduler
+from modules.publisher.tiktok_upload_executor import TikTokUploadExecutor
+from modules.publisher.threads_upload_executor import ThreadsUploadExecutor
+from modules.publisher.naver_clip_upload_executor import NaverClipUploadExecutor
+from modules.utils.product_output_naming import create_product_named_video_copy
 
 try:
     from modules.product.product_engine import ProductEngine
@@ -57,8 +72,81 @@ except Exception:
     SearchKeywordEngine = None
 
 
-UI_VERSION = "sprint157-cost-guard-ui"
+UI_VERSION = "sprint193-33-restore-effect-cue-method"
 RESULT_DIR = Path("exports/one_click_results")
+
+# Sprint192-1: TikTok / Naver Clip 계정별 Playwright 프로필 분리.
+# 기존 실물로그 프로필 경로는 그대로 유지하여 현재 로그인 세션을 보존합니다.
+PUBLISH_ACCOUNT_PROFILES = {
+    "실물로그": {
+        "tiktok": "secrets/tiktok_playwright_profile",
+        "threads": "secrets/threads_playwright_profile",
+        "naver_clip": "secrets/naver_clip_playwright_profile",
+    },
+    "하센맘": {
+        "tiktok": "secrets/tiktok_playwright_profile_hasenmom",
+        "threads": "secrets/threads_playwright_profile_hasenmom",
+        "naver_clip": "secrets/naver_clip_playwright_profile_hasenmom",
+    },
+}
+
+
+def _publisher_profile(account_name, platform):
+    account = str(account_name or "실물로그").strip()
+    platform_key = str(platform or "").strip().lower()
+    profiles = PUBLISH_ACCOUNT_PROFILES.get(
+        account,
+        PUBLISH_ACCOUNT_PROFILES["실물로그"],
+    )
+    return str(
+        profiles.get(platform_key)
+        or PUBLISH_ACCOUNT_PROFILES["실물로그"].get(platform_key, "")
+    )
+
+
+
+
+def _save_clip_subtitle_sidecar(project, clip_subtitles, subtitle_style=None, clip_narrations=None, clip_subtitle_effects=None, clip_sfx=None, clip_playback_speeds=None):
+    """프로젝트별 영상 자막을 별도 JSON으로 저장합니다."""
+    project_id = str(safe_project_id(project))
+    folder = Path("assets/products") / f"project_{project_id}"
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / "clip_subtitles.json"
+    payload = {
+        "version": "clip-subtitles-190-2",
+        "project_id": project_id,
+        "clip_subtitles": [
+            str(item or "").strip() for item in list(clip_subtitles or [])
+        ],
+        "clip_narrations": [
+            str(item or "").strip() for item in list(clip_narrations or [])
+        ],
+        "clip_subtitle_effects": [
+            str(item or "기본").strip() for item in list(clip_subtitle_effects or [])
+        ],
+        "clip_sfx": [
+            str(item or "없음").strip() for item in list(clip_sfx or [])
+        ],
+        "clip_playback_speeds": [
+            float(item if item is not None else 0.0) for item in list(clip_playback_speeds or [])
+        ],
+        "subtitle_style": dict(subtitle_style or {}),
+    }
+    path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    print(
+        "[Sprint190-2 Clip Subtitle Sidecar] SAVED",
+        {
+            "path": str(path),
+            "count": len(payload["clip_subtitles"]),
+            "nonempty": len([x for x in payload["clip_subtitles"] if x]),
+            "subtitle_style": payload.get("subtitle_style", {}),
+        },
+        flush=True,
+    )
+    return str(path)
 REVIEW_IMAGE_ROOT = Path("assets/review_images")
 PRODUCT_IMAGE_ROOT = Path("assets/products")
 VIRAL_UPLOAD_ROOT = Path("assets/viral_uploads")
@@ -73,11 +161,7 @@ SUPPORTED_REVIEW_IMAGE_SUFFIXES = {
 }
 
 
-print(
-    "######## ONE_CLICK_PIPELINE SPRINT157 COST GUARD UI LOADED ########",
-    __file__,
-    flush=True,
-)
+print("######## ONE_CLICK_PIPELINE SPRINT193-33 RESTORE EFFECT CUE METHOD LOADED ########", __file__, flush=True)
 
 # Sprint102-3: 한 Streamlit 프로세스에서 동일 프로젝트 중복 실행을 차단합니다.
 _PIPELINE_RUN_GUARD = threading.RLock()
@@ -105,6 +189,275 @@ def write_json(path, data):
         ),
         encoding="utf-8",
     )
+
+
+def _sprint193_29_project_name(project_id):
+    try:
+        repo = ProjectRepository()
+        project = repo.get(project_id)
+        if project is None:
+            try:
+                project = repo.get(int(project_id))
+            except Exception:
+                project = None
+        if project is not None:
+            return str(
+                getattr(project, "product_name", "")
+                or getattr(project, "title", "")
+                or ""
+            ).strip()
+    except Exception:
+        pass
+    return ""
+
+
+def _sprint193_29_legacy_payload(project_id, sidecar_path, clip_paths):
+    """193-28 이전 프로젝트를 기존 sidecar + Gemini 클립 + DB에서 복구합니다."""
+    sidecar = read_json(sidecar_path, {})
+    if not isinstance(sidecar, dict):
+        sidecar = {}
+
+    product_name = _sprint193_29_project_name(project_id) or f"프로젝트 {project_id}"
+    project_folder = Path("assets/products") / f"project_{project_id}"
+
+    # 가능한 기존 메타데이터에서 평점/리뷰/후킹/CTA도 보강합니다.
+    meta_candidates = [
+        project_folder / "publisher_metadata.json",
+        project_folder / "content_pack.json",
+        Path("exports/one_click_results") / f"{project_id}_latest_result.json",
+    ]
+    merged_meta = {}
+    for meta_path in meta_candidates:
+        data = read_json(meta_path, {})
+        if isinstance(data, dict):
+            merged_meta.update(data)
+
+    return {
+        "version": "edit-preset-193-29-recovered",
+        "project_id": str(project_id),
+        "product_name": product_name,
+        "rating": float(
+            merged_meta.get("rating")
+            or ((merged_meta.get("trust_inputs") or {}).get("rating") if isinstance(merged_meta.get("trust_inputs"), dict) else 0)
+            or 4.8
+        ),
+        "declared_review_count": int(
+            merged_meta.get("declared_review_count")
+            or merged_meta.get("review_count")
+            or ((merged_meta.get("trust_inputs") or {}).get("declared_review_count") if isinstance(merged_meta.get("trust_inputs"), dict) else 0)
+            or 0
+        ),
+        "monthly_purchase_count": 0,
+        "hook_text": str(
+            merged_meta.get("hook_text")
+            or merged_meta.get("best_hook")
+            or ""
+        ).strip(),
+        "clip_subtitles": list(sidecar.get("clip_subtitles") or []),
+        "clip_narrations": list(sidecar.get("clip_narrations") or []),
+        "clip_subtitle_effects": list(sidecar.get("clip_subtitle_effects") or []),
+        "clip_sfx": list(sidecar.get("clip_sfx") or []),
+        "clip_playback_speeds": list(sidecar.get("clip_playback_speeds") or []),
+        "gemini_clip_paths": list(clip_paths or []),
+        "subtitle_style": dict(sidecar.get("subtitle_style") or {}),
+        "cta_product_logo_text": str(
+            merged_meta.get("cta_product_logo_text")
+            or product_name
+            or ""
+        ).strip(),
+        "playback_speed": float(merged_meta.get("playback_speed") or 1.5),
+        "channel_type": str(merged_meta.get("channel_type") or "shopping"),
+        "youtube_privacy_status": str(merged_meta.get("youtube_privacy_status") or "unlisted"),
+        "voice_name": str(merged_meta.get("voice_name") or "지안"),
+        "voice_id": str(merged_meta.get("voice_id") or ""),
+        "tts_volume_percent": int(merged_meta.get("tts_volume_percent") or 100),
+        "tts_speech_speed": float(merged_meta.get("tts_speech_speed") or 1.0),
+        "bgm_volume_percent": int(merged_meta.get("bgm_volume_percent") or 10),
+        "voice_audio_path": str(merged_meta.get("voice_audio_path") or ""),
+        "bgm_audio_path": str(merged_meta.get("bgm_audio_path") or ""),
+        "saved_at": "",
+        "recovered_from_legacy": True,
+    }
+
+
+def _sprint193_29_recent_edit_presets(limit=50):
+    """신규 프리셋 + 193-28 이전 프로젝트를 모두 최근 작업 목록에 표시합니다."""
+    items_by_project = {}
+    product_root = Path("assets/products")
+    clip_root = Path("assets/gemini_clips")
+
+    # 1) 정상 edit_preset.json 우선
+    if product_root.exists():
+        for path in product_root.glob("project_*/edit_preset.json"):
+            try:
+                payload = read_json(path, {})
+                if not isinstance(payload, dict) or not payload:
+                    continue
+                project_id = str(payload.get("project_id") or path.parent.name.replace("project_", ""))
+                clip_paths = [
+                    str(item or "").strip()
+                    for item in list(payload.get("gemini_clip_paths") or [])
+                    if str(item or "").strip() and Path(str(item)).is_file()
+                ]
+                if not clip_paths:
+                    clip_folder = clip_root / f"project_{project_id}"
+                    if clip_folder.exists():
+                        clip_paths = [
+                            str(p) for p in sorted(clip_folder.iterdir())
+                            if p.is_file() and p.suffix.lower() in SUPPORTED_VIRAL_VIDEO_SUFFIXES
+                        ]
+                if not clip_paths:
+                    continue
+                items_by_project[project_id] = {
+                    "path": str(path),
+                    "project_id": project_id,
+                    "product_name": str(payload.get("product_name") or _sprint193_29_project_name(project_id) or "이전 작업").strip(),
+                    "saved_at": str(payload.get("saved_at") or ""),
+                    "mtime": path.stat().st_mtime,
+                    "clip_count": len(clip_paths),
+                    "recovered": False,
+                }
+            except Exception as exc:
+                print("[Sprint193-29 Existing Preset Scan] ERROR", str(path), repr(exc), flush=True)
+
+    # 2) edit_preset이 없는 기존 프로젝트 복구
+    candidate_ids = set()
+    if product_root.exists():
+        for folder in product_root.glob("project_*"):
+            if folder.is_dir():
+                candidate_ids.add(folder.name.replace("project_", ""))
+    if clip_root.exists():
+        for folder in clip_root.glob("project_*"):
+            if folder.is_dir():
+                candidate_ids.add(folder.name.replace("project_", ""))
+
+    for project_id in candidate_ids:
+        if project_id in items_by_project:
+            continue
+        try:
+            sidecar_path = product_root / f"project_{project_id}" / "clip_subtitles.json"
+            clip_folder = clip_root / f"project_{project_id}"
+            clip_paths = []
+            if clip_folder.exists():
+                clip_paths = [
+                    str(p) for p in sorted(clip_folder.iterdir())
+                    if p.is_file() and p.suffix.lower() in SUPPORTED_VIRAL_VIDEO_SUFFIXES
+                ]
+            if not clip_paths:
+                continue
+
+            # 자막 sidecar가 없더라도 영상 자체는 목록에 살립니다.
+            recovered_payload = _sprint193_29_legacy_payload(
+                project_id,
+                sidecar_path,
+                clip_paths,
+            )
+            product_name = str(recovered_payload.get("product_name") or f"프로젝트 {project_id}")
+            mtime_candidates = [p.stat().st_mtime for p in [sidecar_path, clip_folder] if p.exists()]
+            mtime = max(mtime_candidates) if mtime_candidates else 0.0
+            items_by_project[project_id] = {
+                "path": str(sidecar_path),
+                "project_id": str(project_id),
+                "product_name": product_name,
+                "saved_at": "",
+                "mtime": mtime,
+                "clip_count": len(clip_paths),
+                "recovered": True,
+                "legacy_payload": recovered_payload,
+            }
+        except Exception as exc:
+            print("[Sprint193-29 Legacy Scan] ERROR", project_id, repr(exc), flush=True)
+
+    items = list(items_by_project.values())
+    items.sort(key=lambda item: float(item.get("mtime") or 0.0), reverse=True)
+    print(
+        "[Sprint193-29 Previous Work Scan]",
+        {
+            "total": len(items),
+            "recovered": len([x for x in items if x.get("recovered")]),
+            "preset": len([x for x in items if not x.get("recovered")]),
+        },
+        flush=True,
+    )
+    return items[:max(1, int(limit or 50))]
+
+
+
+def _sprint193_29_save_edit_preset(project, payload):
+    project_id = str(safe_project_id(project))
+    target = Path("assets/products") / f"project_{project_id}" / "edit_preset.json"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    write_json(target, dict(payload or {}))
+    print(
+        "[Sprint193-29 Edit Preset] SAVED",
+        {"path": str(target), "project_id": project_id},
+        flush=True,
+    )
+    return str(target)
+
+
+def _sprint193_29_apply_preset_to_session(preset):
+    """Streamlit 위젯 생성 전에 이전 편집값을 session_state에 복원합니다."""
+    preset = dict(preset or {})
+    mapping = {
+        "sprint172_product_name": preset.get("product_name", ""),
+        "sprint178_rating": float(preset.get("rating") or 4.8),
+        "sprint178_declared_review_count": int(preset.get("declared_review_count") or 0),
+        "sprint193_9_hook_phrase": preset.get("hook_text", ""),
+        "sprint193_25_cta_product_logo_text": preset.get("cta_product_logo_text", ""),
+        "sprint176_playback_speed": float(preset.get("playback_speed") or 1.5),
+        "sprint172_channel_type": preset.get("channel_type", "shopping"),
+        "sprint172_privacy": preset.get("youtube_privacy_status", "unlisted"),
+        "sprint193_1_tts_volume": int(preset.get("tts_volume_percent") or 100),
+        "sprint193_1_tts_speed": float(preset.get("tts_speech_speed") or 1.0),
+        "sprint193_1_bgm_volume": int(preset.get("bgm_volume_percent") or 10),
+    }
+
+    subtitle_style = dict(preset.get("subtitle_style") or {})
+    mapping.update({
+        "sprint190_9_subtitle_font": subtitle_style.get("font", "Gmarket Sans Bold"),
+        "sprint190_9_subtitle_font_size": int(subtitle_style.get("font_size") or 76),
+        "sprint190_9_subtitle_outline": int(subtitle_style.get("outline") or 6),
+        "sprint190_9_subtitle_text_color": subtitle_style.get("text_color", "#FFFFFF"),
+        "sprint190_9_subtitle_background_color": subtitle_style.get("background_color", "#000000"),
+        "sprint190_9_subtitle_highlight_color": subtitle_style.get("highlight_color", "#FFD700"),
+        "sprint190_9_subtitle_background_opacity": int(subtitle_style.get("background_opacity") if subtitle_style.get("background_opacity") is not None else 10),
+    })
+
+    for key, value in mapping.items():
+        st.session_state[key] = value
+
+    subtitles = list(preset.get("clip_subtitles") or [])
+    narrations = list(preset.get("clip_narrations") or [])
+    effects = list(preset.get("clip_subtitle_effects") or [])
+    sfx = list(preset.get("clip_sfx") or [])
+    speeds = list(preset.get("clip_playback_speeds") or [])
+
+    count = max(
+        len(subtitles), len(narrations), len(effects), len(sfx), len(speeds),
+        len(list(preset.get("gemini_clip_paths") or [])),
+    )
+    speed_options = ["자동", 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0]
+    for idx in range(count):
+        n = idx + 1
+        st.session_state[f"sprint193_9_clip_subtitle_{n}"] = str(subtitles[idx] if idx < len(subtitles) else "")
+        st.session_state[f"sprint193_9_clip_narration_{n}"] = str(narrations[idx] if idx < len(narrations) else "")
+        st.session_state[f"sprint193_9_clip_subtitle_effect_{n}"] = str(effects[idx] if idx < len(effects) else "기본")
+        st.session_state[f"sprint193_9_clip_sfx_{n}"] = str(sfx[idx] if idx < len(sfx) else "없음")
+        raw_speed = float(speeds[idx] or 0.0) if idx < len(speeds) else 0.0
+        selected_speed = "자동" if raw_speed <= 0 else min(
+            speed_options[1:],
+            key=lambda value: abs(float(value) - raw_speed),
+        )
+        st.session_state[f"sprint193_14_clip_speed_{n}"] = selected_speed
+
+    st.session_state["sprint193_29_loaded_clip_paths"] = [
+        str(item or "").strip()
+        for item in list(preset.get("gemini_clip_paths") or [])
+        if str(item or "").strip() and Path(str(item)).is_file()
+    ]
+    st.session_state["sprint193_29_loaded_preset_path"] = str(preset.get("_preset_path") or "")
+    st.session_state["sprint193_29_loaded_project_id"] = str(preset.get("project_id") or "")
 
 
 def normalize_text(value, fallback=""):
@@ -715,9 +1068,37 @@ def run_project_pipeline(
     rating=0.0,
     input_product_name="",
     stop_after_image_generation=False,
+    gemini_video_mode=False,
+    hook_text="",
+    cta_text="",
+    cta_product_logo_text="",
+    voice_audio_path="",
+    bgm_audio_path="",
+    voice_name="지안",
+    voice_id="",
+    typecast_api_key="",
+    tts_volume_percent=100,
+    tts_speech_speed=1.0,
+    clip_subtitles=None,
+    clip_subtitle_effects=None,
+    clip_sfx=None,
+    clip_playback_speeds=None,
+    clip_narrations=None,
+    gemini_clip_count=4,
+    upload_enabled=False,
+    playback_speed=1.5,
+    channel_type="shopping",
+    reservation_payload=None,
+    force_run_id="",
 ):
-    """Sprint102-3: UI에서 동일 프로젝트의 중복 원클릭 진입을 차단합니다."""
-    project_key = str(safe_project_id(project))
+    """Sprint193-27: 동일 입력도 영상만 제작 버튼을 누를 때마다 새로 실행합니다."""
+    base_project_key = str(safe_project_id(project))
+    resolved_force_run_id = str(force_run_id or "").strip()
+    project_key = (
+        f"{base_project_key}:direct:{resolved_force_run_id}"
+        if resolved_force_run_id
+        else base_project_key
+    )
 
     with _PIPELINE_RUN_GUARD:
         if project_key in _ACTIVE_PIPELINE_PROJECTS:
@@ -727,7 +1108,7 @@ def run_project_pipeline(
                 flush=True,
             )
             cached = st.session_state.get(
-                f"one_click_result_{project_key}",
+                f"one_click_result_{base_project_key}",
                 {},
             )
             if isinstance(cached, dict) and cached:
@@ -746,8 +1127,12 @@ def run_project_pipeline(
         _ACTIVE_PIPELINE_PROJECTS.add(project_key)
 
     print(
-        "[Sprint102-3 One Click Guard] ACQUIRED:",
-        project_key,
+        "[Sprint193-29 One Click Guard] ACQUIRED:",
+        {
+            "project_key": project_key,
+            "base_project_key": base_project_key,
+            "force_run_id": resolved_force_run_id,
+        },
         flush=True,
     )
 
@@ -777,12 +1162,33 @@ def run_project_pipeline(
             rating=rating,
             input_product_name=input_product_name,
             stop_after_image_generation=stop_after_image_generation,
+            gemini_video_mode=gemini_video_mode,
+            hook_text=hook_text,
+            cta_text=cta_text,
+            cta_product_logo_text=cta_product_logo_text,
+            voice_audio_path=voice_audio_path,
+            bgm_audio_path=bgm_audio_path,
+            voice_name=voice_name,
+            voice_id=voice_id,
+            typecast_api_key=typecast_api_key,
+            tts_volume_percent=tts_volume_percent,
+            tts_speech_speed=tts_speech_speed,
+            clip_subtitles=clip_subtitles,
+            clip_subtitle_effects=clip_subtitle_effects,
+            clip_sfx=clip_sfx,
+            clip_playback_speeds=clip_playback_speeds,
+            clip_narrations=clip_narrations,
+            gemini_clip_count=gemini_clip_count,
+            upload_enabled=upload_enabled,
+            playback_speed=playback_speed,
+            channel_type=channel_type,
+            reservation_payload=reservation_payload,
         )
     finally:
         with _PIPELINE_RUN_GUARD:
             _ACTIVE_PIPELINE_PROJECTS.discard(project_key)
         print(
-            "[Sprint102-3 One Click Guard] RELEASED:",
+            "[Sprint193-29 One Click Guard] RELEASED:",
             project_key,
             flush=True,
         )
@@ -804,9 +1210,30 @@ def _run_project_pipeline_impl(
     rating=0.0,
     input_product_name="",
     stop_after_image_generation=False,
+    gemini_video_mode=False,
+    hook_text="",
+    cta_text="",
+    cta_product_logo_text="",
+    voice_audio_path="",
+    bgm_audio_path="",
+    voice_name="지안",
+    voice_id="",
+    typecast_api_key="",
+    tts_volume_percent=100,
+    tts_speech_speed=1.0,
+    clip_subtitles=None,
+    clip_subtitle_effects=None,
+    clip_sfx=None,
+    clip_playback_speeds=None,
+    clip_narrations=None,
+    gemini_clip_count=4,
+    upload_enabled=False,
+    playback_speed=1.5,
+    channel_type="shopping",
+    reservation_payload=None,
 ):
     print(
-        "[Sprint72-1] run_project_pipeline entered",
+        "[Sprint172-1] run_project_pipeline entered",
         flush=True,
     )
 
@@ -887,7 +1314,74 @@ def _run_project_pipeline_impl(
         rating=rating,
         input_product_name=input_product_name,
         stop_after_image_generation=stop_after_image_generation,
+        gemini_video_mode=gemini_video_mode,
+        hook_text=hook_text,
+        cta_text=cta_text,
+        cta_product_logo_text=cta_product_logo_text,
+        voice_audio_path=voice_audio_path,
+        bgm_audio_path=bgm_audio_path,
+        voice_name=voice_name,
+        voice_id=voice_id,
+        typecast_api_key=typecast_api_key,
+        tts_volume_percent=tts_volume_percent,
+        tts_speech_speed=tts_speech_speed,
+        clip_subtitles=list(clip_subtitles or []),
+        clip_subtitle_effects=list(clip_subtitle_effects or []),
+        clip_sfx=list(clip_sfx or []),
+        clip_playback_speeds=list(clip_playback_speeds or []),
+        clip_narrations=list(clip_narrations or []),
+        gemini_clip_count=gemini_clip_count,
+        upload_enabled=upload_enabled,
+        playback_speed=playback_speed,
+        channel_type=channel_type,
+        reservation_payload=reservation_payload,
     )
+
+    try:
+        product_named = create_product_named_video_copy(
+            result=result,
+            product_name=(
+                str(input_product_name or "").strip()
+                or str(getattr(project, "product_name", "") or "").strip()
+                or str(getattr(project, "title", "") or "").strip()
+            ),
+            project_id=str(safe_project_id(project)),
+        )
+        if product_named:
+            outputs = result.setdefault("outputs", {})
+            outputs["product_named_final_video_path"] = product_named
+            outputs["human_readable_final_video_path"] = product_named
+            result["product_named_final_video_path"] = product_named
+            print(
+                "[Sprint181-3 Product Name Output] SAVED:",
+                product_named,
+                flush=True,
+            )
+    except Exception as exc:
+        print(
+            "[Sprint181-3 Product Name Output] ERROR:",
+            type(exc).__name__,
+            str(exc),
+            flush=True,
+        )
+
+    try:
+        _save_project_publisher_metadata(
+            project=project,
+            result=result,
+            product_name=input_product_name,
+            hook_text=hook_text,
+            locked_script=locked_script,
+            cta_text=cta_text,
+            reservation_payload=reservation_payload,
+        )
+    except Exception as exc:
+        print(
+            "[Sprint183-2 Publisher Metadata] ERROR:",
+            type(exc).__name__,
+            str(exc),
+            flush=True,
+        )
 
     save_pipeline_result(project, result)
 
@@ -1255,7 +1749,11 @@ def render_project_pipeline(
 def _resolve_final_video_path(result):
     """Sprint146-5: Workflow 결과 구조가 달라도 실제 최종 MP4를 찾습니다."""
     outputs = result.get("outputs", {}) if isinstance(result, dict) else {}
-    candidates = []
+    candidates = [
+        outputs.get("product_named_final_video_path"),
+        outputs.get("human_readable_final_video_path"),
+        result.get("product_named_final_video_path") if isinstance(result, dict) else None,
+    ]
 
     final_video = outputs.get("final_video")
     if isinstance(final_video, dict):
@@ -1334,6 +1832,217 @@ def _find_first_value(data, keys):
             if found not in (None, "", [], {}):
                 return found
     return None
+
+
+
+def _collect_project_metadata_sources(project_id, selected_metadata=None):
+    """기존 프로젝트에 저장된 게시용 메타데이터 JSON을 최신순으로 수집합니다."""
+    sources = []
+    if isinstance(selected_metadata, dict) and selected_metadata:
+        sources.append(("content_library", selected_metadata))
+
+    clean_id = str(project_id or "").strip()
+    candidate_paths = []
+    if clean_id:
+        product_folder = PRODUCT_IMAGE_ROOT / f"project_{clean_id}"
+        publisher_metadata_path = product_folder / "publisher_metadata.json"
+        candidate_paths.extend([
+            publisher_metadata_path,
+            RESULT_DIR / f"{clean_id}_latest_result.json",
+            Path("exports/one_click_results") / f"project_{clean_id}_latest_result.json",
+        ])
+        if product_folder.exists():
+            candidate_paths.extend(
+                path for path in product_folder.rglob("*.json")
+                if path != publisher_metadata_path
+            )
+
+    unique = []
+    seen = set()
+    for path in candidate_paths:
+        try:
+            resolved = str(Path(path).resolve())
+        except Exception:
+            resolved = str(path)
+        if resolved in seen or not Path(path).is_file():
+            continue
+        seen.add(resolved)
+        unique.append(Path(path))
+
+    # publisher_metadata.json은 영상 제작 시 확정한 게시 데이터이므로 항상 최우선입니다.
+    unique.sort(
+        key=lambda path: (
+            0 if path.name == "publisher_metadata.json" else 1,
+            -path.stat().st_mtime,
+        )
+    )
+    for path in unique:
+        loaded = read_json(path, {})
+        if isinstance(loaded, dict) and loaded:
+            sources.append((str(path), loaded))
+    return sources
+
+
+def _deep_find_first(data, keys):
+    """키 우선순위대로 중첩 JSON 전체에서 첫 유효 값을 찾습니다."""
+    for key in keys:
+        value = _find_first_value(data, (key,))
+        if value not in (None, "", [], {}):
+            return value
+    return None
+
+
+def _normalize_hashtag_value(value):
+    if isinstance(value, str):
+        parts = [item for item in re.split(r"[\s,]+", value) if item.strip()]
+    elif isinstance(value, (list, tuple, set)):
+        parts = list(value)
+    else:
+        parts = []
+    output = []
+    for raw in parts:
+        clean = re.sub(r"[^0-9A-Za-z가-힣_]", "", str(raw).lstrip("#").strip())
+        if clean and clean not in output:
+            output.append(clean)
+    return output
+
+
+def _save_project_publisher_metadata(
+    *,
+    project,
+    result,
+    product_name="",
+    hook_text="",
+    locked_script="",
+    cta_text="",
+    reservation_payload=None,
+):
+    """영상 제작 완료 시 예약 게시용 메타데이터를 프로젝트 폴더에 확정 저장합니다."""
+    project_id = str(safe_project_id(project))
+    final_video_path = _resolve_final_video_path(result)
+    if not final_video_path or not Path(final_video_path).is_file():
+        return ""
+
+    payload = dict(reservation_payload or {})
+    resolved_product_name = str(
+        product_name
+        or getattr(project, "product_name", "")
+        or getattr(project, "title", "")
+        or ""
+    ).strip()
+    resolved_hook = str(hook_text or "").strip()
+    resolved_script = str(locked_script or "").strip()
+    resolved_cta = str(cta_text or "").strip()
+    infock_url = str(payload.get("infock_url") or "").strip()
+
+    outputs = result.get("outputs", {}) if isinstance(result, dict) else {}
+    video_pipeline = outputs.get("video_pipeline", {}) if isinstance(outputs, dict) else {}
+    if not resolved_hook and isinstance(video_pipeline, dict):
+        resolved_hook = str(
+            video_pipeline.get("resolved_hook_text")
+            or ((video_pipeline.get("steps") or {}).get("subtitle") or {}).get("hook_text")
+            or ""
+        ).strip()
+
+    title_override = resolved_hook.splitlines()[0].strip() if resolved_hook else ""
+    built = ScheduledMetadataBuilder.build(
+        product_name=resolved_product_name or title_override or Path(final_video_path).stem,
+        hook_text=resolved_hook,
+        locked_script=resolved_script,
+        cta_text=resolved_cta,
+        infock_url=infock_url,
+        hashtags=[],
+        title_override=title_override,
+    )
+
+    metadata = {
+        "version": "publisher-metadata-183-2",
+        "project_id": project_id,
+        "product_name": resolved_product_name,
+        "display_name": resolved_product_name,
+        "title": str(built.get("title") or "").strip(),
+        "youtube_title": str(built.get("title") or "").strip(),
+        "description": str(built.get("description") or "").strip(),
+        "youtube_description": str(built.get("description") or "").strip(),
+        "pinned_comment": str(built.get("pinned_comment") or "").strip(),
+        "hashtags": list(built.get("hashtags") or []),
+        "hashtag_text": " ".join(
+            f"#{str(tag).lstrip('#')}" for tag in list(built.get("hashtags") or [])
+        ),
+        "infock_url": infock_url,
+        "hook_text": resolved_hook,
+        "locked_script": resolved_script,
+        "cta_text": resolved_cta,
+        "video_path": final_video_path,
+        "final_video_path": final_video_path,
+        "youtube_privacy_status": str(outputs.get("youtube_privacy_status") or "private"),
+        "created_at": datetime.now(ZoneInfo("Asia/Seoul")).isoformat(),
+        "source": "video_completion",
+    }
+    target = PRODUCT_IMAGE_ROOT / f"project_{project_id}" / "publisher_metadata.json"
+    write_json(target, metadata)
+
+    if isinstance(result, dict):
+        result_outputs = result.setdefault("outputs", {})
+        result_outputs["publisher_metadata_path"] = str(target)
+        result_outputs["publisher_metadata"] = metadata
+        result["publisher_metadata_path"] = str(target)
+
+    print(
+        "[Sprint183-2 Publisher Metadata] SAVED:",
+        str(target),
+        "Title:",
+        metadata["title"],
+        flush=True,
+    )
+    return str(target)
+
+
+def _restore_project_publisher_metadata(project_id, selected_metadata=None):
+    """Publisher Pack/원클릭 결과에서 실제 제목·본문·댓글·해시태그를 복원합니다."""
+    restored = {
+        "product_name": "",
+        "title": "",
+        "description": "",
+        "pinned_comment": "",
+        "hashtags": [],
+        "locked_script": "",
+        "hook_text": "",
+        "cta_text": "",
+        "infock_url": "",
+        "source_paths": [],
+    }
+    sources = _collect_project_metadata_sources(project_id, selected_metadata)
+    restored["source_paths"] = [name for name, _ in sources]
+
+    field_keys = {
+        "product_name": ("product_name", "display_name", "product_title"),
+        "title": ("youtube_title", "video_title", "shorts_title", "title"),
+        "description": ("youtube_description", "description", "body", "caption", "reels_caption"),
+        "pinned_comment": ("pinned_comment", "fixed_comment", "first_comment", "comment_text"),
+        "locked_script": ("locked_script", "approved_script_text", "best_script", "original_best_script"),
+        "hook_text": ("best_hook", "hook_text", "hook"),
+        "cta_text": ("cta_text", "cta", "youtube_cta"),
+        "infock_url": ("infock_url", "inpock_url", "affiliate_link", "partner_url"),
+    }
+    for field, keys in field_keys.items():
+        for _, source in sources:
+            value = _deep_find_first(source, keys)
+            if value not in (None, "", [], {}):
+                restored[field] = str(value).strip()
+                break
+
+    for _, source in sources:
+        tags = _deep_find_first(source, ("hashtag_text", "hashtags", "tags"))
+        normalized = _normalize_hashtag_value(tags)
+        if normalized:
+            restored["hashtags"] = normalized
+            break
+
+    # title이 단순 상품명+쇼츠인 낡은 pack이면 후킹을 우선합니다.
+    if restored["title"].endswith(" 쇼츠") and restored["hook_text"]:
+        restored["title"] = restored["hook_text"].splitlines()[0].strip()
+    return restored
 
 
 def _director_json_candidates(project_id):
@@ -1952,9 +2661,14 @@ def _render_ai_image_review(project, result):
     st.progress(approved_count / max(1, len(scenes)))
     st.write(f"승인 완료: {approved_count} / {len(scenes)}")
 
-    if approved_count != len(scenes):
-        st.info("모든 장면을 승인하면 최종 영상 제작 버튼이 활성화됩니다.")
+    minimum_approved = min(8, len(scenes))
+    if approved_count < minimum_approved:
+        st.info(
+            f"최소 {minimum_approved}장 이상 승인하면 최종 영상 제작 버튼이 활성화됩니다. "
+            "승인하지 않은 장면은 최종 영상에서 제외됩니다."
+        )
         return
+    st.success(f"{approved_count}장 승인 완료. 승인된 장면만 사용합니다.")
 
     if st.button(
         "승인 이미지로 최종 영상 제작",
@@ -1962,7 +2676,11 @@ def _render_ai_image_review(project, result):
         use_container_width=True,
         key=f"finalize_{project_id}",
     ):
-        selected_paths = [approved[str(scene.get("scene_id") or "")] for scene in scenes]
+        selected_paths = [
+            approved[str(scene.get("scene_id") or "")]
+            for scene in scenes
+            if str(scene.get("scene_id") or "") in approved
+        ]
         payload = st.session_state.get(f"sprint147_input_{project_id}", {})
         with st.spinner("승인된 이미지로 모션·자막·최종 영상을 제작 중입니다..."):
             final_result = run_project_pipeline(
@@ -1988,157 +2706,3074 @@ def _render_ai_image_review(project, result):
 
 
 def show_one_click_pipeline():
-    st.title("⚡ 원클릭 쇼츠 완성")
-    st.caption("확정 대본을 장면으로 나누고, 필요한 AI 이미지를 한 장씩 만든 뒤 승인된 이미지만 영상에 사용합니다.")
+    st.title("⚡ Gemini 쇼츠 원클릭")
+    st.caption("수동 업로드한 Gemini 영상들을 빠르게 연결하고 지안 TTS·자막·BGM·효과음을 적용합니다.")
     st.caption(f"UI 버전: {UI_VERSION}")
 
-    with st.expander("📂 기존 프로젝트 다시 열기", expanded=True):
-        st.caption(
-            "이미 생성된 장면을 다시 생성하지 않고 검토·승인합니다."
-        )
-        review_project_id = st.text_input(
-            "프로젝트 ID",
-            value=str(
-                st.session_state.get(
-                    "sprint155_review_project_id",
-                    "348",
-                )
-            ),
-            key="sprint155_review_project_id",
-        )
-        if st.button(
-            "기존 이미지 검토 열기",
-            type="secondary",
-            use_container_width=True,
-            key="sprint155_open_review",
-        ):
-            opened = _open_existing_project_review(review_project_id)
-            if not opened.get("ok"):
-                st.error(opened.get("message", "프로젝트를 열지 못했습니다."))
-            else:
-                st.success(
-                    f"프로젝트 {opened['project_id']}의 기존 장면 "
-                    f"{opened['scene_count']}개를 복원했습니다."
-                )
-                st.rerun()
-
-    active_project_id = st.session_state.get("sprint147_active_project_id")
-    if active_project_id:
-        active_project = ProjectRepository().get(active_project_id)
-        project_key = str(safe_project_id(active_project)) if active_project else str(active_project_id)
-        result = (
-            st.session_state.get(f"one_click_result_{project_key}")
-            or st.session_state.get(f"one_click_result_{active_project_id}")
-            or {}
-        )
-        stage = (
-            st.session_state.get(f"sprint147_stage_{project_key}")
-            or st.session_state.get(f"sprint147_stage_{active_project_id}")
-            or ""
-        )
-
-        if active_project and stage == "review":
-            review_scenes = _extract_image_review_scenes(result)
-            cached_scenes = st.session_state.get(
-                f"sprint147_review_scenes_{project_key}",
-                [],
+    st.markdown("### 📂 이전 작업 불러오기")
+    recent_presets = _sprint193_29_recent_edit_presets(limit=30)
+    if recent_presets:
+        preset_options = ["선택 안 함"] + [
+            (
+                f"{item['product_name']} · 프로젝트 {item['project_id']} · 영상 {item['clip_count']}개"
+                + (" · 기존작업 복구" if item.get("recovered") else "")
             )
-            if review_scenes or cached_scenes:
-                _render_ai_image_review(active_project, result)
-                if st.button("새 상품으로 처음부터 시작", use_container_width=True):
-                    for key in list(st.session_state.keys()):
-                        if (
-                            str(project_key) in str(key)
-                            or str(active_project_id) in str(key)
-                            or str(key).startswith("sprint147_active_project")
-                        ):
-                            st.session_state.pop(key, None)
+            for item in recent_presets
+        ]
+        preset_choice = st.selectbox(
+            "최근 작업",
+            options=preset_options,
+            key="sprint193_29_preset_choice",
+        )
+        load_col, clear_col = st.columns([1, 1])
+        with load_col:
+            load_preset_clicked = st.button(
+                "📥 설정 불러오기",
+                use_container_width=True,
+                key="sprint193_29_load_preset",
+            )
+        with clear_col:
+            clear_preset_clicked = st.button(
+                "새 작업으로 초기화",
+                use_container_width=True,
+                key="sprint193_29_clear_preset",
+            )
+
+        if load_preset_clicked:
+            if preset_choice == "선택 안 함":
+                st.warning("불러올 이전 작업을 선택해 주세요.")
+            else:
+                selected_index = preset_options.index(preset_choice) - 1
+                selected_meta = recent_presets[selected_index]
+                if selected_meta.get("recovered"):
+                    preset = dict(selected_meta.get("legacy_payload") or {})
+                    if preset:
+                        target = (
+                            Path("assets/products")
+                            / f"project_{selected_meta['project_id']}"
+                            / "edit_preset.json"
+                        )
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        preset["version"] = "edit-preset-193-29-recovered"
+                        preset["saved_at"] = datetime.now(ZoneInfo("Asia/Seoul")).isoformat()
+                        write_json(target, preset)
+                        preset["_preset_path"] = str(target)
+                        selected_meta["path"] = str(target)
+                        print(
+                            "[Sprint193-29 Legacy Preset] CONVERTED",
+                            {
+                                "project_id": selected_meta["project_id"],
+                                "path": str(target),
+                                "clip_count": len(list(preset.get("gemini_clip_paths") or [])),
+                            },
+                            flush=True,
+                        )
+                else:
+                    preset = read_json(selected_meta["path"], {})
+
+                if isinstance(preset, dict) and preset:
+                    preset["_preset_path"] = str(selected_meta.get("path") or "")
+                    _sprint193_29_apply_preset_to_session(preset)
+                    st.session_state["sprint193_29_preset_loaded_notice"] = (
+                        f"{selected_meta['product_name']} 설정을 불러왔습니다."
+                    )
+                    print(
+                        "[Sprint193-29 Edit Preset] LOADED",
+                        {
+                            "path": selected_meta.get("path"),
+                            "project_id": selected_meta["project_id"],
+                            "clip_count": selected_meta["clip_count"],
+                            "legacy_recovered": bool(selected_meta.get("recovered")),
+                        },
+                        flush=True,
+                    )
                     st.rerun()
-                return
+                else:
+                    st.error("이전 작업 설정 파일을 읽지 못했습니다.")
 
-            # Sprint147-2: 장면 결과가 없는 오래된 review 상태는 자동 해제합니다.
-            print(
-                "[Sprint147-2 Input Recovery] Cleared stale review state:",
-                project_key,
-                flush=True,
+        if clear_preset_clicked:
+            keys_to_clear = [
+                key for key in list(st.session_state.keys())
+                if key.startswith("sprint193_9_clip_")
+                or key.startswith("sprint193_14_clip_speed_")
+                or key in {
+                    "sprint193_29_loaded_clip_paths",
+                    "sprint193_29_loaded_preset_path",
+                    "sprint193_29_loaded_project_id",
+                }
+            ]
+            for key in keys_to_clear:
+                st.session_state.pop(key, None)
+            st.session_state["sprint193_29_preset_loaded_notice"] = ""
+            st.rerun()
+    else:
+        st.caption("아직 저장된 이전 원클릭 작업이 없습니다.")
+
+    loaded_notice = str(st.session_state.pop("sprint193_29_preset_loaded_notice", "") or "")
+    if loaded_notice:
+        st.success(loaded_notice)
+    st.markdown("""<style>.block-container{max-width:1500px;padding-top:1rem}.exact-title{text-align:center;font-size:20px;font-weight:800;border:1px solid #222;padding:7px}.mini-grid{border:1px solid #222;padding:6px;text-align:center;font-size:12px;background:#fafafa}</style>""",unsafe_allow_html=True)
+
+    st.markdown("---")
+    st.markdown('<div class="exact-title">영상만 제작</div>', unsafe_allow_html=True)
+    top_create_slot = st.empty()
+
+    st.markdown("""<div class="mini-grid">상품명 │ 평점 │ 리뷰수 │ 대표이미지 │ 오디오 │ BGM │ 자막 │ 나레이션 │ 자막효과 │ 사운드효과 │ 장면속도</div><div class="mini-grid">Gemini 영상 수동 업로드 1~10 · 영상별 자막 / 나레이션 / 자막효과 / 사운드효과 한 줄 편집</div>""",unsafe_allow_html=True)
+
+    product_name = st.text_input(
+        "상품명",
+        placeholder="예: 미끄럼 방지 EVA 욕실화",
+        key="sprint172_product_name",
+    )
+    # Sprint191-4: 별도 후킹 입력란 제거.
+    # 첫 장면 후킹은 아래 신뢰 정보(구매수/평점/리뷰수)로 고정합니다.
+    # Sprint193-7: 별도 확정 대본 입력란은 제거합니다.
+    # 영상별 나레이션을 순서대로 합쳐 내부 locked_script로 사용합니다.
+    hook_text = ""
+    locked_script = ""
+
+    # Sprint190-6: 영상 제작 버튼이 플랫폼별 입력 UI보다 먼저 실행돼도
+    # platform_metadata 참조 오류가 발생하지 않도록 선초기화합니다.
+    platform_metadata = {
+        "youtube": {"title": "", "description": ""},
+        "instagram": {"title": "", "description": ""},
+        "tiktok": {"title": "", "description": ""},
+        "naver_clip": {"title": "", "description": ""},
+        "threads": {"title": "", "description": ""},
+    }
+    # Sprint193-14: 영상 CTA 완전 제거.
+    cta_keyword = ""
+    video_cta_platform = "none"
+    cta_text = ""
+
+    st.markdown("#### 제품 대표이미지")
+    hook_product_image = st.file_uploader(
+        "제품 대표 이미지 (선택)",
+        type=["png", "jpg", "jpeg", "webp"],
+        accept_multiple_files=False,
+        key="sprint189_hook_product_image",
+        help="첫 신뢰 후킹 장면의 제품 배경으로 사용합니다. 후킹 배경의 실제 표시 강도는 영상 파이프라인에서 적용됩니다.",
+    )
+    st.caption("대표 이미지를 올리지 않으면 첫 Gemini 영상 프레임을 자동으로 사용합니다.")
+
+    # Sprint193-8: 최근 한 달 구매수 입력은 제거합니다.
+    # 현재 쇼핑 후킹은 리뷰수 + 평점 기준으로 고정합니다.
+    monthly_purchase_count = 0
+    st.markdown("#### 평점 · 리뷰수")
+    trust_c1, trust_c2 = st.columns(2)
+    with trust_c1:
+        rating = st.number_input(
+            "평점",
+            min_value=0.0,
+            max_value=5.0,
+            value=4.8,
+            step=0.1,
+            format="%.1f",
+            key="sprint178_rating",
+        )
+    with trust_c2:
+        declared_review_count = st.number_input(
+            "리뷰 수",
+            min_value=0,
+            value=0,
+            step=1,
+            key="sprint178_declared_review_count",
+        )
+
+    # Sprint193-4: 구매수 유무에 따라 신뢰 후킹 문구를 자동 분기합니다.
+    # 구매수가 없으면 리뷰 수를 첫 줄에 배치하고, 평점은 질문형으로 연결합니다.
+    if int(monthly_purchase_count or 0) > 0:
+        hook_lines = [f"최근 한 달 {int(monthly_purchase_count):,}명 이상 구매!"]
+        if float(rating or 0) > 0:
+            hook_lines.append(f"평점 {float(rating):.2f}점!")
+        if int(declared_review_count or 0) > 0:
+            hook_lines.append(f"리뷰 {int(declared_review_count):,}개!")
+    else:
+        hook_lines = []
+        if int(declared_review_count or 0) > 0:
+            hook_lines.append(f"리뷰 {int(declared_review_count):,}개!")
+        if float(rating or 0) > 0:
+            hook_lines.append(f"평점도 {float(rating):.2f}점?")
+
+    auto_hook_text = "\n".join(hook_lines).strip()
+    if auto_hook_text:
+        st.markdown("**신뢰 후킹 미리보기**")
+        st.info(auto_hook_text)
+
+    hook_text = st.text_area(
+        "후킹멘트",
+        height=78,
+        placeholder="예: 양치할 때 아직도 손으로 물 받아 쓰세요?",
+        key="sprint193_9_hook_phrase",
+        help="신뢰 후킹 다음, 첫 Gemini 영상 시작 시 표시·나레이션될 후킹 문장입니다.",
+    )
+
+    st.markdown("#### 성우 · 오디오 · BGM")
+    st.caption("Typecast API 키가 있으면 선택한 성우로 자동 나레이션을 생성합니다. 직접 만든 음성 파일을 올리면 업로드 파일을 우선 사용합니다.")
+
+    @st.cache_data(ttl=3600, show_spinner=False)
+    def _typecast_voice_choices(api_key=""):
+        resolved_key = str(api_key or "").strip()
+        if not resolved_key:
+            return []
+        try:
+            from typecast import Typecast
+            client = Typecast(api_key=resolved_key)
+            raw_voices = list(client.voices_v2() or [])
+            parsed, seen = [], set()
+            for voice in raw_voices:
+                if isinstance(voice, dict):
+                    name = str(voice.get("voice_name") or voice.get("name") or voice.get("display_name") or "").strip()
+                    vid = str(voice.get("voice_id") or voice.get("id") or "").strip()
+                else:
+                    name = str(getattr(voice, "voice_name", "") or getattr(voice, "name", "") or getattr(voice, "display_name", "") or "").strip()
+                    vid = str(getattr(voice, "voice_id", "") or getattr(voice, "id", "") or "").strip()
+                if name and vid and (name, vid) not in seen:
+                    seen.add((name, vid))
+                    parsed.append((name, vid))
+            parsed.sort(key=lambda item: (0 if item[0] == "지안" else 1 if item[0] == "서연" else 2, item[0]))
+            print("[Sprint193-19 Typecast Voices]", {"raw": len(raw_voices), "parsed": len(parsed)}, flush=True)
+            return parsed
+        except Exception as exc:
+            print("[Sprint193-19 Typecast Voices] ERROR", type(exc).__name__, str(exc), flush=True)
+            return []
+
+    _saved_typecast = TypecastSettingsStore.load()
+    _saved_typecast_key = str(_saved_typecast.get("api_key") or "").strip()
+
+    with st.expander("⚙ Typecast API 설정", expanded=not bool(_saved_typecast_key)):
+        _typecast_key_input = st.text_input(
+            "Typecast API Key",
+            value=_saved_typecast_key,
+            type="password",
+            key="sprint193_16_typecast_api_key_saved",
+            help="한 번 저장하면 다음 실행부터 자동으로 사용합니다.",
+        )
+        if st.button("Typecast API Key 저장", key="sprint193_16_save_typecast_key"):
+            TypecastSettingsStore.save({
+                "api_key": str(_typecast_key_input or "").strip(),
+                "last_voice_name": str(_saved_typecast.get("last_voice_name") or "지안"),
+                "last_voice_id": str(_saved_typecast.get("last_voice_id") or ""),
+            })
+            st.cache_data.clear()
+            st.success("Typecast API Key 저장 완료")
+            st.rerun()
+
+    typecast_api_key = _saved_typecast_key
+    if typecast_api_key:
+        os.environ["TYPECAST_API_KEY"] = typecast_api_key
+        st.caption("Typecast API Key 저장됨 · 자동 사용")
+
+    _voice_choices = _typecast_voice_choices(typecast_api_key)
+    _voice_labels = [name for name, _ in _voice_choices]
+    _saved_voice_name = str(_saved_typecast.get("last_voice_name") or "지안")
+    _default_voice_index = (
+        _voice_labels.index(_saved_voice_name)
+        if _saved_voice_name in _voice_labels
+        else next((i for i, name in enumerate(_voice_labels) if name == "지안"), 0)
+    )
+
+    if _voice_labels:
+        voice_search_text = st.text_input(
+            "🔎 Typecast 성우 검색",
+            value="",
+            placeholder="예: 지안, 서연",
+            key="sprint193_19_voice_search_text",
+        )
+        _needle = str(voice_search_text or "").strip().lower()
+        _filtered_voice_labels = [name for name in _voice_labels if _needle in name.lower()] if _needle else list(_voice_labels)
+        if not _filtered_voice_labels:
+            st.warning("검색 결과가 없습니다.")
+            _filtered_voice_labels = list(_voice_labels)
+        _filtered_default_index = _filtered_voice_labels.index(_saved_voice_name) if _saved_voice_name in _filtered_voice_labels else 0
+        selected_voice_name = st.selectbox(
+            "Typecast 성우 선택",
+            options=_filtered_voice_labels,
+            index=_filtered_default_index,
+            key="sprint193_19_voice_select",
+        )
+        selected_voice_id = dict(_voice_choices).get(selected_voice_name, "")
+        if selected_voice_name != _saved_voice_name or selected_voice_id != str(_saved_typecast.get("last_voice_id") or ""):
+            TypecastSettingsStore.save({
+                "api_key": typecast_api_key,
+                "last_voice_name": selected_voice_name,
+                "last_voice_id": selected_voice_id,
+            })
+    else:
+        selected_voice_name = _saved_voice_name
+        selected_voice_id = str(_saved_typecast.get("last_voice_id") or "")
+        if typecast_api_key:
+            st.warning("Typecast 보이스 목록을 불러오지 못했습니다.")
+
+    print("[Sprint193-19 Typecast]", {
+        "api_key_present": bool(typecast_api_key),
+        "voice_name": selected_voice_name,
+        "voice_id_present": bool(selected_voice_id),
+        "voice_count": len(_voice_choices),
+    }, flush=True)
+
+    uploaded_voice_audio = st.file_uploader(
+        "TTS 음성 파일 직접 업로드 (선택)",
+        type=["mp3", "wav", "m4a", "aac"],
+        accept_multiple_files=False,
+        key="sprint173_voice_audio",
+    )
+    uploaded_bgm_audio = st.file_uploader(
+        "BGM 파일 (선택)",
+        type=["mp3", "wav", "m4a", "aac"],
+        accept_multiple_files=False,
+        key="sprint173_bgm_audio",
+    )
+
+    audio_c1, audio_c2, audio_c3 = st.columns(3)
+    with audio_c1:
+        tts_volume_percent = st.slider(
+            "TTS 볼륨",
+            min_value=0,
+            max_value=200,
+            value=100,
+            step=5,
+            format="%d%%",
+            key="sprint193_1_tts_volume",
+            help="기본값 100%. 현재 영상 제작 파이프라인의 기본 음량을 유지하면서 운영값을 저장합니다.",
+        )
+    with audio_c2:
+        tts_speech_speed = st.slider(
+            "TTS 말하기 속도",
+            min_value=0.5,
+            max_value=2.0,
+            value=1.0,
+            step=0.1,
+            format="%.1f배",
+            key="sprint193_1_tts_speed",
+        )
+    with audio_c3:
+        bgm_volume_percent = st.slider(
+            "BGM 볼륨",
+            min_value=0,
+            max_value=100,
+            value=10,
+            step=5,
+            format="%d%%",
+            key="sprint193_1_bgm_volume",
+        )
+
+    st.markdown("#### Gemini 영상수동업로드 · 1~10")
+    uploaded_gemini_clips = st.file_uploader(
+        "편집 순서대로 영상 선택",
+        type=["mp4", "mov", "mkv", "webm", "m4v"],
+        accept_multiple_files=True,
+        key="sprint172_gemini_clips",
+    )
+    loaded_gemini_clip_paths = [
+        str(item or "").strip()
+        for item in list(st.session_state.get("sprint193_29_loaded_clip_paths") or [])
+        if str(item or "").strip() and Path(str(item)).is_file()
+    ]
+    if uploaded_gemini_clips:
+        editor_clip_sources = list(uploaded_gemini_clips)
+        loaded_gemini_clip_paths = []
+        st.session_state["sprint193_29_loaded_clip_paths"] = []
+        st.caption("새로 업로드한 영상 목록의 순서대로 연결합니다. 기존 불러온 영상 대신 새 영상을 사용합니다.")
+    else:
+        editor_clip_sources = list(loaded_gemini_clip_paths)
+        if loaded_gemini_clip_paths:
+            st.success(f"이전 작업의 Gemini 영상 {len(loaded_gemini_clip_paths)}개를 다시 사용합니다. 영상 재업로드가 필요 없습니다.")
+        else:
+            st.caption("업로드 목록의 순서대로 연결합니다. Gemini 영상의 기존 BGM과 음향은 자동 제거됩니다.")
+
+    clip_subtitles = []
+    clip_narrations = []
+    clip_subtitle_effects = []
+    clip_sfx = []
+    clip_playback_speeds = []
+    subtitle_style = {
+        "font": "Gmarket Sans Bold",
+        "font_size": 76,
+        "outline": 6,
+        "text_color": "#FFFFFF",
+        "background_color": "#000000",
+        "background_opacity": 10,
+        "highlight_color": "#FFD700",
+    }
+    if editor_clip_sources:
+        st.markdown("#### 영상별 편집")
+        st.caption(
+            "영상마다 한 줄에서 자막 · 나레이션 · 자막효과 · 사운드효과를 바로 입력합니다. "
+            "확정 대본이 비어 있으면 입력한 나레이션을 영상 순서대로 합쳐 사용합니다."
+        )
+
+        st.markdown("#### 자막 스타일")
+        style_c1, style_c2, style_c3 = st.columns(3)
+        with style_c1:
+            subtitle_font = st.selectbox(
+                "자막 글씨체",
+                options=["Gmarket Sans Bold", "Noto Sans CJK KR"],
+                index=0,
+                key="sprint190_9_subtitle_font",
             )
-            for key in list(st.session_state.keys()):
-                if (
-                    str(project_key) in str(key)
-                    or str(active_project_id) in str(key)
-                    or str(key).startswith("sprint147_active_project")
-                ):
-                    st.session_state.pop(key, None)
-            active_project_id = None
+        with style_c2:
+            subtitle_font_size = st.number_input(
+                "자막 크기",
+                min_value=32,
+                max_value=140,
+                value=76,
+                step=2,
+                key="sprint190_9_subtitle_font_size",
+            )
+        with style_c3:
+            subtitle_outline = st.number_input(
+                "외곽선 두께",
+                min_value=0,
+                max_value=30,
+                value=6,
+                step=1,
+                key="sprint190_9_subtitle_outline",
+            )
 
-        elif active_project and stage == "completed":
-            final_path = _resolve_final_video_path(result)
-            if final_path:
-                st.success("쇼츠 전체 제작이 완료됐습니다.")
-                st.video(final_path)
-                st.caption(f"최종 영상: {final_path}")
+        style_c4, style_c5, style_c6 = st.columns(3)
+        with style_c4:
+            subtitle_text_color = st.color_picker(
+                "자막 글자색",
+                value="#FFFFFF",
+                key="sprint190_9_subtitle_text_color",
+            )
+        with style_c5:
+            subtitle_background_color = st.color_picker(
+                "자막 배경색",
+                value="#000000",
+                key="sprint190_9_subtitle_background_color",
+            )
+        with style_c6:
+            subtitle_highlight_color = st.color_picker(
+                "강조 문구 글자색",
+                value="#FFD700",
+                key="sprint190_9_subtitle_highlight_color",
+            )
+
+        subtitle_background_opacity = st.slider(
+            "자막 배경 진하기",
+            min_value=0,
+            max_value=100,
+            value=10,
+            step=5,
+            format="%d%%",
+            key="sprint190_9_subtitle_background_opacity",
+            help="0%는 배경 없음, 100%는 완전 불투명입니다. 기본값은 10%입니다.",
+        )
+        st.caption(
+            "강조할 문구는 [이렇게] 입력하세요. "
+            "영상에서는 대괄호가 사라지고 해당 문구만 선택한 강조색으로 표시됩니다."
+        )
+
+        subtitle_style = {
+            "font": str(subtitle_font or "Gmarket Sans Bold"),
+            "font_size": int(subtitle_font_size or 76),
+            "outline": int(subtitle_outline or 15),
+            "text_color": str(subtitle_text_color or "#FFFFFF"),
+            "background_color": str(subtitle_background_color or "#000000"),
+            "background_opacity": int(subtitle_background_opacity if subtitle_background_opacity is not None else 10),
+            "highlight_color": str(subtitle_highlight_color or "#FFD700"),
+        }
+
+        # Sprint193-6: 영상 1개당 한 줄 편집
+        # [영상] [자막] [나레이션] [자막효과] [사운드효과]
+        header_cols = st.columns([0.7, 2.8, 2.8, 1.15, 1.25, 1.0])
+        for col, label in zip(
+            header_cols,
+            ["영상", "자막", "나레이션", "자막효과", "사운드효과", "속도"],
+        ):
+            with col:
+                st.markdown(f"**{label}**")
+
+        for index, uploaded_clip in enumerate(editor_clip_sources, start=1):
+            if isinstance(uploaded_clip, (str, Path)):
+                clip_name = Path(str(uploaded_clip)).name
             else:
-                st.warning("최종 MP4를 확인하지 못했습니다.")
-                st.json(result)
-            if st.button("새 상품 제작", type="primary", use_container_width=True):
-                for key in list(st.session_state.keys()):
-                    if (
-                        str(project_key) in str(key)
-                        or str(active_project_id) in str(key)
-                        or str(key).startswith("sprint147_active_project")
-                    ):
-                        st.session_state.pop(key, None)
-                st.rerun()
+                clip_name = str(
+                    getattr(uploaded_clip, "name", f"영상 {index}")
+                    or f"영상 {index}"
+                )
+            row_c0, row_c1, row_c2, row_c3, row_c4, row_c5 = st.columns(
+                [0.7, 2.8, 2.8, 1.15, 1.25, 1.0],
+                vertical_alignment="center",
+            )
+            with row_c0:
+                st.markdown(f"**{index}**")
+                st.caption(clip_name)
+            with row_c1:
+                subtitle_value = st.text_area(
+                    f"영상 {index} 자막",
+                    height=72,
+                    placeholder="첫 번째 문장\n두 번째 문장",
+                    key=f"sprint193_9_clip_subtitle_{index}",
+                    label_visibility="collapsed",
+                )
+            with row_c2:
+                narration_value = st.text_area(
+                    f"영상 {index} 나레이션",
+                    height=72,
+                    placeholder="이 영상에서 읽을 나레이션 대사",
+                    key=f"sprint193_9_clip_narration_{index}",
+                    label_visibility="collapsed",
+                )
+            with row_c3:
+                subtitle_effect_value = st.selectbox(
+                    f"영상 {index} 자막효과",
+                    options=["기본", "팝", "페이드", "바운스", "강조"],
+                    key=f"sprint193_9_clip_subtitle_effect_{index}",
+                    label_visibility="collapsed",
+                )
+            with row_c4:
+                sfx_value = st.selectbox(
+                    f"영상 {index} 사운드효과",
+                    options=["없음", "pop", "whoosh", "click", "마우스 클릭", "키보드 타이핑"],
+                    key=f"sprint193_9_clip_sfx_{index}",
+                    label_visibility="collapsed",
+                )
+            with row_c5:
+                scene_speed_value = st.selectbox(
+                    f"영상 {index} 속도",
+                    options=["자동", 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0],
+                    index=0,
+                    format_func=lambda value: (
+                        "자동맞춤" if value == "자동" else f"{float(value):g}배"
+                    ),
+                    key=f"sprint193_14_clip_speed_{index}",
+                    label_visibility="collapsed",
+                    help="자동맞춤은 장면별 나레이션 실제 길이에 맞춰 영상 속도를 계산하고, 음성이 더 길면 마지막 프레임을 자동 연장해 다음 장면과 겹치지 않게 합니다.",
+                )
+            clip_subtitles.append(str(subtitle_value or "").strip())
+            clip_narrations.append(str(narration_value or "").strip())
+            clip_subtitle_effects.append(str(subtitle_effect_value or "기본").strip())
+            clip_sfx.append(str(sfx_value or "없음").strip())
+            clip_playback_speeds.append(0.0 if scene_speed_value == "자동" else float(scene_speed_value or 1.5))
+
+        narration_script = " ".join(
+            item for item in clip_narrations if str(item or "").strip()
+        ).strip()
+        locked_script = narration_script
+        if narration_script:
+            st.caption("영상별 나레이션을 순서대로 합쳐 내부 확정 대본으로 사용합니다.")
+
+    st.markdown("#### CTA 상단 상품명")
+    cta_product_logo_text = st.text_input(
+        "CTA 상단 로고 자막",
+        value="",
+        placeholder="예: 미소랩 스윙글 워터탭",
+        key="sprint193_25_cta_product_logo_text",
+        help="마지막 수동 CTA 장면 상단에 로고형 상품명 자막으로 표시합니다. 비워두면 표시하지 않습니다.",
+    )
+    st.caption("마지막 CTA 장면에만 표시됩니다. 자동 CTA 문구를 생성하지는 않습니다.")
+
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        channel_type = st.selectbox(
+            "채널",
+            options=["shopping", "standing"],
+            format_func=lambda value: "쇼핑 쇼츠" if value == "shopping" else "일어서기",
+            index=0,
+            key="sprint172_channel_type",
+        )
+    with c2:
+        playback_speed = st.slider(
+            "영상 속도",
+            min_value=0.5,
+            max_value=2.0,
+            value=1.5,
+            step=0.1,
+            format="%.1f배",
+            key="sprint176_playback_speed",
+            help="Gemini 원본 영상 속도를 0.5배부터 2.0배까지 직접 조절합니다.",
+        )
+    with c3:
+        youtube_privacy_status = st.selectbox(
+            "YouTube 공개 설정",
+            options=["unlisted", "private", "public"],
+            index=0,
+            format_func=lambda value: {"unlisted": "비등록", "private": "비공개", "public": "공개"}[value],
+            key="sprint172_privacy",
+        )
+
+    st.markdown("---")
+    st.subheader("🎬 쇼츠 제작")
+    st.caption(
+        "업로드하지 않고 최종 MP4만 먼저 만들 수 있습니다. "
+        "자막·신뢰 후킹·제품 배경을 확인할 때는 '영상만 제작'을 누르세요."
+    )
+
+    create_col, upload_col = st.columns(2)
+    with create_col:
+        create_only_clicked = st.button(
+            "🎬 영상만 제작",
+            type="primary",
+            use_container_width=True,
+            key="sprint189_3_create_only",
+        )
+    with upload_col:
+        create_upload_clicked = st.button(
+            "🚀 제작 + YouTube 업로드",
+            use_container_width=True,
+            key="sprint189_3_create_and_upload",
+        )
+
+    # Sprint189-6: 영상만 제작은 업로드/예약 UI를 전혀 거치지 않고 여기서 즉시 실행합니다.
+    if create_only_clicked:
+        direct_run_counter_key = "sprint193_27_direct_run_counter"
+        direct_run_counter = int(st.session_state.get(direct_run_counter_key, 0) or 0) + 1
+        st.session_state[direct_run_counter_key] = direct_run_counter
+        direct_force_run_id = f"{direct_run_counter:06d}"
+
+        print(
+            "[Sprint193-29 DIRECT CREATE] CLICKED",
+            {
+                "run_counter": direct_run_counter,
+                "force_run_id": direct_force_run_id,
+            },
+            flush=True,
+        )
+        if not str(locked_script or "").strip():
+            st.error("영상별 나레이션을 한 줄 이상 입력해 주세요.")
+            return
+        if (
+            locked_script
+            and uploaded_voice_audio is None
+            and not str(typecast_api_key or os.getenv("TYPECAST_API_KEY", "") or "").strip()
+        ):
+            st.error("나레이션 자동 생성을 위해 Typecast API Key를 입력해 주세요.")
             return
 
-    product_name = st.text_input("상품명", placeholder="상품명을 입력하세요.", key="sprint147_product_name")
-    c1, c2 = st.columns(2)
-    with c1:
-        monthly_purchase_count = st.number_input("최근 한 달 구매 수", min_value=1, value=1, step=1, key="sprint147_monthly_purchase_count")
-        rating = st.number_input("평점", min_value=0.0, max_value=5.0, value=0.0, step=0.1, format="%.1f", key="sprint147_rating")
-    with c2:
-        declared_review_count = st.number_input("리뷰 개수", min_value=1, value=1, step=1, key="sprint147_declared_review_count")
-        review_checked_at = st.date_input("리뷰 확인일", key="sprint147_review_checked_at")
+        direct_errors = []
+        if not str(product_name or "").strip():
+            direct_errors.append("상품명을 입력해 주세요.")
+        if not str(locked_script or "").strip():
+            direct_errors.append("확정 대본을 입력해 주세요.")
+        if not editor_clip_sources:
+            direct_errors.append("Gemini 영상 파일을 업로드하거나 이전 작업을 불러와 주세요.")
 
-    locked_script = st.text_area("대본", height=360, placeholder="최종 확정된 쇼츠 대본을 붙여넣으세요.", key="sprint147_locked_script")
-    uploaded_product_images = st.file_uploader(
-        "실제 상품 이미지 (선택)",
-        type=["png", "jpg", "jpeg", "webp"],
-        accept_multiple_files=True,
-        key="sprint147_product_images",
-    )
-    st.caption("실제 상품 이미지는 상품 형태를 유지하는 참고 자료로 사용합니다. 없는 장면은 AI가 생성합니다.")
+        if direct_errors:
+            for error in direct_errors:
+                st.error(error)
+            return
 
-    if not st.button("대본 기준 이미지 만들기", type="primary", use_container_width=True, key="sprint147_generate_images"):
+        direct_payload = {
+            "coupang_url": "",
+            "product_name": product_name.strip(),
+            "title": product_name.strip(),
+            "source": "manual_gemini_video_edit_193_27_repeat",
+            "direct_run_id": direct_force_run_id,
+            "hook_text": hook_text.strip(),
+            "suppress_separate_hook": False,
+            "locked_script": locked_script.strip(),
+            "clip_subtitles": list(clip_subtitles or []),
+            "clip_narrations": list(clip_narrations or []),
+            "clip_subtitle_effects": list(clip_subtitle_effects or []),
+            "clip_sfx": list(clip_sfx or []),
+            "clip_playback_speeds": list(clip_playback_speeds or []),
+            "subtitle_style": dict(subtitle_style or {}),
+            "cta_text": cta_text.strip(),
+            "cta_platform": str(video_cta_platform),
+            "cta_keyword": str(cta_keyword or "").strip(),
+            "gemini_clip_count": len(editor_clip_sources),
+            "youtube_privacy_status": youtube_privacy_status,
+            "upload_enabled": False,
+            "channel_type": channel_type,
+            "playback_speed": float(playback_speed),
+            "voice_name": str(selected_voice_name or "지안"),
+            "voice_id": str(selected_voice_id or ""),
+            "monthly_purchase_count": int(monthly_purchase_count or 0),
+            "declared_review_count": int(declared_review_count or 0),
+            "rating": float(rating or 0.0),
+            "reservation_enabled": False,
+            "reservation_platforms": [],
+            "infock_url": "",
+            "platform_metadata": dict(platform_metadata or {}),
+        }
+
+        try:
+            direct_project = create_project_from_payload(
+                direct_payload,
+                [product_name.strip()],
+            )
+            direct_project_id = getattr(direct_project, "id", None)
+            if direct_project_id:
+                direct_project = (
+                    ProjectRepository().get(direct_project_id)
+                    or direct_project
+                )
+        except Exception as exc:
+            st.error(f"프로젝트 생성 실패: {exc}")
+            return
+
+        _save_clip_subtitle_sidecar(
+            direct_project,
+            clip_subtitles,
+            subtitle_style,
+            clip_narrations,
+            clip_subtitle_effects,
+            clip_sfx,
+            clip_playback_speeds,
+        )
+
+        # 후킹 배경 제품 이미지 저장
+        direct_hook_product_image_path = ""
+        if hook_product_image is not None:
+            product_folder = (
+                Path("assets/products")
+                / f"project_{safe_project_id(direct_project)}"
+            )
+            product_folder.mkdir(parents=True, exist_ok=True)
+            suffix = Path(
+                getattr(hook_product_image, "name", "product.jpg")
+            ).suffix.lower()
+            if suffix not in {".png", ".jpg", ".jpeg", ".webp"}:
+                suffix = ".jpg"
+            product_target = product_folder / f"00_main{suffix}"
+            product_target.write_bytes(hook_product_image.getbuffer())
+            direct_hook_product_image_path = str(product_target)
+
+        # Gemini 클립 저장 또는 이전 작업 클립 재사용
+        direct_folder = (
+            Path("assets/gemini_clips")
+            / f"project_{safe_project_id(direct_project)}"
+        )
+        direct_folder.mkdir(parents=True, exist_ok=True)
+        direct_clip_paths = []
+        if uploaded_gemini_clips:
+            for index, uploaded in enumerate(uploaded_gemini_clips, start=1):
+                suffix = Path(
+                    getattr(uploaded, "name", "clip.mp4")
+                ).suffix.lower() or ".mp4"
+                destination = direct_folder / f"gemini_{index:02d}{suffix}"
+                destination.write_bytes(uploaded.getbuffer())
+                direct_clip_paths.append(str(destination))
+        else:
+            direct_clip_paths = [
+                str(path)
+                for path in loaded_gemini_clip_paths
+                if Path(str(path)).is_file()
+            ]
+            print(
+                "[Sprint193-29 Edit Preset] REUSE CLIPS",
+                {"count": len(direct_clip_paths), "paths": direct_clip_paths},
+                flush=True,
+            )
+
+        # 수동 오디오 저장
+        direct_audio_folder = (
+            Path("assets/manual_audio")
+            / f"project_{safe_project_id(direct_project)}"
+        )
+        direct_audio_folder.mkdir(parents=True, exist_ok=True)
+        direct_voice_audio_path = ""
+        direct_bgm_audio_path = ""
+
+        if uploaded_voice_audio is not None:
+            suffix = Path(
+                getattr(uploaded_voice_audio, "name", "voice.mp3")
+            ).suffix.lower() or ".mp3"
+            voice_target = direct_audio_folder / f"jian_voice{suffix}"
+            voice_target.write_bytes(uploaded_voice_audio.getbuffer())
+            direct_voice_audio_path = str(voice_target)
+
+        if uploaded_bgm_audio is not None:
+            suffix = Path(
+                getattr(uploaded_bgm_audio, "name", "bgm.mp3")
+            ).suffix.lower() or ".mp3"
+            bgm_target = direct_audio_folder / f"shopping_bgm{suffix}"
+            bgm_target.write_bytes(uploaded_bgm_audio.getbuffer())
+            direct_bgm_audio_path = str(bgm_target)
+
+        edit_preset_payload = {
+            "version": "edit-preset-193-29",
+            "project_id": str(safe_project_id(direct_project)),
+            "product_name": str(product_name or "").strip(),
+            "rating": float(rating or 0.0),
+            "declared_review_count": int(declared_review_count or 0),
+            "monthly_purchase_count": int(monthly_purchase_count or 0),
+            "hook_text": str(hook_text or "").strip(),
+            "clip_subtitles": list(clip_subtitles or []),
+            "clip_narrations": list(clip_narrations or []),
+            "clip_subtitle_effects": list(clip_subtitle_effects or []),
+            "clip_sfx": list(clip_sfx or []),
+            "clip_playback_speeds": list(clip_playback_speeds or []),
+            "gemini_clip_paths": list(direct_clip_paths or []),
+            "subtitle_style": dict(subtitle_style or {}),
+            "cta_product_logo_text": str(cta_product_logo_text or "").strip(),
+            "playback_speed": float(playback_speed or 1.5),
+            "channel_type": str(channel_type or "shopping"),
+            "youtube_privacy_status": str(youtube_privacy_status or "unlisted"),
+            "voice_name": str(selected_voice_name or "지안"),
+            "voice_id": str(selected_voice_id or ""),
+            "tts_volume_percent": int(tts_volume_percent or 100),
+            "tts_speech_speed": float(tts_speech_speed or 1.0),
+            "bgm_volume_percent": int(bgm_volume_percent or 10),
+            "voice_audio_path": str(direct_voice_audio_path or ""),
+            "bgm_audio_path": str(direct_bgm_audio_path or ""),
+            "saved_at": datetime.now(ZoneInfo("Asia/Seoul")).isoformat(),
+        }
+        edit_preset_path = _sprint193_29_save_edit_preset(
+            direct_project,
+            edit_preset_payload,
+        )
+        st.session_state["sprint193_29_loaded_preset_path"] = edit_preset_path
+
+        print(
+            "[Sprint193-10 CLIP EDIT INPUT]",
+            {
+                "clip_subtitles": list(clip_subtitles or []),
+                "clip_narrations": list(clip_narrations or []),
+                "clip_subtitle_effects": list(clip_subtitle_effects or []),
+                "clip_sfx": list(clip_sfx or []),
+                "clip_playback_speeds": list(clip_playback_speeds or []),
+                "voice_name": str(selected_voice_name or "지안"),
+                "voice_id_present": bool(str(selected_voice_id or "").strip()),
+                "cta_product_logo_text": str(cta_product_logo_text or "").strip(),
+            },
+            flush=True,
+        )
+
+        print(
+            "[Sprint189-6 DIRECT CREATE] INPUT",
+            {
+                "project_id": safe_project_id(direct_project),
+                "clip_subtitle_count": len([x for x in list(clip_subtitles or []) if str(x).strip()]),
+                "monthly_purchase_count": int(monthly_purchase_count or 0),
+                "declared_review_count": int(declared_review_count or 0),
+                "rating": float(rating or 0.0),
+                "hook_product_image_path": direct_hook_product_image_path,
+                "clip_count": len(direct_clip_paths),
+                "force_run_id": direct_force_run_id,
+            },
+            flush=True,
+        )
+
+        with st.spinner(
+            "영상만 제작 중입니다... 자막·신뢰 후킹·BGM·효과음을 적용하고 있습니다."
+        ):
+            try:
+                direct_result = run_project_pipeline(
+                    project=direct_project,
+                    sample_count=len(direct_clip_paths),
+                    review_text=hook_text.strip(),
+                    locked_script=locked_script.strip(),
+                    review_image_paths=[],
+                    product_image_paths=[],
+                    product_image_path="",
+                    youtube_privacy_status=youtube_privacy_status,
+                    viral_video_sources=direct_clip_paths,
+                    input_product_name=product_name.strip(),
+                    stop_after_image_generation=False,
+                    gemini_video_mode=True,
+                    hook_text=hook_text.strip(),
+                    cta_text=cta_text.strip(),
+                    cta_product_logo_text=str(cta_product_logo_text or "").strip(),
+                    voice_audio_path=direct_voice_audio_path,
+                    bgm_audio_path=direct_bgm_audio_path,
+                    voice_name=str(selected_voice_name or "지안"),
+                    voice_id=str(selected_voice_id or ""),
+                    typecast_api_key=str(typecast_api_key or ""),
+                    tts_volume_percent=int(tts_volume_percent or 100),
+                    tts_speech_speed=float(tts_speech_speed or 1.0),
+                    clip_subtitles=list(clip_subtitles or []),
+                    clip_subtitle_effects=list(clip_subtitle_effects or []),
+                    clip_sfx=list(clip_sfx or []),
+                    clip_playback_speeds=list(clip_playback_speeds or []),
+                    clip_narrations=list(clip_narrations or []),
+                    gemini_clip_count=len(direct_clip_paths),
+                    upload_enabled=False,
+                    playback_speed=float(playback_speed),
+                    channel_type=channel_type,
+                    monthly_purchase_count=int(monthly_purchase_count or 0),
+                    declared_review_count=int(declared_review_count or 0),
+                    rating=float(rating or 0.0),
+                    reservation_payload=None,
+                    force_run_id=direct_force_run_id,
+                )
+            except Exception as exc:
+                Path("full_error.log").write_text(
+                    traceback.format_exc(),
+                    encoding="utf-8",
+                )
+                st.error(
+                    f"영상 제작 실패: {type(exc).__name__}: {exc}"
+                )
+                return
+
+        direct_final_path = _resolve_final_video_path(direct_result)
+        if direct_final_path and Path(direct_final_path).is_file():
+            st.success("🎬 영상 제작이 완료됐습니다. 업로드는 실행하지 않았습니다.")
+            st.video(direct_final_path)
+            st.caption(f"최종 영상: {direct_final_path}")
+            print(
+                "[Sprint193-29 DIRECT CREATE] FINAL VIDEO:",
+                direct_final_path,
+                flush=True,
+            )
+        else:
+            st.error(
+                str(
+                    direct_result.get("summary")
+                    or "최종 MP4가 생성되지 않았습니다."
+                )
+            )
+            st.json(direct_result)
         return
 
+    # 제작 버튼을 누르기 전에는 아래 테스트/예약 UI를 계속 보여주되,
+    # 실제 제작 실행부까지 내려갈 수 있도록 세션에 클릭 상태를 저장합니다.
+    st.subheader("YouTube 한 장면 업로드 테스트")
+    st.caption(
+        "업로드한 Gemini 영상 중 첫 번째 파일만 편집 없이 YouTube에 비공개로 올립니다. "
+        "전체 쇼츠 제작과 예약 큐는 실행하지 않습니다."
+    )
+    if st.button(
+        "첫 장면 YouTube 비공개 테스트 업로드",
+        use_container_width=True,
+        key="sprint183_single_scene_youtube_test",
+    ):
+        if not uploaded_gemini_clips:
+            st.error("Gemini 영상 파일을 한 개 이상 선택해 주세요.")
+        else:
+            first_clip = uploaded_gemini_clips[0]
+            test_root = Path("assets/youtube_test_uploads")
+            test_root.mkdir(parents=True, exist_ok=True)
+            original_name = str(getattr(first_clip, "name", "scene_01.mp4") or "scene_01.mp4")
+            suffix = Path(original_name).suffix.lower()
+            if suffix not in SUPPORTED_VIRAL_VIDEO_SUFFIXES:
+                suffix = ".mp4"
+            timestamp = datetime.now(ZoneInfo("Asia/Seoul")).strftime("%Y%m%d_%H%M%S")
+            test_path = test_root / f"single_scene_{timestamp}{suffix}"
+            try:
+                test_path.write_bytes(first_clip.getbuffer())
+                test_title = normalize_text(product_name, "쇼핑 쇼츠")
+                test_title = f"[업로드 테스트] {test_title}"[:100]
+                test_description = (
+                    "YouTube Shorts 자동업로드 연결 확인을 위한 비공개 테스트 영상입니다.\n"
+                    "첫 번째 Gemini 장면만 업로드했습니다.\n\n"
+                    "#쇼츠 #업로드테스트"
+                )
+                with st.spinner("첫 장면을 YouTube 비공개 영상으로 업로드 중입니다..."):
+                    test_result = YouTubeUploadExecutor().execute(
+                        video_path=str(test_path),
+                        title=test_title,
+                        description=test_description,
+                        privacy_status="private",
+                        payload={
+                            "youtube_privacy_status": "private",
+                            "tags": ["쇼츠", "업로드테스트"],
+                            "notify_subscribers": False,
+                            "made_for_kids": False,
+                        },
+                    )
+                st.session_state["sprint183_single_scene_upload_result"] = test_result
+                st.success("첫 장면 YouTube 비공개 업로드가 완료됐습니다.")
+                st.write("Video ID:", test_result.get("video_id", ""))
+                st.write("공개 상태:", test_result.get("privacy_status", "private"))
+                shorts_url = str(test_result.get("shorts_url") or test_result.get("watch_url") or "")
+                if shorts_url:
+                    st.link_button("YouTube에서 확인", shorts_url, use_container_width=True)
+                print(
+                    "[Sprint183-1 Single Scene Upload] SUCCESS",
+                    test_result.get("video_id", ""),
+                    test_result.get("privacy_status", ""),
+                    flush=True,
+                )
+            except Exception as exc:
+                Path("full_error.log").write_text(traceback.format_exc(), encoding="utf-8")
+                st.error(f"첫 장면 YouTube 업로드 실패: {type(exc).__name__}: {exc}")
+                print(
+                    "[Sprint183-1 Single Scene Upload] ERROR",
+                    type(exc).__name__,
+                    str(exc),
+                    flush=True,
+                )
+
+    previous_test_upload = st.session_state.get("sprint183_single_scene_upload_result", {})
+    if isinstance(previous_test_upload, dict) and previous_test_upload.get("video_id"):
+        st.caption(
+            "최근 테스트 업로드: "
+            f"{previous_test_upload.get('video_id')} / "
+            f"{previous_test_upload.get('privacy_status', 'private')}"
+        )
+
+    st.subheader("Meta Business Suite 릴스 예약 테스트")
+    st.info(
+        "Meta 로그인 저장과 릴스 예약을 분리했습니다. 최초 1회 로그인 저장을 완료한 뒤 예약 테스트를 실행하세요. "
+        "즉시 게시 버튼은 누르지 않고 예약 버튼만 실행합니다."
+    )
+
+    if st.button(
+        "① Meta 로그인 저장",
+        width="stretch",
+        key="sprint184_1_meta_login_save",
+    ):
+        try:
+            with st.spinner("Facebook 로그인 브라우저를 여는 중입니다. 로그인 후 Business Suite 화면이 열릴 때까지 기다려 주세요..."):
+                login_result = MetaBusinessSuiteScheduler().save_login_session(
+                    user_data_dir="secrets/meta_business_suite_profile",
+                    headless=False,
+                    login_timeout_seconds=600,
+                    action_timeout_seconds=60,
+                    slow_mo=120,
+                )
+            st.session_state["sprint184_1_meta_login_result"] = login_result
+            if login_result.get("ok"):
+                st.success("Meta 로그인 세션이 저장됐습니다. 이제 아래 예약 테스트를 실행하세요.")
+                print(
+                    "[Sprint184-1 Meta Login UI] SUCCESS",
+                    login_result.get("final_url", ""),
+                    flush=True,
+                )
+            else:
+                st.error(
+                    "Meta 로그인 저장에 실패했습니다: "
+                    f"{login_result.get('status')} / {login_result.get('errors')}"
+                )
+                failure_screenshot = str(login_result.get("failure_screenshot") or "")
+                if failure_screenshot:
+                    st.caption(f"실패 화면: {failure_screenshot}")
+                print(
+                    "[Sprint184-1 Meta Login UI] ERROR",
+                    login_result.get("status"),
+                    login_result.get("errors"),
+                    flush=True,
+                )
+        except Exception as exc:
+            Path("full_error.log").write_text(traceback.format_exc(), encoding="utf-8")
+            st.error(f"Meta 로그인 저장 실패: {type(exc).__name__}: {exc}")
+
+    meta_c1, meta_c2 = st.columns(2)
+    default_meta_date = (datetime.now(ZoneInfo("Asia/Seoul")) + timedelta(days=1)).date()
+    with meta_c1:
+        meta_schedule_date = st.date_input(
+            "Instagram 테스트 예약 날짜",
+            value=default_meta_date,
+            key="sprint183_4_meta_schedule_date",
+        )
+    with meta_c2:
+        meta_schedule_time = st.time_input(
+            "Instagram 테스트 예약 시간",
+            value=datetime.strptime("10:00", "%H:%M").time(),
+            key="sprint183_4_meta_schedule_time",
+        )
+
+    if st.button(
+        "② 첫 장면 Meta Business Suite 릴스 예약 테스트",
+        width="stretch",
+        key="sprint183_4_meta_single_scene_schedule_test",
+    ):
+        if not uploaded_gemini_clips:
+            st.error("Gemini 영상 파일을 한 개 이상 선택해 주세요.")
+        else:
+            first_clip = uploaded_gemini_clips[0]
+            test_root = Path("assets/meta_business_suite_test_uploads")
+            test_root.mkdir(parents=True, exist_ok=True)
+            original_name = str(getattr(first_clip, "name", "scene_01.mp4") or "scene_01.mp4")
+            suffix = Path(original_name).suffix.lower()
+            if suffix not in SUPPORTED_VIRAL_VIDEO_SUFFIXES:
+                suffix = ".mp4"
+            timestamp = datetime.now(ZoneInfo("Asia/Seoul")).strftime("%Y%m%d_%H%M%S")
+            test_path = test_root / f"single_scene_{timestamp}{suffix}"
+            try:
+                test_path.write_bytes(first_clip.getbuffer())
+                scheduled_at = datetime.combine(meta_schedule_date, meta_schedule_time)
+                test_caption = (
+                    f"[예약 테스트] {normalize_text(product_name, '쇼핑 쇼츠')}\n\n"
+                    "첫 번째 장면 Meta Business Suite 릴스 예약 연결 테스트입니다.\n\n"
+                    "#릴스 #쇼핑쇼츠 #예약테스트"
+                )[:2200]
+                with st.spinner("Meta Business Suite를 열고 첫 장면 릴스를 예약 중입니다..."):
+                    test_result = MetaBusinessSuiteScheduler().schedule_reel(
+                        video_path=str(test_path),
+                        caption=test_caption,
+                        scheduled_at=scheduled_at,
+                        user_data_dir="secrets/meta_business_suite_profile",
+                        headless=False,
+                        allow_manual_login=False,
+                        login_timeout_seconds=30,
+                        action_timeout_seconds=60,
+                        slow_mo=150,
+                        keep_browser_open=False,
+                    )
+                st.session_state["sprint183_4_meta_schedule_result"] = test_result
+                if test_result.get("ok"):
+                    st.success(
+                        "Meta Business Suite 릴스 예약이 완료됐습니다: "
+                        f"{test_result.get('scheduled_at', '')}"
+                    )
+                    print(
+                        "[Sprint184-1 Meta Single Scene Schedule] SUCCESS",
+                        test_result.get("scheduled_at", ""),
+                        flush=True,
+                    )
+                else:
+                    st.error(
+                        "Meta Business Suite 예약에 실패했습니다: "
+                        f"{test_result.get('status')} / {test_result.get('errors')}"
+                    )
+                    failure_screenshot = str(test_result.get("failure_screenshot") or "")
+                    if failure_screenshot:
+                        st.caption(f"실패 화면: {failure_screenshot}")
+                    print(
+                        "[Sprint184-1 Meta Single Scene Schedule] ERROR",
+                        test_result.get("status"),
+                        test_result.get("errors"),
+                        flush=True,
+                    )
+            except Exception as exc:
+                Path("full_error.log").write_text(traceback.format_exc(), encoding="utf-8")
+                st.error(f"Meta Business Suite 예약 실패: {type(exc).__name__}: {exc}")
+                print(
+                    "[Sprint184-1 Meta Single Scene Schedule] ERROR",
+                    type(exc).__name__,
+                    str(exc),
+                    flush=True,
+                )
+
+
+    st.subheader("TikTok 첫 장면 업로드 테스트")
+    st.info(
+        "최초 1회 TikTok 로그인을 저장한 뒤 첫 장면 업로드 테스트를 실행하세요. "
+        "영상과 캡션을 입력한 뒤 실제 게시 버튼까지 자동으로 누릅니다."
+    )
+
+    tiktok_upload_account = st.selectbox(
+        "TikTok 업로드 계정",
+        options=["실물로그", "하센맘"],
+        index=0,
+        key="sprint192_1_tiktok_upload_account",
+        help="계정별 로그인 세션을 서로 다른 브라우저 프로필에 저장합니다.",
+    )
+    tiktok_profile_dir = _publisher_profile(
+        tiktok_upload_account,
+        "tiktok",
+    )
+    st.caption(f"TikTok 로그인 프로필: {tiktok_upload_account}")
+
+    if st.button(
+        "① TikTok 로그인 저장",
+        width="stretch",
+        key="sprint185_1_tiktok_login_save",
+    ):
+        try:
+            with st.spinner(
+                "TikTok 로그인 브라우저를 여는 중입니다. "
+                f"{tiktok_upload_account} 계정으로 로그인한 뒤 TikTok 홈 또는 Studio 화면이 열릴 때까지 기다려 주세요..."
+            ):
+                login_result = TikTokUploadExecutor().save_login_session(
+                    user_data_dir=tiktok_profile_dir,
+                    headless=False,
+                    login_timeout_seconds=600,
+                    action_timeout_seconds=60,
+                    slow_mo=120,
+                )
+            st.session_state["sprint185_1_tiktok_login_result"] = login_result
+            if login_result.get("ok"):
+                st.success("TikTok 로그인 세션이 저장됐습니다.")
+                print(
+                    "[Sprint185-1 TikTok Login UI] SUCCESS",
+                    login_result.get("final_url", ""),
+                    flush=True,
+                )
+            else:
+                st.error(
+                    "TikTok 로그인 저장에 실패했습니다: "
+                    f"{login_result.get('status')} / {login_result.get('errors')}"
+                )
+                failure_screenshot = str(
+                    login_result.get("failure_screenshot") or ""
+                )
+                if failure_screenshot:
+                    st.caption(f"실패 화면: {failure_screenshot}")
+                print(
+                    "[Sprint185-1 TikTok Login UI] ERROR",
+                    login_result.get("status"),
+                    login_result.get("errors"),
+                    flush=True,
+                )
+        except Exception as exc:
+            Path("full_error.log").write_text(
+                traceback.format_exc(),
+                encoding="utf-8",
+            )
+            st.error(
+                f"TikTok 로그인 저장 실패: {type(exc).__name__}: {exc}"
+            )
+
+    if st.button(
+        "② 첫 장면 TikTok 실제 게시 테스트",
+        width="stretch",
+        key="sprint185_1_tiktok_single_scene_preview",
+    ):
+        if not uploaded_gemini_clips:
+            st.error("Gemini 영상 파일을 한 개 이상 선택해 주세요.")
+        else:
+            first_clip = uploaded_gemini_clips[0]
+            test_root = Path("assets/tiktok_test_uploads")
+            test_root.mkdir(parents=True, exist_ok=True)
+            original_name = str(
+                getattr(first_clip, "name", "scene_01.mp4")
+                or "scene_01.mp4"
+            )
+            suffix = Path(original_name).suffix.lower()
+            if suffix not in SUPPORTED_VIRAL_VIDEO_SUFFIXES:
+                suffix = ".mp4"
+            timestamp = datetime.now(
+                ZoneInfo("Asia/Seoul")
+            ).strftime("%Y%m%d_%H%M%S")
+            test_path = (
+                test_root / f"single_scene_{timestamp}{suffix}"
+            )
+            try:
+                test_path.write_bytes(first_clip.getbuffer())
+                tiktok_test_hashtags = (
+                    "#하센맘 #업로드테스트"
+                    if tiktok_upload_account == "하센맘"
+                    else "#실물로그 #쇼핑쇼츠 #제품소개 #업로드테스트"
+                )
+                test_caption = (
+                    f"[업로드 테스트] "
+                    f"{normalize_text(product_name, '쇼핑 쇼츠')}\n\n"
+                    "첫 번째 장면 TikTok 자동업로드 연결 테스트입니다.\n\n"
+                    f"{tiktok_test_hashtags}"
+                )[:2200]
+
+                with st.spinner(
+                    "TikTok에 영상과 캡션을 입력하고 실제 게시까지 진행 중입니다..."
+                ):
+                    test_result = TikTokUploadExecutor().prepare_upload(
+                        video_path=str(test_path),
+                        caption=test_caption,
+                        user_data_dir=tiktok_profile_dir,
+                        headless=False,
+                        allow_manual_login=False,
+                        login_timeout_seconds=30,
+                        action_timeout_seconds=60,
+                        slow_mo=150,
+                        keep_browser_open=False,
+                        publish=True,
+                    )
+
+                st.session_state[
+                    "sprint185_1_tiktok_preview_result"
+                ] = test_result
+
+                if test_result.get("ok"):
+                    st.success(
+                        "TikTok 게시 직전 준비가 완료됐습니다. "
+                        "열린 브라우저에서 영상·캡션을 확인하세요. "
+                        "게시 버튼은 자동으로 누르지 않았습니다."
+                    )
+                    st.write(
+                        "상태:",
+                        test_result.get("status", ""),
+                    )
+                    st.write(
+                        "최종 화면:",
+                        test_result.get("final_url", ""),
+                    )
+                    print(
+                        "[Sprint186-1 TikTok Publish UI] SUCCESS",
+                        test_result.get("status", ""),
+                        flush=True,
+                    )
+                else:
+                    st.error(
+                        "TikTok 게시 직전 테스트에 실패했습니다: "
+                        f"{test_result.get('status')} / "
+                        f"{test_result.get('errors')}"
+                    )
+                    failure_screenshot = str(
+                        test_result.get("failure_screenshot") or ""
+                    )
+                    if failure_screenshot:
+                        st.caption(f"실패 화면: {failure_screenshot}")
+                    print(
+                        "[Sprint186-1 TikTok Publish UI] ERROR",
+                        test_result.get("status"),
+                        test_result.get("errors"),
+                        flush=True,
+                    )
+            except Exception as exc:
+                Path("full_error.log").write_text(
+                    traceback.format_exc(),
+                    encoding="utf-8",
+                )
+                st.error(
+                    "TikTok 게시 직전 테스트 실패: "
+                    f"{type(exc).__name__}: {exc}"
+                )
+                print(
+                    "[Sprint186-1 TikTok Publish UI] ERROR",
+                    type(exc).__name__,
+                    str(exc),
+                    flush=True,
+                )
+
+
+
+    st.subheader("스레드 예약 업로드 테스트")
+    st.info("실제 게시 성공 확인 완료. 이제 원클릭의 게시 날짜/시간을 Threads 자체 예약 게시에 적용합니다.")
+
+    threads_upload_account = st.selectbox(
+        "스레드 계정",
+        options=["실물로그", "하센맘"],
+        index=1,
+        key="threads_sprint1_account",
+    )
+    threads_profile_dir = _publisher_profile(threads_upload_account, "threads")
+    st.caption(f"스레드 로그인 프로필: {threads_profile_dir}")
+
+    if st.button("① 스레드 로그인 저장", width="stretch", key="threads_sprint1_login_save"):
+        with st.spinner("스레드 로그인 브라우저를 여는 중입니다. 브라우저에서 로그인을 완료해 주세요."):
+            threads_login_result = ThreadsUploadExecutor().save_login_session(
+                user_data_dir=threads_profile_dir,
+                headless=False,
+                login_timeout_seconds=600,
+                action_timeout_seconds=60,
+                slow_mo=120,
+            )
+        if threads_login_result.get("ok"):
+            st.success("스레드 로그인 세션이 저장됐습니다.")
+        else:
+            st.error(
+                "스레드 로그인 저장 실패: "
+                f"{threads_login_result.get('status')} / {threads_login_result.get('errors')}"
+            )
+
+    threads_test_video = st.file_uploader(
+        "스레드 테스트용 MP4",
+        type=["mp4", "mov", "m4v", "webm"],
+        key="threads_sprint1_test_video",
+    )
+    threads_test_text = st.text_area(
+        "스레드 본문",
+        value="",
+        height=120,
+        key="threads_sprint1_text",
+        placeholder="테스트 게시물 본문을 입력하세요.",
+    )
+
+    threads_now = datetime.now(ZoneInfo("Asia/Seoul"))
+    threads_default_schedule = threads_now + timedelta(hours=1)
+    threads_schedule_col1, threads_schedule_col2 = st.columns(2)
+    with threads_schedule_col1:
+        threads_schedule_date = st.date_input(
+            "스레드 예약 날짜",
+            value=threads_default_schedule.date(),
+            min_value=threads_now.date(),
+            key="threads_sprint2_schedule_date",
+        )
+    with threads_schedule_col2:
+        threads_schedule_time = st.time_input(
+            "스레드 예약 시간",
+            value=threads_default_schedule.time().replace(second=0, microsecond=0),
+            step=300,
+            key="threads_sprint2_schedule_time",
+        )
+
+    threads_schedule_at_preview = datetime.combine(
+        threads_schedule_date,
+        threads_schedule_time,
+        tzinfo=ZoneInfo("Asia/Seoul"),
+    )
+    st.caption(
+        "Threads 예약시간: "
+        f"{threads_schedule_at_preview.strftime('%Y-%m-%d %H:%M')}"
+    )
+
+    if st.button(
+        "② 스레드 예약 게시 테스트",
+        type="primary",
+        width="stretch",
+        key="threads_sprint1_publish",
+    ):
+        if threads_test_video is None:
+            st.error("스레드 테스트용 MP4를 선택해 주세요.")
+        else:
+            try:
+                test_root = Path("assets/threads_test_uploads")
+                test_root.mkdir(parents=True, exist_ok=True)
+                original_name = str(getattr(threads_test_video, "name", "threads_test.mp4") or "threads_test.mp4")
+                suffix = Path(original_name).suffix.lower()
+                if suffix not in {".mp4", ".mov", ".m4v", ".webm"}:
+                    suffix = ".mp4"
+                timestamp = datetime.now(ZoneInfo("Asia/Seoul")).strftime("%Y%m%d_%H%M%S")
+                threads_test_path = test_root / f"threads_test_{timestamp}{suffix}"
+                threads_test_path.write_bytes(threads_test_video.getbuffer())
+
+                test_text = str(threads_test_text or "").strip()
+                if not test_text:
+                    test_text = f"{normalize_text(product_name, '쇼핑 쇼츠')}\n\n#실물로그 #제품리뷰 #업로드테스트"
+
+                print(
+                    "[Threads Sprint1 UI] PUBLISH START",
+                    {
+                        "account": threads_upload_account,
+                        "profile_dir": threads_profile_dir,
+                        "video_path": str(threads_test_path),
+                    },
+                    flush=True,
+                )
+
+                threads_schedule_at = datetime.combine(
+                    threads_schedule_date,
+                    threads_schedule_time,
+                    tzinfo=ZoneInfo("Asia/Seoul"),
+                )
+                if threads_schedule_at <= datetime.now(
+                    ZoneInfo("Asia/Seoul")
+                ):
+                    st.error(
+                        "스레드 예약 날짜/시간은 현재 시각보다 이후로 지정해 주세요."
+                    )
+                    return
+
+                threads_schedule_iso = threads_schedule_at.isoformat(
+                    timespec="minutes"
+                )
+
+                print(
+                    "[Threads Sprint2 UI] SCHEDULE",
+                    {
+                        "scheduled_publish_at": threads_schedule_iso,
+                    },
+                    flush=True,
+                )
+
+                with st.spinner(
+                    "스레드에 본문·영상을 입력하고 예약 날짜/시간을 설정하는 중입니다..."
+                ):
+                    threads_result = ThreadsUploadExecutor().prepare_upload(
+                        video_path=str(threads_test_path),
+                        text=test_text,
+                        user_data_dir=threads_profile_dir,
+                        headless=False,
+                        allow_manual_login=True,
+                        login_timeout_seconds=600,
+                        action_timeout_seconds=60,
+                        slow_mo=150,
+                        keep_browser_open=True,
+                        publish=True,
+                        scheduled_publish_at=threads_schedule_iso,
+                    )
+
+                if threads_result.get("ok"):
+                    st.success("스레드 예약 게시 설정이 완료됐습니다.")
+                    st.write("상태:", threads_result.get("status", ""))
+                else:
+                    st.error(
+                        "스레드 실제 게시 테스트 실패: "
+                        f"{threads_result.get('status')} / {threads_result.get('errors')}"
+                    )
+                    screenshot = str(threads_result.get("failure_screenshot") or "")
+                    if screenshot:
+                        st.caption(f"실패 화면: {screenshot}")
+
+                print(
+                    "[Threads Sprint1 UI] PUBLISH COMPLETE",
+                    {
+                        "ok": threads_result.get("ok"),
+                        "status": threads_result.get("status"),
+                        "final_url": threads_result.get("final_url"),
+                    },
+                    flush=True,
+                )
+            except Exception as exc:
+                Path("full_error.log").write_text(traceback.format_exc(), encoding="utf-8")
+                st.error(f"스레드 실제 게시 테스트 실패: {type(exc).__name__}: {exc}")
+
+    st.markdown("---")
+
+    st.subheader("네이버 클립 첫 장면 업로드 테스트")
+    st.info(
+        "최초 1회 네이버 로그인을 저장한 뒤 첫 장면 업로드 테스트를 실행하세요. "
+        "게시 직전 테스트와 실제 게시 테스트를 분리해서 실행합니다."
+    )
+
+    naver_clip_upload_account = st.selectbox(
+        "네이버 클립 업로드 계정",
+        options=["실물로그", "하센맘"],
+        index=0,
+        key="sprint192_1_naver_clip_upload_account",
+        help="계정별 네이버 로그인 세션을 서로 다른 브라우저 프로필에 저장합니다.",
+    )
+    naver_clip_profile_dir = _publisher_profile(
+        naver_clip_upload_account,
+        "naver_clip",
+    )
+    st.caption(f"네이버 클립 로그인 프로필: {naver_clip_upload_account}")
+
+    if st.button(
+        "① 네이버 클립 로그인 저장",
+        width="stretch",
+        key="sprint187_1_naver_clip_login_save",
+    ):
+        try:
+            with st.spinner(
+                "네이버 Creator Studio 로그인 브라우저를 여는 중입니다. "
+                "로그인 후 Creator Studio 화면이 열릴 때까지 기다려 주세요..."
+            ):
+                login_result = NaverClipUploadExecutor().save_login_session(
+                    user_data_dir=naver_clip_profile_dir,
+                    headless=False,
+                    login_timeout_seconds=600,
+                    action_timeout_seconds=60,
+                    slow_mo=120,
+                    target_channel_name=(
+                        "하센맘"
+                        if naver_clip_upload_account == "하센맘"
+                        else ""
+                    ),
+                )
+            st.session_state["sprint187_1_naver_clip_login_result"] = login_result
+            if login_result.get("ok"):
+                st.success("네이버 클립 로그인 세션이 저장됐습니다.")
+                print(
+                    "[Sprint187-10 Naver Clip Login UI] SUCCESS",
+                    login_result.get("final_url", ""),
+                    flush=True,
+                )
+            else:
+                st.error(
+                    "네이버 클립 로그인 저장에 실패했습니다: "
+                    f"{login_result.get('status')} / {login_result.get('errors')}"
+                )
+                failure_screenshot = str(login_result.get("failure_screenshot") or "")
+                if failure_screenshot:
+                    st.caption(f"실패 화면: {failure_screenshot}")
+        except Exception as exc:
+            Path("full_error.log").write_text(
+                traceback.format_exc(),
+                encoding="utf-8",
+            )
+            st.error(
+                f"네이버 클립 로그인 저장 실패: {type(exc).__name__}: {exc}"
+            )
+
+    if st.button(
+        "② 첫 장면 네이버 클립 게시 직전 테스트",
+        width="stretch",
+        key="sprint187_1_naver_clip_preview",
+    ):
+        if not uploaded_gemini_clips:
+            st.error("Gemini 영상 파일을 한 개 이상 선택해 주세요.")
+        else:
+            first_clip = uploaded_gemini_clips[0]
+            test_root = Path("assets/naver_clip_test_uploads")
+            test_root.mkdir(parents=True, exist_ok=True)
+            original_name = str(
+                getattr(first_clip, "name", "scene_01.mp4")
+                or "scene_01.mp4"
+            )
+            suffix = Path(original_name).suffix.lower()
+            if suffix not in SUPPORTED_VIRAL_VIDEO_SUFFIXES:
+                suffix = ".mp4"
+            timestamp = datetime.now(
+                ZoneInfo("Asia/Seoul")
+            ).strftime("%Y%m%d_%H%M%S")
+            test_path = test_root / f"single_scene_{timestamp}{suffix}"
+
+            try:
+                test_path.write_bytes(first_clip.getbuffer())
+                test_title = (
+                    f"[업로드 테스트] "
+                    f"{normalize_text(product_name, '쇼핑 쇼츠')}"
+                )[:100]
+                naver_test_hashtags = (
+                    "#하센맘 #업로드테스트"
+                    if naver_clip_upload_account == "하센맘"
+                    else "#실물로그 #쇼핑쇼츠 #제품소개 #업로드테스트"
+                )
+                test_description = (
+                    "첫 번째 장면 네이버 클립 자동업로드 연결 테스트입니다.\n\n"
+                    f"{naver_test_hashtags}"
+                )[:1000]
+
+                with st.spinner(
+                    "네이버 로그인부터 영상·제목·설명 입력까지 같은 브라우저에서 진행 중입니다..."
+                ):
+                    print(
+                        "[Sprint192-9 Naver Clip Publish Profile]",
+                        {
+                            "account": naver_clip_upload_account,
+                            "profile_dir": naver_clip_profile_dir,
+                        },
+                        flush=True,
+                    )
+                    test_result = NaverClipUploadExecutor().prepare_upload(
+                        video_path=str(test_path),
+                        title=test_title,
+                        description=test_description,
+                        user_data_dir=naver_clip_profile_dir,
+                        headless=False,
+                        allow_manual_login=True,
+                        login_timeout_seconds=600,
+                        action_timeout_seconds=60,
+                        slow_mo=150,
+                        keep_browser_open=True,
+                    )
+
+                st.session_state[
+                    "sprint187_1_naver_clip_preview_result"
+                ] = test_result
+
+                if test_result.get("ok"):
+                    st.success(
+                        "네이버 클립 게시 직전 준비가 완료됐습니다. "
+                        "열린 브라우저에서 영상·설명·카테고리를 확인하세요. "
+                        "게시 버튼은 자동으로 누르지 않았습니다."
+                    )
+                    st.write("상태:", test_result.get("status", ""))
+                    st.write("최종 화면:", test_result.get("final_url", ""))
+                    print(
+                        "[Sprint187-10 Naver Clip Preview UI] SUCCESS",
+                        test_result.get("status", ""),
+                        flush=True,
+                    )
+                else:
+                    st.error(
+                        "네이버 클립 게시 직전 테스트에 실패했습니다: "
+                        f"{test_result.get('status')} / {test_result.get('errors')}"
+                    )
+                    failure_screenshot = str(test_result.get("failure_screenshot") or "")
+                    if failure_screenshot:
+                        st.caption(f"실패 화면: {failure_screenshot}")
+                    print(
+                        "[Sprint187-10 Naver Clip Preview UI] ERROR",
+                        test_result.get("status"),
+                        test_result.get("errors"),
+                        flush=True,
+                    )
+            except Exception as exc:
+                Path("full_error.log").write_text(
+                    traceback.format_exc(),
+                    encoding="utf-8",
+                )
+                st.error(
+                    "네이버 클립 게시 직전 테스트 실패: "
+                    f"{type(exc).__name__}: {exc}"
+                )
+
+
+
+    # Sprint192-22:
+    # ③ 실제 게시 영역을 st.fragment로 분리합니다.
+    # 이 버튼을 누르면 원클릭 전체 페이지가 아니라 이 fragment만 다시 실행되므로,
+    # 상단 Content Scan을 다시 거치지 않고 곧바로 네이버 실제 게시 코드에 진입합니다.
+    @st.fragment
+    def _sprint192_22_naver_publish_fragment() -> None:
+        st.warning(
+            "③ 실제 게시 버튼은 네이버 클립에 실제로 등록합니다. "
+            "테스트 영상/설명/카테고리를 확인한 뒤 실행하세요."
+        )
+
+        print(
+            "[Sprint192-22 Naver Clip Publish Fragment] RENDER",
+            flush=True,
+        )
+
+        if st.button(
+            "③ 첫 장면 네이버 클립 즉시 게시 테스트",
+            width="stretch",
+            key="sprint192_22_naver_clip_actual_publish",
+            type="primary",
+        ):
+            print(
+                "[Sprint192-22 Naver Clip Publish Fragment] BUTTON CLICKED",
+                flush=True,
+            )
+
+            if not uploaded_gemini_clips:
+                st.error("Gemini 영상 파일을 한 개 이상 선택해 주세요.")
+                print(
+                    "[Sprint192-22 Naver Clip Publish Fragment] VIDEO MISSING",
+                    flush=True,
+                )
+                return
+
+            first_clip = uploaded_gemini_clips[0]
+            test_root = Path("assets/naver_clip_test_uploads")
+            test_root.mkdir(parents=True, exist_ok=True)
+
+            original_name = str(
+                getattr(first_clip, "name", "scene_01.mp4")
+                or "scene_01.mp4"
+            )
+            suffix = Path(original_name).suffix.lower()
+            if suffix not in SUPPORTED_VIRAL_VIDEO_SUFFIXES:
+                suffix = ".mp4"
+
+            timestamp = datetime.now(
+                ZoneInfo("Asia/Seoul")
+            ).strftime("%Y%m%d_%H%M%S")
+            publish_path = (
+                test_root
+                / f"single_scene_publish_{timestamp}{suffix}"
+            )
+
+            try:
+                print(
+                    "[Sprint192-22 Naver Clip Publish Fragment] FILE PREPARE",
+                    str(publish_path),
+                    flush=True,
+                )
+                publish_path.write_bytes(first_clip.getbuffer())
+
+                publish_title = (
+                    f"[업로드 테스트] "
+                    f"{normalize_text(product_name, '쇼핑 쇼츠')}"
+                )[:100]
+
+                naver_publish_hashtags = (
+                    "#하센맘 #업로드테스트"
+                    if naver_clip_upload_account == "하센맘"
+                    else "#실물로그 #쇼핑쇼츠 #제품소개 #업로드테스트"
+                )
+                publish_description = (
+                    "첫 번째 장면 네이버 클립 즉시 게시 테스트 테스트입니다.\n\n"
+                    f"{naver_publish_hashtags}"
+                )[:1000]
+
+                print(
+                    "[Sprint192-22 Naver Clip Actual Publish Profile]",
+                    {
+                        "account": naver_clip_upload_account,
+                        "profile_dir": naver_clip_profile_dir,
+                    },
+                    flush=True,
+                )
+
+                with st.spinner(
+                    "네이버 클립에 영상·설명·카테고리를 입력하고 실제 게시 중입니다..."
+                ):
+                    publish_result = NaverClipUploadExecutor().prepare_upload(
+                        video_path=str(publish_path),
+                        title=publish_title,
+                        description=publish_description,
+                        user_data_dir=naver_clip_profile_dir,
+                        headless=False,
+                        allow_manual_login=True,
+                        login_timeout_seconds=600,
+                        action_timeout_seconds=60,
+                        slow_mo=150,
+                        keep_browser_open=True,
+                        category_primary="쇼핑",
+                        category_secondary="상품리뷰",
+                        perform_publish=True,
+                    )
+
+                st.session_state[
+                    "sprint192_22_naver_clip_actual_publish_result"
+                ] = publish_result
+
+                print(
+                    "[Sprint192-22 Naver Clip Publish Fragment] COMPLETE",
+                    {
+                        "ok": publish_result.get("ok"),
+                        "status": publish_result.get("status"),
+                    },
+                    flush=True,
+                )
+
+                if publish_result.get("ok"):
+                    st.success("네이버 클립 실제 게시가 완료됐습니다.")
+                    st.write(
+                        "상태:",
+                        publish_result.get("status", ""),
+                    )
+                    st.write(
+                        "최종 화면:",
+                        publish_result.get("final_url", ""),
+                    )
+                else:
+                    st.error(
+                        "네이버 클립 실제 게시에 실패했습니다: "
+                        f"{publish_result.get('status')} / "
+                        f"{publish_result.get('errors')}"
+                    )
+
+            except Exception as exc:
+                Path("full_error.log").write_text(
+                    traceback.format_exc(),
+                    encoding="utf-8",
+                )
+                print(
+                    "[Sprint192-22 Naver Clip Publish Fragment] ERROR",
+                    type(exc).__name__,
+                    str(exc),
+                    flush=True,
+                )
+                st.error(
+                    "네이버 클립 실제 게시 실패: "
+                    f"{type(exc).__name__}: {exc}"
+                )
+
+    _sprint192_22_naver_publish_fragment()
+
+    st.markdown("---")
+    st.markdown('<div class="exact-title">업로드 예약</div>', unsafe_allow_html=True)
+    st.caption(
+        "완성 영상 1개를 공통으로 선택한 뒤 YouTube · META(릴스) · TikTok · "
+        "네이버 클립 · Threads의 제목/본문/예약시간을 한 화면에서 설정합니다."
+    )
+
+    reservation_enabled = st.checkbox(
+        "선택 플랫폼 전체 예약 업로드 사용",
+        value=True,
+        key="sprint180_reservation_enabled",
+    )
+
+    # 공통 최종 영상: 아래 기존 프로젝트 영역에서도 같은 업로드 값을 그대로 사용합니다.
+    common_video_c1, common_video_c2 = st.columns([2, 1])
+    with common_video_c1:
+        common_upload_video = st.file_uploader(
+            "업로드할 최종 동영상 · 전체 플랫폼 공통",
+            type=["mp4"],
+            accept_multiple_files=False,
+            key="sprint182_2_uploaded_final_video",
+            help="대부분 동일 영상을 5개 플랫폼에 사용합니다. 아래 기존 프로젝트 선택으로도 대체할 수 있습니다.",
+        )
+    with common_video_c2:
+        st.info("플랫폼별 다른 영상이 필요한 경우 기존 프로젝트/완성영상 영역에서 변경할 수 있습니다.")
+
+    platform_order = ["youtube", "instagram", "tiktok", "naver_clip", "threads"]
+    platform_labels = {
+        "youtube": "YouTube Shorts",
+        "instagram": "META (릴스)",
+        "tiktok": "TikTok",
+        "naver_clip": "네이버 클립",
+        "threads": "Threads",
+    }
+
+    selected_platforms = st.multiselect(
+        "업로드 플랫폼 ON/OFF",
+        options=platform_order,
+        default=platform_order,
+        format_func=lambda value: platform_labels.get(value, value),
+        key="sprint180_platforms",
+    )
+
+    link_c1, link_c2 = st.columns([2, 1])
+    with link_c1:
+        infock_url = st.text_input(
+            "인포크링크 상품 URL",
+            placeholder="https://link.inpock.co.kr/...",
+            key="sprint180_infock_url",
+            help="본문과 고정댓글에 자동 삽입됩니다.",
+        )
+    with link_c2:
+        infock_image = st.file_uploader(
+            "인포크링크 이미지 (선택)",
+            type=["png", "jpg", "jpeg", "webp"],
+            accept_multiple_files=False,
+            key="sprint193_1_infock_image",
+        )
+
+    schedule_c1, schedule_c2, schedule_c3 = st.columns(3)
+    tomorrow = datetime.now(ZoneInfo("Asia/Seoul")) + timedelta(days=1)
+    with schedule_c1:
+        reservation_date = st.date_input(
+            "첫 게시 날짜",
+            value=tomorrow.date(),
+            key="sprint180_date",
+        )
+    with schedule_c2:
+        reservation_time = st.time_input(
+            "첫 게시 시간",
+            value=tomorrow.replace(hour=9, minute=0, second=0).time(),
+            key="sprint180_time",
+        )
+    with schedule_c3:
+        platform_interval_minutes = st.number_input(
+            "플랫폼 자동 간격(분)",
+            min_value=0,
+            max_value=1440,
+            value=60,
+            step=10,
+            key="sprint180_interval",
+        )
+
+    preview_start = datetime.combine(
+        reservation_date,
+        reservation_time,
+        tzinfo=ZoneInfo("Asia/Seoul"),
+    )
+
+    st.markdown("#### 플랫폼별 업로드 정보")
+    st.caption(
+        "각 플랫폼 행에서 채널·동영상·예약시간은 선택하고, 제목·설명·본문은 직접 입력합니다."
+    )
+
+    # 원클릭/기존 완성 영상 후보를 이 위치에서 먼저 준비합니다.
+    inline_video_candidates = []
+    inline_video_root = Path("exports/videos")
+    if inline_video_root.exists():
+        for pattern in ("*_final.mp4", "*_subtitled.mp4", "*.mp4"):
+            for candidate in inline_video_root.glob(pattern):
+                if candidate.is_file() and candidate.stat().st_size >= 1024:
+                    value = str(candidate)
+                    if value not in inline_video_candidates:
+                        inline_video_candidates.append(value)
+        inline_video_candidates.sort(
+            key=lambda value: Path(value).stat().st_mtime,
+            reverse=True,
+        )
+
+    platform_metadata = dict(platform_metadata or {})
+    platform_schedule_times = {}
+    platform_video_choices = {}
+
+    header_cols = st.columns([0.85, 1.0, 1.55, 1.25, 1.25, 2.0, 1.1, 1.15, 0.8, 0.9])
+    for _col, _label in zip(
+        header_cols,
+        ["구분", "채널명", "동영상", "제목", "설명", "본문(해시태그포함)", "고정댓글", "예약시간", "상태", "결과"],
+    ):
+        with _col:
+            st.markdown(f"**{_label}**")
+
+    for platform_index, platform_key in enumerate(platform_order):
+        if platform_key not in list(selected_platforms or []):
+            continue
+
+        platform_label = platform_labels[platform_key]
+        default_dt = preview_start + timedelta(
+            minutes=int(platform_interval_minutes or 0) * platform_index
+        )
+        status_key = f"sprint193_1_upload_status_{platform_key}"
+        result_key = f"sprint193_1_upload_result_{platform_key}"
+
+        row = st.columns([0.85, 1.0, 1.55, 1.25, 1.25, 2.0, 1.1, 1.15, 0.8, 0.9])
+
+        with row[0]:
+            st.markdown(f"**{platform_label}**")
+
+        with row[1]:
+            platform_channel = st.selectbox(
+                "채널명",
+                options=list(PUBLISH_ACCOUNT_PROFILES.keys()),
+                key=f"sprint193_3_{platform_key}_channel",
+                label_visibility="collapsed",
+            )
+
+        with row[2]:
+            video_options = ["공통 영상"] + inline_video_candidates + ["PC 직접 선택"]
+            platform_video_choice = st.selectbox(
+                "동영상",
+                options=video_options,
+                format_func=lambda value: (
+                    value if value in {"공통 영상", "PC 직접 선택"} else Path(value).name
+                ),
+                key=f"sprint193_3_{platform_key}_video_choice",
+                label_visibility="collapsed",
+            )
+            if platform_video_choice == "PC 직접 선택":
+                platform_video_upload = st.file_uploader(
+                    f"{platform_label} MP4",
+                    type=["mp4"],
+                    accept_multiple_files=False,
+                    key=f"sprint193_3_{platform_key}_video_upload",
+                    label_visibility="collapsed",
+                )
+            else:
+                platform_video_upload = None
+            platform_video_choices[platform_key] = {
+                "choice": platform_video_choice,
+                "upload": platform_video_upload,
+            }
+
+        with row[3]:
+            platform_title = st.text_input(
+                "제목",
+                key=f"sprint190_5_{platform_key}_title",
+                placeholder="제목 입력",
+                label_visibility="collapsed",
+            )
+
+        with row[4]:
+            platform_summary = st.text_input(
+                "설명",
+                key=f"sprint193_3_{platform_key}_summary",
+                placeholder="설명 입력",
+                label_visibility="collapsed",
+            )
+
+        with row[5]:
+            platform_body = st.text_area(
+                "본문",
+                height=78,
+                key=f"sprint190_5_{platform_key}_description",
+                placeholder="본문 / 해시태그 입력",
+                label_visibility="collapsed",
+            )
+
+        with row[6]:
+            platform_pinned_comment = st.text_area(
+                "고정댓글",
+                height=78,
+                key=f"sprint193_1_{platform_key}_pinned_comment",
+                placeholder="고정댓글",
+                label_visibility="collapsed",
+            )
+
+        with row[7]:
+            platform_schedule_time = st.time_input(
+                "예약시간",
+                value=default_dt.time().replace(second=0, microsecond=0),
+                key=f"sprint193_1_{platform_key}_schedule_time",
+                label_visibility="collapsed",
+            )
+
+        with row[8]:
+            st.write(str(st.session_state.get(status_key) or "대기"))
+
+        with row[9]:
+            _result = str(st.session_state.get(result_key) or "")
+            st.write(_result if _result else "-")
+
+        platform_metadata[platform_key] = {
+            "title": str(platform_title or "").strip(),
+            "summary": str(platform_summary or "").strip(),
+            "description": str(platform_body or "").strip(),
+            "body": str(platform_body or "").strip(),
+            "pinned_comment": str(platform_pinned_comment or "").strip(),
+            "channel": str(platform_channel or "").strip(),
+        }
+        platform_schedule_times[platform_key] = datetime.combine(
+            reservation_date,
+            platform_schedule_time,
+            tzinfo=ZoneInfo("Asia/Seoul"),
+        )
+
+        st.markdown("---")
+
     print(
-        "[Sprint147-5 BUTTON CLICKED] 대본 기준 이미지 만들기",
+        "[Sprint193-3 Platform Metadata UI]",
+        {
+            key: {
+                "title_chars": len(str(value.get("title") or "")),
+                "description_chars": len(str(value.get("description") or "")),
+            }
+            for key, value in dict(platform_metadata or {}).items()
+        },
+        flush=True,
+    )
+
+    preview_rows = []
+    for platform_key in list(selected_platforms or []):
+        scheduled_dt = platform_schedule_times.get(
+            platform_key,
+            preview_start,
+        )
+        status_key = f"sprint193_1_upload_status_{platform_key}"
+        result_key = f"sprint193_1_upload_result_{platform_key}"
+        preview_rows.append(
+            {
+                "구분": platform_labels.get(platform_key, platform_key),
+                "예약시간": scheduled_dt.strftime("%Y-%m-%d %H:%M"),
+                "상태": str(st.session_state.get(status_key) or "대기"),
+                "결과": str(st.session_state.get(result_key) or ""),
+            }
+        )
+
+    st.markdown("#### 예약 현황")
+    if preview_rows:
+        st.dataframe(
+            preview_rows,
+            width="stretch",
+            hide_index=True,
+        )
+    else:
+        st.warning("업로드할 플랫폼을 선택해 주세요.")
+
+    if "naver_clip" in list(selected_platforms or []):
+        naver_preview_time = platform_schedule_times.get(
+            "naver_clip",
+            preview_start,
+        )
+        st.info(
+            "네이버 클립 게시 방식: 등록예약 고정 · "
+            f"{naver_preview_time.strftime('%Y-%m-%d %H:%M')}"
+        )
+
+    st.markdown("---")
+    st.subheader("네이버 클립 등록예약 테스트")
+    st.caption(
+        "테스트용 MP4를 직접 넣어 네이버 자체 등록예약만 실행합니다. "
+        "기존 프로젝트 불러오기는 사용하지 않습니다."
+    )
+
+    naver_manual_test_video = st.file_uploader(
+        "네이버 테스트용 MP4",
+        type=["mp4", "mov", "m4v", "webm"],
+        key="sprint192_32_naver_manual_test_video",
+    )
+
+    if st.button(
+        "네이버 클립 등록예약 테스트 실행",
+        type="primary",
+        width="stretch",
+        key="sprint192_32_naver_manual_schedule_run",
+    ):
+        if naver_manual_test_video is None:
+            st.error("테스트할 MP4를 직접 선택해 주세요.")
+        elif "naver_clip" not in list(selected_platforms or []):
+            st.error("예약 플랫폼에서 네이버 클립을 선택해 주세요.")
+        else:
+            try:
+                test_root = Path("assets/naver_clip_test_uploads")
+                test_root.mkdir(parents=True, exist_ok=True)
+
+                original_name = str(
+                    getattr(naver_manual_test_video, "name", "naver_test.mp4")
+                    or "naver_test.mp4"
+                )
+                suffix = Path(original_name).suffix.lower()
+                if suffix not in {".mp4", ".mov", ".m4v", ".webm"}:
+                    suffix = ".mp4"
+
+                timestamp = datetime.now(
+                    ZoneInfo("Asia/Seoul")
+                ).strftime("%Y%m%d_%H%M%S")
+                manual_video_path = (
+                    test_root / f"oneclick_manual_schedule_{timestamp}{suffix}"
+                )
+                manual_video_path.write_bytes(
+                    naver_manual_test_video.getbuffer()
+                )
+
+                selected_platform_list = list(selected_platforms or [])
+                naver_index = selected_platform_list.index("naver_clip")
+                manual_schedule_at = platform_schedule_times.get(
+                    "naver_clip",
+                    datetime.combine(
+                        reservation_date,
+                        reservation_time,
+                        tzinfo=ZoneInfo("Asia/Seoul"),
+                    ) + timedelta(
+                        minutes=int(platform_interval_minutes or 0) * naver_index
+                    ),
+                )
+                scheduled_iso = manual_schedule_at.isoformat(timespec="minutes")
+
+                naver_override = dict(
+                    (platform_metadata or {}).get("naver_clip") or {}
+                )
+                manual_title = (
+                    str(naver_override.get("title") or "").strip()
+                    or str(product_name or "").strip()
+                    or Path(original_name).stem
+                )
+                manual_description = str(
+                    naver_override.get("description") or ""
+                ).strip()
+
+                print(
+                    "[Sprint192-32 Naver Manual Schedule] START",
+                    {
+                        "account": naver_clip_upload_account,
+                        "profile_dir": naver_clip_profile_dir,
+                        "video_path": str(manual_video_path),
+                        "scheduled_publish_at": scheduled_iso,
+                    },
+                    flush=True,
+                )
+
+                with st.spinner(
+                    "네이버 클립 영상 업로드 → 쇼핑/상품리뷰 → 등록예약 → 날짜/시간 → 등록 중입니다..."
+                ):
+                    manual_result = NaverClipUploadExecutor().prepare_upload(
+                        video_path=str(manual_video_path),
+                        title=manual_title,
+                        description=manual_description,
+                        user_data_dir=naver_clip_profile_dir,
+                        headless=False,
+                        allow_manual_login=True,
+                        login_timeout_seconds=600,
+                        action_timeout_seconds=60,
+                        slow_mo=150,
+                        keep_browser_open=True,
+                        category_primary="쇼핑",
+                        category_secondary="상품리뷰",
+                        perform_publish=True,
+                        scheduled_publish_at=scheduled_iso,
+                    )
+
+                st.session_state[
+                    "sprint192_32_naver_manual_schedule_result"
+                ] = manual_result
+
+                print(
+                    "[Sprint192-32 Naver Manual Schedule] COMPLETE",
+                    {
+                        "ok": manual_result.get("ok"),
+                        "status": manual_result.get("status"),
+                        "scheduled_publish_at": manual_result.get(
+                            "scheduled_publish_at"
+                        ),
+                        "final_url": manual_result.get("final_url"),
+                    },
+                    flush=True,
+                )
+
+                if manual_result.get("ok"):
+                    st.success(
+                        "네이버 클립 등록예약 테스트가 완료됐습니다."
+                    )
+                    st.write(
+                        "예약시간:",
+                        manual_result.get(
+                            "scheduled_publish_at",
+                            scheduled_iso,
+                        ),
+                    )
+                    st.write("상태:", manual_result.get("status", ""))
+                else:
+                    st.error(
+                        "네이버 클립 등록예약 테스트 실패: "
+                        f"{manual_result.get('status')} / "
+                        f"{manual_result.get('errors')}"
+                    )
+                    screenshot = str(
+                        manual_result.get("failure_screenshot") or ""
+                    )
+                    if screenshot:
+                        st.caption(f"실패 화면: {screenshot}")
+
+            except Exception as exc:
+                Path("full_error.log").write_text(
+                    traceback.format_exc(),
+                    encoding="utf-8",
+                )
+                print(
+                    "[Sprint192-32 Naver Manual Schedule] ERROR",
+                    type(exc).__name__,
+                    str(exc),
+                    flush=True,
+                )
+                st.error(
+                    "네이버 클립 등록예약 테스트 실행 실패: "
+                    f"{type(exc).__name__}: {exc}"
+                )
+
+    st.markdown("---")
+    st.subheader("기존 프로젝트 또는 완성 영상 불러오기")
+    st.caption(
+        "프로젝트를 선택하면 영상·제목·본문·고정댓글·해시태그를 함께 복원합니다. "
+        "완성 MP4만 선택하거나 PC에서 직접 업로드할 수도 있습니다."
+    )
+
+    content_library = ContentLibrary()
+    library_c1, library_c2 = st.columns([2, 1])
+    with library_c1:
+        library_query = st.text_input(
+            "콘텐츠 검색",
+            placeholder="상품명, 프로젝트 번호, 제목 검색",
+            key="sprint180_4_library_query",
+        )
+    with library_c2:
+        library_status = st.selectbox(
+            "상태 필터",
+            options=["all", "unscheduled", "scheduled", "published", "failed"],
+            format_func=lambda value: {
+                "all": "전체",
+                "unscheduled": "예약 안 함",
+                "scheduled": "예약 완료",
+                "published": "게시 완료",
+                "failed": "실패/재시도",
+            }[value],
+            key="sprint180_4_library_status",
+        )
+
+    all_project_candidates = content_library.list(
+        query=library_query,
+        status=library_status,
+        limit=5000,
+    )
+
+    status_labels = {
+        "unscheduled": "⚪ 예약 안 함",
+        "scheduled": "🟡 예약 완료",
+        "published": "🟢 게시 완료",
+        "failed": "🔴 실패/재시도",
+    }
+
+    page_size = 30
+    total_count = len(all_project_candidates)
+    total_pages = max(1, (total_count + page_size - 1) // page_size)
+    page_key = "sprint180_6_library_page"
+    current_page = int(st.session_state.get(page_key, 1) or 1)
+    current_page = max(1, min(current_page, total_pages))
+    st.session_state[page_key] = current_page
+
+    st.caption(f"검색 결과: {total_count}개 · 한 페이지에 {page_size}개 표시")
+    nav_c1, nav_c2, nav_c3 = st.columns([1, 2, 1])
+    with nav_c1:
+        if st.button("◀ 이전", disabled=current_page <= 1, key="sprint180_6_prev"):
+            st.session_state[page_key] = current_page - 1
+            st.rerun()
+    with nav_c2:
+        requested_page = st.number_input(
+            "페이지",
+            min_value=1,
+            max_value=total_pages,
+            value=current_page,
+            step=1,
+            key="sprint180_6_page_input",
+        )
+        if int(requested_page) != current_page:
+            st.session_state[page_key] = int(requested_page)
+            st.rerun()
+        st.caption(f"{current_page} / {total_pages}")
+    with nav_c3:
+        if st.button("다음 ▶", disabled=current_page >= total_pages, key="sprint180_6_next"):
+            st.session_state[page_key] = current_page + 1
+            st.rerun()
+
+    page_start = (current_page - 1) * page_size
+    project_candidates = all_project_candidates[page_start:page_start + page_size]
+    project_by_key = {item["key"]: item for item in project_candidates}
+
+    if project_candidates:
+        for item in project_candidates:
+            metadata = dict(item.get("metadata") or {})
+            project_label = f"project_{item.get('project_id')}"
+            product_label = metadata.get("product_name") or "상품명 없음"
+            video_name = Path(str(item.get("video_path") or "")).name or "영상 없음"
+            status_label = status_labels.get(item.get("library_status"), str(item.get("library_status") or ""))
+            with st.container(border=True):
+                row_c1, row_c2, row_c3 = st.columns([3, 2, 1])
+                with row_c1:
+                    st.markdown(f"**{project_label} · {product_label}**")
+                    st.caption(video_name)
+                with row_c2:
+                    st.write(status_label)
+                    st.caption(
+                        f"예약 {int(item.get('reservation_count') or 0)} · "
+                        f"게시 {int(item.get('published_count') or 0)}"
+                    )
+                with row_c3:
+                    if st.button("불러오기", key=f"sprint180_6_load_{item['key']}"):
+                        st.session_state["sprint180_6_selected_project_key"] = item["key"]
+                        st.rerun()
+    else:
+        st.warning("검색된 프로젝트가 없습니다. exports/videos와 assets/products 경로를 확인해 주세요.")
+        st.caption(f"검색 기준 루트: {content_library.loader.project_root}")
+
+    selected_default = str(st.session_state.get("sprint180_6_selected_project_key") or "")
+    selected_options = [""] + list(project_by_key.keys())
+    selected_index = selected_options.index(selected_default) if selected_default in selected_options else 0
+    selected_project_key = st.selectbox(
+        "기존 프로젝트 불러오기",
+        options=selected_options,
+        index=selected_index,
+        format_func=lambda value: "선택 안 함" if not value else (
+            f"{status_labels.get(project_by_key[value].get('library_status'), '')} · "
+            f"{project_by_key[value].get('label', value)}"
+        ),
+        key="sprint180_4_existing_project",
+        help="콘텐츠 라이브러리에서 프로젝트와 게시 상태를 함께 검색합니다.",
+    )
+    selected_project = project_by_key.get(selected_project_key) or {}
+    restored = dict(selected_project.get("metadata") or {})
+    if selected_project:
+        info_c1, info_c2, info_c3 = st.columns(3)
+        info_c1.metric("프로젝트", str(selected_project.get("project_id") or "-"))
+        info_c2.metric("영상", Path(str(selected_project.get("video_path") or "")).name or "-")
+        info_c3.metric("상태", status_labels.get(selected_project.get("library_status"), "영상 없음"))
+        published_urls = list(selected_project.get("published_urls") or [])
+        if published_urls:
+            st.caption("게시 URL")
+            for published_url in published_urls:
+                st.code(published_url, language=None)
+        if selected_project.get("last_error"):
+            st.error(f"최근 게시 오류: {selected_project.get('last_error')}")
+        if selected_project.get("thumbnail_path") and Path(str(selected_project["thumbnail_path"])).is_file():
+            st.image(str(selected_project["thumbnail_path"]), width=180)
+
+    # Sprint182-6: 메타데이터 생성 버튼을 입력 위젯보다 먼저 실행합니다.
+    # Streamlit은 이미 생성된 위젯의 session_state 값을 같은 실행에서 바꾸지 못하므로,
+    # 영상 선택 → 생성 버튼 → session_state 저장 → 입력 위젯 렌더 순서를 고정합니다.
+    restored_product_key = f"sprint180_4_restored_product_{selected_project_key}"
+    restored_title_key = f"sprint180_4_restored_title_{selected_project_key}"
+    restored_description_key = f"sprint180_4_restored_description_{selected_project_key}"
+    restored_comment_key = f"sprint180_4_restored_comment_{selected_project_key}"
+    restored_hashtags_key = f"sprint180_4_restored_hashtags_{selected_project_key}"
+
+    # 프로젝트가 바뀌었을 때만 저장된 메타데이터를 초기값으로 복원합니다.
+    metadata_context_key = "sprint182_6_metadata_context"
+    metadata_context = str(selected_project_key or "pc_upload")
+    if st.session_state.get(metadata_context_key) != metadata_context:
+        st.session_state[metadata_context_key] = metadata_context
+        st.session_state[restored_product_key] = str(
+            restored.get("product_name") or product_name or ""
+        )
+        st.session_state[restored_title_key] = str(restored.get("title") or "")
+        st.session_state[restored_description_key] = str(
+            restored.get("description") or restored.get("body") or ""
+        )
+        st.session_state[restored_comment_key] = str(
+            restored.get("pinned_comment") or restored.get("comment") or ""
+        )
+        restored_tags = restored.get("hashtags") or restored.get("tags") or []
+        if isinstance(restored_tags, str):
+            restored_tags = [
+                value.lstrip("#")
+                for value in re.split(r"[\s,]+", restored_tags)
+                if value.strip().lstrip("#")
+            ]
+        st.session_state[restored_hashtags_key] = " ".join(
+            value if str(value).startswith("#") else f"#{value}"
+            for value in list(restored_tags or [])
+            if str(value).strip()
+        )
+
+    existing_video_candidates = []
+    existing_video_root = Path("exports/videos")
+    if existing_video_root.exists():
+        for pattern in ("*_final.mp4", "*_subtitled.mp4", "*.mp4"):
+            for candidate in existing_video_root.glob(pattern):
+                if candidate.is_file() and candidate.stat().st_size >= 1024:
+                    value = str(candidate)
+                    if value not in existing_video_candidates:
+                        existing_video_candidates.append(value)
+        existing_video_candidates.sort(
+            key=lambda value: Path(value).stat().st_mtime,
+            reverse=True,
+        )
+
+    load_c1, load_c2 = st.columns(2)
+    with load_c1:
+        selected_existing_video = st.selectbox(
+            "기존 완성 영상 선택",
+            options=[""] + existing_video_candidates,
+            format_func=lambda value: "선택 안 함" if not value else Path(value).name,
+            key="sprint180_2_existing_final_video",
+            help="exports/videos 폴더에 저장된 최신 MP4가 위쪽에 표시됩니다.",
+        )
+    with load_c2:
+        uploaded_completed_video = common_upload_video
+        if uploaded_completed_video is not None:
+            st.success(
+                "상단 '업로드할 최종 동영상'을 공통 영상으로 사용합니다: "
+                f"{getattr(uploaded_completed_video, 'name', 'completed.mp4')}"
+            )
+        else:
+            st.caption("상단 업로드 예약 영역에서 공통 MP4를 선택할 수 있습니다.")
+
+    uploaded_session_path = str(
+        st.session_state.get("sprint182_2_uploaded_video_path") or ""
+    ).strip()
+    uploaded_session_name = str(
+        st.session_state.get("sprint182_2_uploaded_video_name") or ""
+    ).strip()
+
+    if uploaded_completed_video is not None:
+        upload_bytes = uploaded_completed_video.getvalue()
+        upload_signature = hashlib.sha256(upload_bytes).hexdigest()
+        previous_signature = str(
+            st.session_state.get("sprint182_2_uploaded_video_signature") or ""
+        )
+        if upload_signature != previous_signature or not Path(uploaded_session_path).is_file():
+            upload_root = Path("exports/scheduled_upload_inputs")
+            upload_root.mkdir(parents=True, exist_ok=True)
+            original_name = getattr(
+                uploaded_completed_video, "name", "completed.mp4"
+            ) or "completed.mp4"
+            stem = safe_file_name(Path(original_name).stem, fallback="completed")
+            timestamp = datetime.now(ZoneInfo("Asia/Seoul")).strftime("%Y%m%d_%H%M%S")
+            upload_target = upload_root / f"{timestamp}_{stem}.mp4"
+            upload_target.write_bytes(upload_bytes)
+            uploaded_session_path = str(upload_target)
+            uploaded_session_name = original_name
+            st.session_state["sprint182_2_uploaded_video_path"] = uploaded_session_path
+            st.session_state["sprint182_2_uploaded_video_name"] = uploaded_session_name
+            st.session_state["sprint182_2_uploaded_video_signature"] = upload_signature
+
+    if uploaded_session_path and Path(uploaded_session_path).is_file():
+        selected_info_c1, selected_info_c2 = st.columns([5, 1])
+        with selected_info_c1:
+            st.success(
+                f"선택 영상 유지 중: {uploaded_session_name or Path(uploaded_session_path).name}"
+            )
+            st.caption(uploaded_session_path)
+        with selected_info_c2:
+            if st.button(
+                "선택 해제",
+                key="sprint182_2_clear_uploaded_video",
+                use_container_width=True,
+            ):
+                st.session_state.pop("sprint182_2_uploaded_video_path", None)
+                st.session_state.pop("sprint182_2_uploaded_video_name", None)
+                st.session_state.pop("sprint182_2_uploaded_video_signature", None)
+                st.session_state.pop("sprint182_2_uploaded_final_video", None)
+                st.rerun()
+
+    selected_video_for_metadata = str(
+        uploaded_session_path
+        or selected_existing_video
+        or selected_project.get("video_path")
+        or ""
+    ).strip()
+
+    if st.button(
+        "📦 저장된 게시 메타데이터 불러오기",
+        use_container_width=True,
+        key="sprint183_2_restore_metadata",
+        help="저장된 프로젝트 게시 메타데이터를 우선 복원하고, 없는 항목만 대본과 영상 정보로 보완합니다.",
+    ):
+        selected_project_id = str(selected_project.get("project_id") or "").strip()
+        project_metadata = _restore_project_publisher_metadata(
+            selected_project_id,
+            selected_metadata=restored,
+        )
+
+        current_product_name = str(
+            project_metadata.get("product_name")
+            or st.session_state.get(restored_product_key)
+            or restored.get("product_name")
+            or product_name
+            or ""
+        ).strip()
+
+        filename_stem = safe_file_name(
+            Path(selected_video_for_metadata).stem if selected_video_for_metadata else "",
+            fallback="",
+        )
+        filename_stem = re.sub(
+            r"(?:_final|_subtitled|_merged|_image_motion|_shorts)+$",
+            "",
+            filename_stem,
+            flags=re.IGNORECASE,
+        ).strip("_")
+        if filename_stem.isdigit() or re.fullmatch(
+            r"(?:project_)?\d+", filename_stem, re.IGNORECASE
+        ):
+            filename_stem = ""
+
+        product_basis = current_product_name or filename_stem
+        script_basis = str(
+            project_metadata.get("locked_script")
+            or restored.get("locked_script")
+            or restored.get("best_script")
+            or locked_script
+            or ""
+        ).strip()
+        hook_basis = str(
+            project_metadata.get("hook_text")
+            or restored.get("hook_text")
+            or restored.get("best_hook")
+            or hook_text
+            or ""
+        ).strip()
+        cta_basis = str(
+            project_metadata.get("cta_text")
+            or restored.get("cta_text")
+            or cta_text
+            or ""
+        ).strip()
+        link_basis = str(
+            infock_url
+            or project_metadata.get("infock_url")
+            or restored.get("infock_url")
+            or ""
+        ).strip()
+
+        stored_title = str(project_metadata.get("title") or "").strip()
+        if stored_title:
+            auto_title = stored_title
+        elif hook_basis:
+            auto_title = next(
+                (line.strip() for line in hook_basis.splitlines() if line.strip()),
+                "",
+            )
+        elif product_basis and int(monthly_purchase_count or 0) > 0:
+            auto_title = (
+                f"{product_basis}, 최근 한 달 {int(monthly_purchase_count):,}명 이상 구매한 이유"
+            )
+        elif product_basis:
+            auto_title = f"{product_basis}, 왜 이렇게 인기일까요?"
+        elif script_basis:
+            auto_title = next(
+                (line.strip() for line in script_basis.splitlines() if line.strip()),
+                "이 제품이 인기 있는 이유",
+            )
+        else:
+            auto_title = "써보면 이유를 알게 되는 생활 꿀템"
+        auto_title = re.sub(r"\s+", " ", auto_title).strip()[:95]
+
+        stored_description = str(project_metadata.get("description") or "").strip()
+        stored_comment = str(project_metadata.get("pinned_comment") or "").strip()
+        stored_tags = list(project_metadata.get("hashtags") or [])
+
+        built = ScheduledMetadataBuilder.build(
+            product_name=product_basis or auto_title,
+            hook_text=hook_basis or auto_title,
+            locked_script=script_basis,
+            cta_text=cta_basis,
+            infock_url=link_basis,
+            hashtags=stored_tags,
+            title_override=auto_title,
+            description_override=stored_description,
+            pinned_comment_override=stored_comment,
+        )
+
+        generated_title = str(built.get("title") or auto_title).strip()
+        generated_description = str(
+            built.get("description")
+            or built.get("body")
+            or built.get("caption")
+            or stored_description
+            or ""
+        ).strip()
+        generated_comment = str(
+            built.get("pinned_comment")
+            or built.get("comment")
+            or built.get("first_comment")
+            or stored_comment
+            or ""
+        ).strip()
+        generated_tags = built.get("hashtags") or built.get("tags") or stored_tags
+        if isinstance(generated_tags, str):
+            generated_tags = [
+                value.lstrip("#")
+                for value in re.split(r"[\s,]+", generated_tags)
+                if value.strip().lstrip("#")
+            ]
+        generated_hashtag_text = " ".join(
+            value if str(value).startswith("#") else f"#{value}"
+            for value in list(generated_tags or [])
+            if str(value).strip()
+        )
+
+        if not generated_description:
+            description_lines = [generated_title]
+            if script_basis:
+                script_lines = [
+                    line.strip()
+                    for line in script_basis.splitlines()
+                    if line.strip()
+                ]
+                description_lines.extend(script_lines[:6])
+            description_lines.append("실제 후기를 바탕으로 제작한 영상입니다.")
+            if link_basis:
+                description_lines.extend(["", "👇 구매 링크", link_basis])
+            generated_description = "\n".join(description_lines)
+
+        if not generated_comment:
+            generated_comment = "궁금하신 제품 정보는 아래 링크에서 확인해 주세요."
+            if link_basis:
+                generated_comment += f"\n\n👇 구매 링크\n{link_basis}"
+
+        if not generated_hashtag_text:
+            raw_words = re.findall(
+                r"[0-9A-Za-z가-힣]+", product_basis or generated_title
+            )
+            stop_words = {
+                "최근", "한", "달", "이상", "구매한", "이유",
+                "왜", "이렇게", "인기일까요",
+            }
+            tags = []
+            for word in raw_words:
+                if len(word) < 2 or word in stop_words or word in tags:
+                    continue
+                tags.append(word)
+                if len(tags) >= 4:
+                    break
+            for fallback_tag in ("살림템", "생활꿀템", "쇼핑쇼츠"):
+                if fallback_tag not in tags:
+                    tags.append(fallback_tag)
+            generated_hashtag_text = " ".join(
+                f"#{tag}" for tag in tags[:7]
+            )
+
+        if product_basis:
+            st.session_state[restored_product_key] = product_basis
+        st.session_state[restored_title_key] = generated_title
+        st.session_state[restored_description_key] = generated_description
+        st.session_state[restored_comment_key] = generated_comment
+        st.session_state[restored_hashtags_key] = generated_hashtag_text
+        st.session_state["sprint183_2_metadata_loaded"] = True
+
+        print(
+            "[Sprint183-2 Publisher Metadata Restore] LOADED:",
+            {
+                "title": generated_title,
+                "description_chars": len(generated_description),
+                "comment_chars": len(generated_comment),
+                "hashtags": generated_hashtag_text,
+                "video": selected_video_for_metadata,
+            },
+            flush=True,
+        )
+
+    if st.session_state.get("sprint183_2_metadata_loaded"):
+        st.success("영상 제목·본문·고정댓글·해시태그를 자동으로 채웠습니다.")
+
+    # 생성 버튼 이후에 위젯을 만들기 때문에 같은 실행에서 채운 값이 즉시 표시됩니다.
+    restored_product_name = st.text_input(
+        "불러온 상품명",
+        key=restored_product_key,
+    )
+    restored_title = st.text_input(
+        "영상 제목",
+        key=restored_title_key,
+    )
+    meta_c1, meta_c2 = st.columns(2)
+    with meta_c1:
+        restored_description = st.text_area(
+            "본문",
+            height=150,
+            key=restored_description_key,
+        )
+    with meta_c2:
+        restored_pinned_comment = st.text_area(
+            "고정 댓글",
+            height=150,
+            key=restored_comment_key,
+        )
+    restored_hashtags = st.text_input(
+        "해시태그",
+        key=restored_hashtags_key,
+    )
+
+    existing_schedule_clicked = st.button(
+        "선택 플랫폼 전체 예약 업로드",
+        use_container_width=True,
+        key="sprint182_2_schedule_existing_video",
+    )
+
+    if existing_schedule_clicked:
+        existing_errors = []
+        if not reservation_enabled:
+            existing_errors.append("예약 업로드를 켜주세요.")
+        if not selected_platforms:
+            existing_errors.append("예약할 플랫폼을 한 개 이상 선택해 주세요.")
+
+        selected_video_path = str(
+            uploaded_session_path
+            or selected_existing_video
+            or selected_project.get("video_path")
+            or ""
+        ).strip()
+
+        if not selected_video_path or not Path(selected_video_path).is_file():
+            existing_errors.append("예약할 완성 MP4를 선택하거나 업로드해 주세요.")
+
+        if existing_errors:
+            for error in existing_errors:
+                st.error(error)
+        else:
+            try:
+                parsed_hashtags = [
+                    value.lstrip("#")
+                    for value in re.split(r"[\s,]+", str(restored_hashtags or ""))
+                    if value.strip().lstrip("#")
+                ]
+                metadata = ScheduledMetadataBuilder.build(
+                    product_name=str(restored_product_name or product_name or restored_title or Path(selected_video_path).stem).strip(),
+                    hook_text=str(restored.get("hook_text") or hook_text or "").strip(),
+                    locked_script=str(restored.get("locked_script") or locked_script or "").strip(),
+                    cta_text=str(restored.get("cta_text") or cta_text or "").strip(),
+                    infock_url=str(infock_url or restored.get("infock_url") or "").strip(),
+                    hashtags=parsed_hashtags,
+                    title_override=str(restored_title or "").strip(),
+                    description_override=str(restored_description or "").strip(),
+                    pinned_comment_override=str(restored_pinned_comment or "").strip(),
+                )
+                metadata["youtube_privacy_status"] = youtube_privacy_status
+                metadata["source"] = "existing_completed_video"
+                metadata["source_video_path"] = selected_video_path
+
+                local_start = datetime.combine(
+                    reservation_date,
+                    reservation_time,
+                    tzinfo=ZoneInfo("Asia/Seoul"),
+                )
+                queue = ReservationQueue()
+                created_items = []
+                naver_native_result = None
+                project_key = str(
+                    selected_project.get("project_id")
+                    or f"existing_{safe_file_name(Path(selected_video_path).stem)}"
+                )
+
+                for platform_index, platform in enumerate(list(selected_platforms or [])):
+                    scheduled_at = platform_schedule_times.get(
+                        str(platform),
+                        local_start + timedelta(
+                            minutes=int(platform_interval_minutes or 0) * platform_index
+                        ),
+                    )
+                    platform_key = str(platform)
+                    platform_payload = dict(metadata)
+                    platform_override = dict(
+                        (platform_metadata or {}).get(platform_key) or {}
+                    )
+                    platform_title = str(
+                        platform_override.get("title") or ""
+                    ).strip()
+                    platform_description = str(
+                        platform_override.get("description") or ""
+                    ).strip()
+
+                    if platform_title:
+                        platform_payload["title"] = platform_title
+                        platform_payload[f"{platform_key}_title"] = platform_title
+                    if platform_description:
+                        platform_payload["description"] = platform_description
+                        platform_payload["caption"] = platform_description
+                        platform_payload[f"{platform_key}_description"] = platform_description
+
+                    platform_payload["platform"] = platform_key
+
+                    # Sprint192-31:
+                    # 네이버 클립은 ReservationQueue에 넣지 않고 지금 바로
+                    # 네이버 자체 '등록예약'으로 저장합니다.
+                    if platform_key == "naver_clip":
+                        naver_title = (
+                            platform_title
+                            or str(platform_payload.get("title") or "").strip()
+                            or str(restored_product_name or product_name or "").strip()
+                            or Path(selected_video_path).stem
+                        )
+                        naver_description = (
+                            platform_description
+                            or str(platform_payload.get("description") or "").strip()
+                            or str(restored_description or "").strip()
+                        )
+                        scheduled_iso = scheduled_at.isoformat(timespec="minutes")
+
+                        print(
+                            "[Sprint192-31 Naver Native Schedule] START",
+                            {
+                                "account": naver_clip_upload_account,
+                                "profile_dir": naver_clip_profile_dir,
+                                "video_path": selected_video_path,
+                                "scheduled_publish_at": scheduled_iso,
+                            },
+                            flush=True,
+                        )
+
+                        with st.spinner(
+                            "네이버 클립 → 쇼핑/상품리뷰 → 등록예약 → 날짜/시간 → 등록 중입니다..."
+                        ):
+                            naver_native_result = NaverClipUploadExecutor().prepare_upload(
+                                video_path=selected_video_path,
+                                title=naver_title,
+                                description=naver_description,
+                                user_data_dir=naver_clip_profile_dir,
+                                headless=False,
+                                allow_manual_login=True,
+                                login_timeout_seconds=600,
+                                action_timeout_seconds=60,
+                                slow_mo=150,
+                                keep_browser_open=True,
+                                category_primary="쇼핑",
+                                category_secondary="상품리뷰",
+                                perform_publish=True,
+                                scheduled_publish_at=scheduled_iso,
+                            )
+
+                        print(
+                            "[Sprint192-31 Naver Native Schedule] COMPLETE",
+                            {
+                                "ok": naver_native_result.get("ok"),
+                                "status": naver_native_result.get("status"),
+                                "scheduled_publish_at": naver_native_result.get(
+                                    "scheduled_publish_at"
+                                ),
+                                "final_url": naver_native_result.get("final_url"),
+                            },
+                            flush=True,
+                        )
+                        continue
+
+                    created_items.append(
+                        queue.enqueue(
+                            project_id=project_key,
+                            platform=platform_key,
+                            scheduled_at=scheduled_at,
+                            video_path=selected_video_path,
+                            payload=platform_payload,
+                        )
+                    )
+
+                if created_items:
+                    st.success(
+                        f"YouTube/Instagram/TikTok/Threads 예약 큐 등록 완료: {len(created_items)}건"
+                    )
+                    for _platform in list(selected_platforms or []):
+                        if _platform != "naver_clip":
+                            st.session_state[
+                                f"sprint193_1_upload_status_{_platform}"
+                            ] = "예약완료"
+                if "naver_clip" in list(selected_platforms or []):
+                    if naver_native_result and naver_native_result.get("ok"):
+                        st.session_state[
+                            "sprint193_1_upload_status_naver_clip"
+                        ] = "예약완료"
+                        st.success(
+                            "네이버 클립 자체 등록예약 완료: "
+                            f"{naver_native_result.get('scheduled_publish_at', '')}"
+                        )
+                    else:
+                        st.error(
+                            "네이버 클립 자체 등록예약 실패: "
+                            f"{(naver_native_result or {}).get('status')} / "
+                            f"{(naver_native_result or {}).get('errors')}"
+                        )
+                st.video(selected_video_path)
+                reservation_rows = []
+                platform_names = {
+                    "youtube": "YouTube Shorts",
+                    "instagram": "Instagram Reels",
+                    "tiktok": "TikTok",
+                    "naver_clip": "네이버 클립",
+                }
+                for item in created_items:
+                    utc_value = datetime.fromisoformat(str(item.get("scheduled_at_utc") or ""))
+                    local_value = utc_value.astimezone(ZoneInfo("Asia/Seoul"))
+                    reservation_rows.append({
+                        "플랫폼": platform_names.get(item.get("platform"), item.get("platform")),
+                        "예약시간": local_value.strftime("%Y-%m-%d %H:%M"),
+                        "상태": item.get("status"),
+                        "영상": Path(str(item.get("video_path") or "")).name,
+                    })
+                if naver_native_result:
+                    naver_scheduled = str(
+                        naver_native_result.get("scheduled_publish_at") or ""
+                    )
+                    try:
+                        naver_local = datetime.fromisoformat(naver_scheduled)
+                        naver_time_text = naver_local.astimezone(
+                            ZoneInfo("Asia/Seoul")
+                        ).strftime("%Y-%m-%d %H:%M")
+                    except Exception:
+                        naver_time_text = naver_scheduled
+                    reservation_rows.append({
+                        "플랫폼": "네이버 클립",
+                        "예약시간": naver_time_text,
+                        "상태": (
+                            "네이버 등록예약 완료"
+                            if naver_native_result.get("ok")
+                            else str(naver_native_result.get("status") or "실패")
+                        ),
+                        "영상": Path(selected_video_path).name,
+                    })
+                st.dataframe(reservation_rows, use_container_width=True, hide_index=True)
+                print(
+                    "[Sprint180-4 Project Reservation] SCHEDULED:",
+                    len(created_items),
+                    selected_video_path,
+                    flush=True,
+                )
+            except Exception as exc:
+                st.error(f"기존 영상 예약 등록 실패: {type(exc).__name__}: {exc}")
+
+    with st.expander("현재 예약 목록", expanded=True):
+        try:
+            queue_items = ReservationQueue().list(limit=100)
+            if not queue_items:
+                st.caption("등록된 예약이 없습니다.")
+            else:
+                platform_names = {
+                    "youtube": "YouTube Shorts",
+                    "instagram": "Instagram Reels",
+                    "tiktok": "TikTok",
+                    "naver_clip": "네이버 클립",
+                }
+                queue_rows = []
+                for item in queue_items:
+                    utc_value = datetime.fromisoformat(str(item.get("scheduled_at_utc") or ""))
+                    local_value = utc_value.astimezone(ZoneInfo("Asia/Seoul"))
+                    queue_rows.append({
+                        "ID": str(item.get("id") or "")[:8],
+                        "플랫폼": platform_names.get(item.get("platform"), item.get("platform")),
+                        "예약시간": local_value.strftime("%Y-%m-%d %H:%M"),
+                        "상태": item.get("status"),
+                        "영상": Path(str(item.get("video_path") or "")).name,
+                        "오류": str(item.get("last_error") or "")[:120],
+                    })
+                st.dataframe(queue_rows, use_container_width=True, hide_index=True)
+        except Exception as exc:
+            st.warning(f"예약 목록을 불러오지 못했습니다: {exc}")
+
+
+    # 버튼 호출은 여기서 하지만 top_create_slot에 렌더링되므로 화면 맨 위에 표시됩니다.
+    top_create_clicked = top_create_slot.button(
+        "🎬 영상만 제작",
+        type="primary",
+        use_container_width=True,
+        key="sprint189_5_create_only_top",
+    )
+
+    run_requested = bool(
+        top_create_clicked or create_only_clicked or create_upload_clicked
+    )
+    if not run_requested:
+        return
+
+    upload_enabled = bool(create_upload_clicked)
+
+    print(
+        "[Sprint189-5 Run Mode]",
+        {
+            "top_create_clicked": bool(top_create_clicked),
+            "lower_create_clicked": bool(create_only_clicked),
+            "create_and_upload": bool(create_upload_clicked),
+            "upload_enabled": bool(upload_enabled),
+        },
         flush=True,
     )
 
     errors = []
-    if not str(product_name or "").strip(): errors.append("상품명을 입력해 주세요.")
-    if not str(locked_script or "").strip(): errors.append("최종 확정 대본을 입력해 주세요.")
+    if not str(product_name or "").strip():
+        errors.append("상품명을 입력해 주세요.")
+    if not str(locked_script or "").strip():
+        errors.append("확정 대본을 입력해 주세요.")
+    if not uploaded_gemini_clips:
+        errors.append("Gemini 영상 파일을 한 개 이상 업로드해 주세요.")
     if errors:
-        for error in errors: st.error(error)
+        for error in errors:
+            st.error(error)
         return
 
     payload = {
         "coupang_url": "",
         "product_name": product_name.strip(),
         "title": product_name.strip(),
-        "source": "one_click_ai_image_review_147_3",
-        "monthly_purchase_count": int(monthly_purchase_count),
-        "declared_review_count": int(declared_review_count),
-        "rating": float(rating),
-        "review_checked_at": review_checked_at.isoformat(),
+        "source": "manual_gemini_video_edit_189_2",
+        "hook_text": hook_text.strip(),
+        "suppress_separate_hook": False,
         "locked_script": locked_script.strip(),
-        "viral_video_sources": [],
+        "clip_subtitles": list(clip_subtitles or []),
+        "clip_narrations": list(clip_narrations or []),
+        "clip_subtitle_effects": list(clip_subtitle_effects or []),
+        "clip_sfx": list(clip_sfx or []),
+        "clip_playback_speeds": list(clip_playback_speeds or []),
+        "subtitle_style": dict(subtitle_style or {}),
+        "cta_text": cta_text.strip(),
+        "cta_platform": str(video_cta_platform),
+        "cta_keyword": str(cta_keyword or "").strip(),
+        "gemini_clip_count": len(uploaded_gemini_clips),
+        "youtube_privacy_status": youtube_privacy_status,
+        "upload_enabled": bool(upload_enabled),
+        "channel_type": channel_type,
+        "playback_speed": float(playback_speed),
+        "voice_name": str(selected_voice_name or "지안"),
+        "voice_id": str(selected_voice_id or ""),
+        "monthly_purchase_count": int(monthly_purchase_count or 0),
+        "declared_review_count": int(declared_review_count or 0),
+        "rating": float(rating or 0.0),
+        "reservation_enabled": bool(reservation_enabled),
+        "reservation_platforms": list(selected_platforms or []),
+        "infock_url": str(infock_url or "").strip(),
+        "platform_metadata": dict(platform_metadata or {}),
     }
     try:
-        keywords = build_keywords(payload, product_name.strip())
-        project = create_project_from_payload(payload, keywords)
+        project = create_project_from_payload(payload, [product_name.strip()])
         project_id = getattr(project, "id", None)
         if project_id:
             project = ProjectRepository().get(project_id) or project
@@ -2146,45 +5781,226 @@ def show_one_click_pipeline():
         st.error(f"프로젝트 생성 실패: {exc}")
         return
 
-    try:
-        product_image_paths = save_uploaded_product_images(project, uploaded_product_images)
-    except Exception as exc:
-        st.error(f"상품 이미지 저장 실패: {exc}")
-        return
+    _save_clip_subtitle_sidecar(
+        project,
+        clip_subtitles,
+        subtitle_style,
+        clip_narrations,
+        clip_subtitle_effects,
+        clip_sfx,
+        clip_playback_speeds,
+    )
 
-    with st.spinner("대본을 분석하고 장면별 이미지를 한 장씩 생성 중입니다..."):
+    hook_product_image_path = ""
+    if hook_product_image is not None:
+        product_folder = Path("assets/products") / f"project_{safe_project_id(project)}"
+        product_folder.mkdir(parents=True, exist_ok=True)
+        suffix = Path(getattr(hook_product_image, "name", "product.jpg")).suffix.lower()
+        if suffix not in {".png", ".jpg", ".jpeg", ".webp"}:
+            suffix = ".jpg"
+        product_target = product_folder / f"00_main{suffix}"
+        product_target.write_bytes(hook_product_image.getbuffer())
+        hook_product_image_path = str(product_target)
+        print(
+            "[Sprint189-1 Hook Product BG] SAVED:",
+            hook_product_image_path,
+            flush=True,
+        )
+
+    folder = Path("assets/gemini_clips") / f"project_{safe_project_id(project)}"
+    folder.mkdir(parents=True, exist_ok=True)
+    clip_paths = []
+    for index, uploaded in enumerate(uploaded_gemini_clips, start=1):
+        suffix = Path(getattr(uploaded, "name", "clip.mp4")).suffix.lower() or ".mp4"
+        destination = folder / f"gemini_{index:02d}{suffix}"
+        destination.write_bytes(uploaded.getbuffer())
+        clip_paths.append(str(destination))
+
+    audio_folder = Path("assets/manual_audio") / f"project_{safe_project_id(project)}"
+    audio_folder.mkdir(parents=True, exist_ok=True)
+    voice_audio_path = ""
+    bgm_audio_path = ""
+    if uploaded_voice_audio is not None:
+        suffix = Path(getattr(uploaded_voice_audio, "name", "voice.mp3")).suffix.lower() or ".mp3"
+        voice_target = audio_folder / f"jian_voice{suffix}"
+        voice_target.write_bytes(uploaded_voice_audio.getbuffer())
+        voice_audio_path = str(voice_target)
+    if uploaded_bgm_audio is not None:
+        suffix = Path(getattr(uploaded_bgm_audio, "name", "bgm.mp3")).suffix.lower() or ".mp3"
+        bgm_target = audio_folder / f"shopping_bgm{suffix}"
+        bgm_target.write_bytes(uploaded_bgm_audio.getbuffer())
+        bgm_audio_path = str(bgm_target)
+
+
+    reservation_payload = None
+    naver_native_generated_schedule = None
+    if reservation_enabled:
+        local_start = datetime.combine(
+            reservation_date,
+            reservation_time,
+            tzinfo=ZoneInfo("Asia/Seoul"),
+        )
+        selected_platform_list = list(selected_platforms or [])
+        queue_platforms = [
+            platform for platform in selected_platform_list
+            if platform != "naver_clip"
+        ]
+
+        if "naver_clip" in selected_platform_list:
+            naver_index = selected_platform_list.index("naver_clip")
+            naver_native_generated_schedule = local_start + timedelta(
+                minutes=int(platform_interval_minutes or 0) * naver_index
+            )
+
+        reservation_payload = {
+            "enabled": bool(queue_platforms),
+            "platforms": queue_platforms,
+            "scheduled_at_local": local_start.isoformat(),
+            "interval_minutes": int(platform_interval_minutes or 0),
+            "infock_url": str(infock_url or "").strip(),
+            "platform_metadata": dict(platform_metadata or {}),
+        }
+
+    print(
+        "[Sprint189-1 Manual Subtitle UI]",
+        {
+            "clip_subtitle_count": len([x for x in list(clip_subtitles or []) if str(x).strip()]),
+            "hook_product_image_path": hook_product_image_path,
+        },
+        flush=True,
+    )
+
+    with st.spinner("기존 음향 제거 → 속도 조절 → 영상 연결 → 지안 TTS → 자막 → BGM → 효과음 → 최종 MP4 제작 중입니다..."):
         try:
             result = run_project_pipeline(
                 project=project,
-                sample_count=6,
-                review_text="",
+                sample_count=len(clip_paths),
+                review_text=hook_text.strip(),
                 locked_script=locked_script.strip(),
                 review_image_paths=[],
-                product_image_paths=product_image_paths,
-                product_image_path=product_image_paths[0] if product_image_paths else "",
-                youtube_privacy_status="private",
-                viral_video_sources=[],
-                declared_review_count=int(declared_review_count),
-                review_checked_at=review_checked_at.isoformat(),
-                monthly_purchase_count=int(monthly_purchase_count),
-                rating=float(rating),
+                product_image_paths=[],
+                product_image_path="",
+                youtube_privacy_status=youtube_privacy_status,
+                viral_video_sources=clip_paths,
                 input_product_name=product_name.strip(),
-                stop_after_image_generation=True,
+                stop_after_image_generation=False,
+                gemini_video_mode=True,
+                hook_text=hook_text.strip(),
+                cta_text=cta_text.strip(),
+                voice_audio_path=voice_audio_path,
+                bgm_audio_path=bgm_audio_path,
+                voice_name=str(selected_voice_name or "지안"),
+                voice_id=str(selected_voice_id or ""),
+                typecast_api_key=str(typecast_api_key or ""),
+                tts_volume_percent=int(tts_volume_percent or 100),
+                tts_speech_speed=float(tts_speech_speed or 1.0),
+                clip_subtitle_effects=list(clip_subtitle_effects or []),
+                clip_sfx=list(clip_sfx or []),
+                clip_playback_speeds=list(clip_playback_speeds or []),
+                clip_narrations=list(clip_narrations or []),
+                gemini_clip_count=len(clip_paths),
+                upload_enabled=bool(upload_enabled),
+                playback_speed=float(playback_speed),
+                channel_type=channel_type,
+                monthly_purchase_count=int(monthly_purchase_count or 0),
+                declared_review_count=int(declared_review_count or 0),
+                rating=float(rating or 0.0),
+                reservation_payload=reservation_payload,
             )
         except Exception as exc:
-            safe_traceback = traceback.format_exc()
-            Path("full_error.log").write_text(safe_traceback, encoding="utf-8")
-            st.error(f"이미지 생성 단계 실패: {type(exc).__name__}: {exc}")
+            Path("full_error.log").write_text(traceback.format_exc(), encoding="utf-8")
+            st.error(f"Gemini 영상 자동 편집 실패: {type(exc).__name__}: {exc}")
             return
 
-    project_id = str(safe_project_id(project))
-    st.session_state["sprint147_active_project_id"] = getattr(project, "id", project_id)
-    st.session_state[f"sprint147_input_{project_id}"] = payload
-    st.session_state[f"one_click_result_{project_id}"] = result
-    st.session_state[f"sprint147_stage_{project_id}"] = "review"
-    st.session_state.pop(f"sprint147_review_scenes_{project_id}", None)
-    st.session_state.pop(f"sprint147_approved_{project_id}", None)
-    st.rerun()
+    final_path = _resolve_final_video_path(result)
+    if final_path and Path(final_path).is_file():
+        st.success("Gemini 쇼츠 자동 편집이 완료됐습니다.")
+        st.video(final_path)
+        st.caption(f"최종 영상: {final_path}")
+        st.caption(f"적용 속도: {float(playback_speed):.2f}배 / 음성 파일: {'적용' if voice_audio_path else '자동 모듈 탐색'} / 공개 설정: {youtube_privacy_status}")
+
+        # Sprint192-31: 새로 완성된 영상도 네이버는 큐가 아니라
+        # 네이버 자체 등록예약으로 즉시 저장합니다.
+        if (
+            reservation_enabled
+            and naver_native_generated_schedule is not None
+            and "naver_clip" in list(selected_platforms or [])
+        ):
+            naver_override = dict(
+                (platform_metadata or {}).get("naver_clip") or {}
+            )
+            naver_title = (
+                str(naver_override.get("title") or "").strip()
+                or str(product_name or "").strip()
+                or Path(final_path).stem
+            )
+            naver_description = str(
+                naver_override.get("description") or ""
+            ).strip()
+            naver_scheduled_iso = naver_native_generated_schedule.isoformat(
+                timespec="minutes"
+            )
+
+            print(
+                "[Sprint192-31 Naver Native Generated] START",
+                {
+                    "video_path": final_path,
+                    "scheduled_publish_at": naver_scheduled_iso,
+                    "account": naver_clip_upload_account,
+                },
+                flush=True,
+            )
+
+            with st.spinner(
+                "완성 영상을 네이버 클립 자체 등록예약으로 저장 중입니다..."
+            ):
+                naver_generated_result = NaverClipUploadExecutor().prepare_upload(
+                    video_path=str(final_path),
+                    title=naver_title,
+                    description=naver_description,
+                    user_data_dir=naver_clip_profile_dir,
+                    headless=False,
+                    allow_manual_login=True,
+                    login_timeout_seconds=600,
+                    action_timeout_seconds=60,
+                    slow_mo=150,
+                    keep_browser_open=True,
+                    category_primary="쇼핑",
+                    category_secondary="상품리뷰",
+                    perform_publish=True,
+                    scheduled_publish_at=naver_scheduled_iso,
+                )
+
+            if naver_generated_result.get("ok"):
+                st.success(
+                    "네이버 클립 자체 등록예약 완료: "
+                    f"{naver_generated_result.get('scheduled_publish_at', '')}"
+                )
+            else:
+                st.error(
+                    "네이버 클립 자체 등록예약 실패: "
+                    f"{naver_generated_result.get('status')} / "
+                    f"{naver_generated_result.get('errors')}"
+                )
+
+            print(
+                "[Sprint192-31 Naver Native Generated] COMPLETE",
+                {
+                    "ok": naver_generated_result.get("ok"),
+                    "status": naver_generated_result.get("status"),
+                },
+                flush=True,
+            )
+
+        reservation_result = ((result.get("outputs") or {}).get("reservations") or {})
+        if reservation_result.get("ok"):
+            st.success(f"예약 큐 등록 완료: {reservation_result.get('count', 0)}건")
+            st.json(reservation_result.get("items") or [])
+        elif reservation_enabled:
+            st.warning(str(reservation_result.get("error") or "예약 큐에 등록되지 않았습니다."))
+    else:
+        st.error(str(result.get("summary") or "최종 MP4가 생성되지 않았습니다."))
+        st.json(result)
 
 
 render = show_one_click_pipeline
