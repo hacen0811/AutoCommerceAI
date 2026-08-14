@@ -2,6 +2,7 @@ import hashlib
 import json
 import os
 import re
+import subprocess
 import sys
 import threading
 import traceback
@@ -72,8 +73,428 @@ except Exception:
     SearchKeywordEngine = None
 
 
-UI_VERSION = "sprint193-33-restore-effect-cue-method"
+UI_VERSION = "sprint194-58-history-regression-restore"
 RESULT_DIR = Path("exports/one_click_results")
+OPENAI_LOCALIZATION_KEY_PATH = Path("secrets/openai_localization_api_key.txt")
+
+
+def _sprint194_28_load_openai_localization_key():
+    env_key = str(os.getenv("OPENAI_API_KEY", "") or "").strip()
+    if env_key:
+        return env_key
+    try:
+        if OPENAI_LOCALIZATION_KEY_PATH.is_file():
+            return OPENAI_LOCALIZATION_KEY_PATH.read_text(encoding="utf-8").strip()
+    except Exception:
+        pass
+    return ""
+
+
+def _sprint194_28_save_openai_localization_key(value):
+    key = str(value or "").strip()
+    OPENAI_LOCALIZATION_KEY_PATH.parent.mkdir(parents=True, exist_ok=True)
+    if key:
+        OPENAI_LOCALIZATION_KEY_PATH.write_text(key, encoding="utf-8")
+        os.environ["OPENAI_API_KEY"] = key
+    elif OPENAI_LOCALIZATION_KEY_PATH.exists():
+        OPENAI_LOCALIZATION_KEY_PATH.unlink()
+        os.environ.pop("OPENAI_API_KEY", None)
+    return bool(key)
+
+
+def _sprint194_28_extract_openai_text(data):
+    """Extract output_text from a raw Responses API JSON payload without SDK dependency."""
+    if not isinstance(data, dict):
+        return ""
+    direct = data.get("output_text")
+    if isinstance(direct, str) and direct.strip():
+        return direct.strip()
+    chunks = []
+    for item in list(data.get("output") or []):
+        if not isinstance(item, dict):
+            continue
+        for part in list(item.get("content") or []):
+            if not isinstance(part, dict):
+                continue
+            text = part.get("text")
+            if isinstance(text, str) and text.strip():
+                chunks.append(text)
+    return "\n".join(chunks).strip()
+
+
+
+def _sprint194_32_has_hangul(text):
+    return bool(re.search(r"[가-힣]", str(text or "")))
+
+
+def _sprint194_32_source_hash(payload_items, *, narration_only=False):
+    canonical = []
+    for idx, row in enumerate(list(payload_items or []), start=1):
+        row = row if isinstance(row, dict) else {}
+        item = {
+            "scene": idx,
+            "narration_ko": re.sub(r"\s+", " ", str(row.get("narration_ko") or "").strip()),
+        }
+        if not narration_only:
+            item["subtitle_ko"] = re.sub(r"\s+", " ", str(row.get("subtitle_ko") or "").strip())
+        canonical.append(item)
+    return hashlib.sha256(json.dumps(canonical, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()[:24]
+
+
+def _sprint194_32_project_snapshot_path(project_id):
+    pid = str(project_id or "").strip()
+    if not pid:
+        return None
+    return Path("assets/products") / f"project_{pid}" / "history_en_localization.json"
+
+
+def _sprint194_32_save_project_localization(project_id, payload_items, scenes, provider="reused", model=""):
+    path = _sprint194_32_project_snapshot_path(project_id)
+    if path is None:
+        return ""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "version": "history-en-localization-194-32",
+        "project_id": str(project_id or ""),
+        "source_hash": _sprint194_32_source_hash(payload_items),
+        "source_narration_hash": _sprint194_32_source_hash(payload_items, narration_only=True),
+        "provider": str(provider or ""),
+        "model": str(model or ""),
+        "scenes": list(scenes or []),
+    }
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    print("[Sprint194-32 Localization Snapshot] SAVED", {"path": str(path), "scenes": len(list(scenes or [])), "provider": provider}, flush=True)
+    return str(path)
+
+
+def _sprint194_32_validate_reusable_scenes(scenes, expected_count):
+    rows = list(scenes or [])
+    if len(rows) != int(expected_count or 0):
+        return []
+    out = []
+    for idx, row in enumerate(rows, start=1):
+        row = row if isinstance(row, dict) else {}
+        narration = str(row.get("narration") or row.get("narration_en") or "").strip()
+        subtitle = str(row.get("subtitle") or row.get("subtitle_en") or narration).strip()
+        if not narration or _sprint194_32_has_hangul(narration) or _sprint194_32_has_hangul(subtitle):
+            return []
+        out.append({"scene": idx, "narration": narration, "subtitle": subtitle or narration})
+    return out
+
+
+def _sprint194_32_try_project_reuse(project_id, payload_items):
+    expected = len(list(payload_items or []))
+    path = _sprint194_32_project_snapshot_path(project_id)
+    if path is not None and path.is_file():
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            exact = str(payload.get("source_hash") or "") == _sprint194_32_source_hash(payload_items)
+            narration_match = str(payload.get("source_narration_hash") or "") == _sprint194_32_source_hash(payload_items, narration_only=True)
+            scenes = _sprint194_32_validate_reusable_scenes(payload.get("scenes"), expected)
+            if scenes and (exact or narration_match):
+                print("[Sprint194-32 Localization Cache] PROJECT_HIT", {"path": str(path), "scenes": len(scenes), "exact": exact, "narration_match": narration_match}, flush=True)
+                return scenes
+        except Exception as exc:
+            print("[Sprint194-32 Localization Cache] PROJECT_INVALID", repr(exc), flush=True)
+
+    # Recovery path for a previously rendered English project (e.g. successful 470 output)
+    # that predates the dedicated 194-32 snapshot file.
+    pid = str(project_id or "").strip()
+    if pid:
+        preset_path = Path("assets/products") / f"project_{pid}" / "edit_preset.json"
+        if preset_path.is_file():
+            try:
+                preset = json.loads(preset_path.read_text(encoding="utf-8"))
+                if str(preset.get("production_mode") or "") == "history_en":
+                    subs = list(preset.get("clip_subtitles") or [])
+                    nars = list(preset.get("clip_narrations") or [])
+                    rows = [
+                        {"scene": i + 1, "subtitle": subs[i] if i < len(subs) else "", "narration": nars[i] if i < len(nars) else ""}
+                        for i in range(max(len(subs), len(nars)))
+                    ]
+                    scenes = _sprint194_32_validate_reusable_scenes(rows, expected)
+                    if scenes:
+                        _sprint194_32_save_project_localization(pid, payload_items, scenes, provider="english_edit_preset")
+                        print("[Sprint194-32 Localization Cache] ENGLISH_PRESET_HIT", {"path": str(preset_path), "scenes": len(scenes)}, flush=True)
+                        return scenes
+            except Exception as exc:
+                print("[Sprint194-32 Localization Cache] ENGLISH_PRESET_INVALID", repr(exc), flush=True)
+    return []
+
+
+def _sprint194_32_normalize_openai_payload(parsed):
+    """Sprint194-40: recover scene rows from common and nested OpenAI JSON shapes."""
+    def _looks_like_scene(row):
+        if not isinstance(row, dict):
+            return False
+        keys = {str(k).lower() for k in row.keys()}
+        return bool(keys & {"narration_en", "subtitle_en", "narration", "subtitle", "english_narration", "english_subtitle"})
+
+    def _scene_order(row, fallback):
+        if isinstance(row, dict):
+            raw = row.get("scene") or row.get("scene_id") or row.get("index") or row.get("order")
+            m = re.search(r"\d+", str(raw or ""))
+            if m:
+                return int(m.group(0))
+        return fallback
+
+    def _walk(value, depth=0):
+        if depth > 8:
+            return []
+        if isinstance(value, str):
+            text = value.strip()
+            if text[:1] in {"{", "["}:
+                try:
+                    return _walk(json.loads(text), depth + 1)
+                except Exception:
+                    return []
+            return []
+        if isinstance(value, list):
+            direct = [x for x in value if _looks_like_scene(x)]
+            if direct:
+                return direct
+            for item in value:
+                found = _walk(item, depth + 1)
+                if found:
+                    return found
+            return []
+        if not isinstance(value, dict):
+            return []
+
+        for key in ("scenes", "items", "translations", "results", "data", "localized_scenes", "output", "response"):
+            if key in value:
+                found = _walk(value.get(key), depth + 1)
+                if found:
+                    return found
+
+        keyed = []
+        for key, item in value.items():
+            if isinstance(item, dict) and _looks_like_scene(item):
+                m = re.search(r"\d+", str(key))
+                keyed.append((int(m.group(0)) if m else len(keyed) + 1, item))
+        if keyed:
+            keyed.sort(key=lambda x: x[0])
+            return [item for _, item in keyed]
+
+        for item in value.values():
+            found = _walk(item, depth + 1)
+            if found:
+                return found
+        return []
+
+    rows = _walk(parsed)
+    normalized = []
+    for idx, row in enumerate(rows, start=1):
+        row = dict(row) if isinstance(row, dict) else {}
+        narration = str(row.get("narration_en") or row.get("narration") or row.get("english_narration") or "").strip()
+        subtitle = str(row.get("subtitle_en") or row.get("subtitle") or row.get("english_subtitle") or narration).strip()
+        normalized.append({"scene": _scene_order(row, idx), "narration_en": narration, "subtitle_en": subtitle})
+    normalized.sort(key=lambda x: int(x.get("scene") or 999999))
+    return {"scenes": normalized}
+
+def _sprint194_28_localization_prompt(payload_items):
+    return (
+        "You are localizing a Korean history YouTube Short for a US audience. "
+        "Return ONLY valid JSON with key scenes, an array in exactly the same order and count. "
+        "Each item must have scene, narration_en, subtitle_en. "
+        "Preserve historical facts, names, dates, causal meaning, humor and emotional tone. "
+        "Do not add facts. Do not merge or split scenes. Rewrite rather than literally translate: use natural, conversational American English for a fast, friendly history YouTube Short. "
+        "Keep narration concise: prefer one short spoken sentence per scene, remove Korean-style repetition, and avoid documentary/formal translationese. "
+        "Keep subtitle especially short and punchy: ideally 4-8 words and normally no more than 42 characters total, while preserving the scene meaning. "
+        "Do not address the viewer unless the Korean source does. Narration must sound natural for TTS. No markdown.\nINPUT:\n"
+        + json.dumps(payload_items, ensure_ascii=False)
+    )
+
+
+def _sprint194_28_validate_localized(parsed, expected_count):
+    scenes = list((parsed or {}).get("scenes") or []) if isinstance(parsed, dict) else []
+    if len(scenes) != int(expected_count):
+        raise RuntimeError(f"영어 현지화 장면 수 불일치: source={expected_count} localized={len(scenes)}")
+    out = []
+    for idx, row in enumerate(scenes, start=1):
+        row = row if isinstance(row, dict) else {}
+        narration = str(row.get("narration_en") or "").strip()
+        subtitle = str(row.get("subtitle_en") or "").strip()
+        if not narration:
+            raise RuntimeError(f"영어 현지화 나레이션 누락: scene={idx}")
+        if not subtitle:
+            subtitle = narration
+        out.append({"scene": idx, "narration": narration, "subtitle": subtitle})
+    return out
+
+
+def _sprint194_28_localize_with_openai(payload_items, api_key):
+    """OpenAI Responses API primary localizer. One request for all scenes."""
+    import urllib.request
+    import urllib.error
+    key = str(api_key or "").strip()
+    if not key:
+        raise RuntimeError("OPENAI_API_KEY_MISSING")
+    prompt = _sprint194_28_localization_prompt(payload_items)
+    model = str(os.getenv("OPENAI_LOCALIZATION_MODEL", "gpt-5.6-luna") or "gpt-5.6-luna").strip()
+    body = json.dumps({
+        "model": model,
+        "input": prompt,
+        "reasoning": {"effort": "low"},
+    }, ensure_ascii=False).encode("utf-8")
+    req = urllib.request.Request(
+        "https://api.openai.com/v1/responses",
+        data=body,
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {key}",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        status = int(getattr(exc, "code", 0) or 0)
+        try:
+            body_text = exc.read().decode("utf-8", errors="replace")[:1600]
+        except Exception:
+            body_text = ""
+        print("[Sprint194-28 OpenAI Localization] HTTP_ERROR", {"status": status, "model": model, "body": body_text}, flush=True)
+        raise RuntimeError(f"OpenAI 영어 현지화 실패 HTTP {status}") from exc
+    text = _sprint194_28_extract_openai_text(data)
+    if not text:
+        raise RuntimeError("OpenAI 영어 현지화 응답 텍스트가 비어 있습니다.")
+    try:
+        parsed = json.loads(text)
+    except Exception:
+        # Strip markdown fences first, then recover the outermost JSON object/array if prose leaked in.
+        cleaned = re.sub(r"^\s*```(?:json)?\s*|\s*```\s*$", "", text, flags=re.I | re.S).strip()
+        try:
+            parsed = json.loads(cleaned)
+        except Exception:
+            starts = [pos for pos in (cleaned.find("{"), cleaned.find("[")) if pos >= 0]
+            if not starts:
+                raise
+            start = min(starts)
+            end_obj = cleaned.rfind("}")
+            end_arr = cleaned.rfind("]")
+            end = max(end_obj, end_arr)
+            if end < start:
+                raise
+            parsed = json.loads(cleaned[start:end + 1])
+    _raw_parsed_type_194_40 = type(parsed).__name__
+    _raw_keys_194_40 = list(parsed.keys())[:20] if isinstance(parsed, dict) else []
+    parsed = _sprint194_32_normalize_openai_payload(parsed)
+    print("[Sprint194-40 OpenAI Localization Recovery]", {
+        "raw_type": _raw_parsed_type_194_40,
+        "raw_keys": _raw_keys_194_40,
+        "source_scenes": len(payload_items),
+        "recovered_scenes": len(list(parsed.get("scenes") or [])),
+    }, flush=True)
+    out = _sprint194_28_validate_localized(parsed, len(payload_items))
+    print("[Sprint194-28 OpenAI Localization] READY", {"model": model, "scenes": len(out)}, flush=True)
+    return out, model
+
+
+def _sprint194_28_localize_with_gemini(payload_items):
+    """Gemini fallback. Kept as secondary provider only."""
+    import urllib.request
+    import urllib.error
+    import time
+    api_key = str(os.getenv("GEMINI_API_KEY", "") or os.getenv("GOOGLE_API_KEY", "")).strip()
+    if not api_key:
+        raise RuntimeError("GEMINI_API_KEY_MISSING")
+    prompt = _sprint194_28_localization_prompt(payload_items)
+    body = json.dumps({"contents":[{"parts":[{"text":prompt}]}], "generationConfig":{"temperature":0.25,"responseMimeType":"application/json"}}).encode("utf-8")
+    model = str(os.getenv("GEMINI_TEXT_MODEL", "gemini-2.0-flash")).strip() or "gemini-2.0-flash"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+    data = None
+    max_attempts = 3
+    fallback_waits = (5, 15)
+    for attempt in range(1, max_attempts + 1):
+        req = urllib.request.Request(url, data=body, headers={"Content-Type":"application/json"}, method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=90) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+            print("[Sprint194-28 Gemini Fallback] READY", {"attempt": attempt, "model": model, "scenes": len(payload_items)}, flush=True)
+            break
+        except urllib.error.HTTPError as exc:
+            status = int(getattr(exc, "code", 0) or 0)
+            if status != 429 or attempt >= max_attempts:
+                print("[Sprint194-28 Gemini Fallback] HTTP_ERROR", {"status": status, "attempt": attempt, "model": model}, flush=True)
+                raise RuntimeError(f"Gemini fallback 실패 HTTP {status}") from exc
+            retry_after = 0.0
+            try:
+                retry_after = float((exc.headers or {}).get("Retry-After") or 0)
+            except Exception:
+                retry_after = 0.0
+            wait_seconds = max(retry_after, float(fallback_waits[attempt - 1]))
+            print("[Sprint194-28 Gemini Fallback] RATE_LIMIT", {"attempt": attempt, "wait_seconds": wait_seconds}, flush=True)
+            time.sleep(wait_seconds)
+    if data is None:
+        raise RuntimeError("Gemini fallback 응답을 받지 못했습니다.")
+    text = data["candidates"][0]["content"]["parts"][0]["text"]
+    parsed = json.loads(text)
+    out = _sprint194_28_validate_localized(parsed, len(payload_items))
+    return out, model
+
+
+def _sprint194_21_auto_localize_history_to_english(items, openai_api_key="", project_id=""):
+    """Sprint194-32: project-persistent reuse first, then OpenAI -> Gemini only for a genuinely new localization."""
+    payload_items = []
+    for i, item in enumerate(list(items or []), start=1):
+        payload_items.append({
+            "scene": i,
+            "narration_ko": str((item or {}).get("narration") or "").strip(),
+            "subtitle_ko": str((item or {}).get("subtitle") or "").strip(),
+        })
+    if not payload_items:
+        raise RuntimeError("영어 현지화할 장면이 없습니다.")
+
+    # 194-32 priority 1: never call a translation API again when this project already
+    # has a valid 1:1 English localization from a previous successful render.
+    reused = _sprint194_32_try_project_reuse(project_id, payload_items)
+    if reused:
+        return reused
+
+    cache_dir = RESULT_DIR / "history_localization_cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    cache_key = hashlib.sha256(json.dumps(payload_items, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()[:24]
+    cache_path = cache_dir / f"{cache_key}_en.json"
+    if cache_path.is_file():
+        try:
+            cached = json.loads(cache_path.read_text(encoding="utf-8"))
+            scenes = list(cached.get("scenes") or [])
+            if len(scenes) == len(payload_items):
+                print("[Sprint194-32 Localization Cache] HASH_HIT", {"path": str(cache_path), "scenes": len(scenes), "provider": cached.get("provider")}, flush=True)
+                _sprint194_32_save_project_localization(project_id, payload_items, scenes, provider=str(cached.get("provider") or "hash_cache"), model=str(cached.get("model") or ""))
+                return scenes
+        except Exception as exc:
+            print("[Sprint194-28 Localization Cache] INVALID", repr(exc), flush=True)
+
+    provider_errors = []
+    key = str(openai_api_key or os.getenv("OPENAI_API_KEY", "") or "").strip()
+    if key:
+        try:
+            scenes, model = _sprint194_28_localize_with_openai(payload_items, key)
+            cache_path.write_text(json.dumps({"provider":"openai", "model":model, "scenes":scenes}, ensure_ascii=False, indent=2), encoding="utf-8")
+            _sprint194_32_save_project_localization(project_id, payload_items, scenes, provider="openai", model=model)
+            print("[Sprint194-32 History Auto Localization] READY", {"provider":"openai", "model":model, "scenes":len(scenes), "cached":True}, flush=True)
+            return scenes
+        except Exception as exc:
+            provider_errors.append(f"OpenAI: {exc}")
+            print("[Sprint194-28 Localization Fallback] OPENAI_FAILED", repr(exc), flush=True)
+    else:
+        provider_errors.append("OpenAI: API key missing")
+        print("[Sprint194-28 Localization Fallback] OPENAI_SKIPPED", {"reason":"api_key_missing"}, flush=True)
+
+    try:
+        scenes, model = _sprint194_28_localize_with_gemini(payload_items)
+        cache_path.write_text(json.dumps({"provider":"gemini", "model":model, "scenes":scenes}, ensure_ascii=False, indent=2), encoding="utf-8")
+        _sprint194_32_save_project_localization(project_id, payload_items, scenes, provider="gemini", model=model)
+        print("[Sprint194-32 History Auto Localization] READY", {"provider":"gemini", "model":model, "scenes":len(scenes), "cached":True}, flush=True)
+        return scenes
+    except Exception as exc:
+        provider_errors.append(f"Gemini: {exc}")
+        print("[Sprint194-28 Localization Fallback] GEMINI_FAILED", repr(exc), flush=True)
+
+    raise RuntimeError("영어 자동 현지화 제공자 모두 실패: " + " | ".join(provider_errors))
 
 # Sprint192-1: TikTok / Naver Clip 계정별 Playwright 프로필 분리.
 # 기존 실물로그 프로필 경로는 그대로 유지하여 현재 로그인 세션을 보존합니다.
@@ -161,7 +582,7 @@ SUPPORTED_REVIEW_IMAGE_SUFFIXES = {
 }
 
 
-print("######## ONE_CLICK_PIPELINE SPRINT193-33 RESTORE EFFECT CUE METHOD LOADED ########", __file__, flush=True)
+print("######## ONE_CLICK_PIPELINE SPRINT194-2 HISTORY IMAGE VIDEO LOADED ########", __file__, flush=True)
 
 # Sprint102-3: 한 Streamlit 프로세스에서 동일 프로젝트 중복 실행을 차단합니다.
 _PIPELINE_RUN_GUARD = threading.RLock()
@@ -411,6 +832,15 @@ def _sprint193_29_apply_preset_to_session(preset):
         "sprint193_1_tts_volume": int(preset.get("tts_volume_percent") or 100),
         "sprint193_1_tts_speed": float(preset.get("tts_speech_speed") or 1.0),
         "sprint193_1_bgm_volume": int(preset.get("bgm_volume_percent") or 10),
+        "sprint194_55_restored_bgm_audio_path": str(preset.get("bgm_audio_path") or ""),
+        # Sprint194-25: top-level mode widget is now only shopping/history.
+        # Preserve old history_ko/history_en presets by splitting mode and language state.
+        "sprint194_25_content_mode": (
+            "history" if str(preset.get("production_mode") or preset.get("channel_type") or "").startswith("history_") else "shopping"
+        ),
+        "sprint194_25_history_language": (
+            "en" if str(preset.get("production_mode") or preset.get("channel_type") or "") == "history_en" else "ko"
+        ),
     }
 
     subtitle_style = dict(preset.get("subtitle_style") or {})
@@ -487,6 +917,326 @@ def safe_file_name(text, fallback="video"):
     text = re.sub(r"[^0-9A-Za-z가-힣._-]+", "_", text)
     text = re.sub(r"_+", "_", text).strip("_")
     return text[:80] or fallback
+
+
+def _sprint194_4_estimate_scene_seconds(narration, tts_speed=1.2):
+    """역사 장면 길이 안전 추정치. 실제 VideoPipeline의 TTS 자동맞춤이 최종 보정합니다."""
+    text = re.sub(r"\s+", "", str(narration or ""))
+    if not text:
+        return 3.0
+    speed = max(0.7, float(tts_speed or 1.2))
+    # 한국어/영어 혼합 쇼츠 기준 보수적 추정 + 장면 전환 여유 0.35초
+    seconds = (len(text) / (4.2 * speed)) + 0.35
+    return max(2.2, min(7.0, seconds))
+
+
+def _sprint194_4_render_history_image_clip(image_path, output_path, seconds=5.0, fps=30, motion_index=1):
+    """Sprint194-8: 역사 이미지 임시 클립. zoompan을 쓰지 않아 미세 떨림을 제거합니다.
+
+    최종 장면 길이는 Workflow에서 실제 TTS 길이를 측정한 뒤 다시 렌더링합니다.
+    """
+    image = Path(str(image_path))
+    output = Path(str(output_path))
+    output.parent.mkdir(parents=True, exist_ok=True)
+    duration = max(2.5, float(seconds or 5.0))
+    fps = int(fps or 30)
+    mode = (int(motion_index or 1) - 1) % 5
+    d = max(duration, 0.001)
+    # 고정 확대 후 crop 좌표만 한 방향으로 이동: 왕복/zoompan 없음.
+    motions = [
+        f"crop=1080:1920:x='(iw-1080)*t/{d:.6f}':y='(ih-1920)/2'",
+        f"crop=1080:1920:x='(iw-1080)*(1-t/{d:.6f})':y='(ih-1920)/2'",
+        f"crop=1080:1920:x='(iw-1080)/2':y='(ih-1920)*t/{d:.6f}'",
+        f"crop=1080:1920:x='(iw-1080)/2':y='(ih-1920)*(1-t/{d:.6f})'",
+        "crop=1080:1920:x='(iw-1080)/2':y='(ih-1920)/2'",
+    ]
+    vf = (
+        "scale=1188:2112:force_original_aspect_ratio=increase,"
+        + motions[mode]
+        + ",fps=30,format=yuv420p"
+    )
+    command = [
+        "ffmpeg", "-y", "-loop", "1", "-i", str(image),
+        "-vf", vf, "-t", f"{duration:.3f}",
+        "-an", "-c:v", "libx264", "-preset", "veryfast",
+        "-crf", "20", "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(output),
+    ]
+    completed = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
+    ok = completed.returncode == 0 and output.is_file() and output.stat().st_size > 1024
+    print("[Sprint194-8 History Placeholder Motion]", {"ok": ok, "scene": motion_index, "seconds": round(duration, 3), "motion": mode + 1}, flush=True)
+    if not ok:
+        raise RuntimeError("history_image_clip_failed: " + str((completed.stderr or completed.stdout or "")[-1200:]))
+    return str(output)
+
+
+def _sprint194_5_scene_sort_key(item):
+    name = str(getattr(item, "name", item) or "")
+    parts = re.split(r"(\d+)", Path(name).stem.lower())
+    return [int(part) if part.isdigit() else part for part in parts]
+
+
+def _sprint194_5_merge_history_uploads(primary, extra=None):
+    """기본/추가 업로드를 파일명 기준으로 합치고 1,2,...10 순으로 정렬합니다."""
+    merged = {}
+    for item in list(primary or []) + list(extra or []):
+        name = str(getattr(item, "name", "") or "").strip()
+        if not name:
+            continue
+        merged[name.lower()] = item
+    return sorted(merged.values(), key=_sprint194_5_scene_sort_key)[:25]
+
+
+def _sprint194_4_save_history_scene_images(project, uploaded_images, clip_narrations=None, tts_speed=1.2, first_scene_video=None):
+    """History scenes: scene 1 may be supplied by video while images start at 2.png."""
+    project_id = str(safe_project_id(project))
+    image_folder = Path("assets/history_scene_images") / f"project_{project_id}"
+    clip_folder = Path("assets/gemini_clips") / f"project_{project_id}"
+    image_folder.mkdir(parents=True, exist_ok=True)
+    clip_folder.mkdir(parents=True, exist_ok=True)
+    images = sorted(list(uploaded_images or []), key=_sprint194_5_scene_sort_key)[:25]
+    narrations = list(clip_narrations or [])
+
+    def _scene_no(item, fallback):
+        name = str(getattr(item, "name", "") or "")
+        match = re.search(r"(\d+)", Path(name).stem)
+        return int(match.group(1)) if match else int(fallback)
+
+    image_scene_numbers = [_scene_no(item, i) for i, item in enumerate(images, start=1)]
+    scene1_missing_from_images = 1 not in set(image_scene_numbers)
+    clip_map = {}
+
+    def _render_scene1_video():
+        video_name = str(getattr(first_scene_video, "name", "scene_01.mp4") or "scene_01.mp4")
+        video_suffix = Path(video_name).suffix.lower()
+        if video_suffix not in SUPPORTED_VIRAL_VIDEO_SUFFIXES:
+            video_suffix = ".mp4"
+        original_video = clip_folder / f"history_01_source{video_suffix}"
+        first_scene_video.seek(0)
+        original_video.write_bytes(first_scene_video.getbuffer())
+        clip_target = clip_folder / "history_01.mp4"
+        command = [
+            "ffmpeg", "-y", "-i", str(original_video), "-map", "0:v:0", "-an",
+            "-vf", "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black,fps=30,format=yuv420p",
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+            "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(clip_target),
+        ]
+        completed = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
+        ok = completed.returncode == 0 and clip_target.is_file() and clip_target.stat().st_size > 1024
+        print("[Sprint194-47A History Scene1 Video]", {"ok": ok, "source": str(original_video), "output": str(clip_target)}, flush=True)
+        if not ok:
+            raise RuntimeError("history_scene1_video_failed: " + str((completed.stderr or completed.stdout or "")[-1200:]))
+        return str(clip_target)
+
+    if first_scene_video is not None and scene1_missing_from_images:
+        clip_map[1] = _render_scene1_video()
+
+    for fallback_index, uploaded in enumerate(images, start=1):
+        scene_no = _scene_no(uploaded, fallback_index + (1 if scene1_missing_from_images and first_scene_video is not None else 0))
+        original_name = str(getattr(uploaded, "name", f"scene_{scene_no:02d}.png") or "")
+        suffix = Path(original_name).suffix.lower()
+        if suffix not in {".png", ".jpg", ".jpeg", ".webp"}:
+            suffix = ".png"
+        image_target = image_folder / f"scene_{scene_no:02d}{suffix}"
+        uploaded.seek(0)
+        image_target.write_bytes(uploaded.getbuffer())
+        clip_target = clip_folder / f"history_{scene_no:02d}.mp4"
+        narration = narrations[scene_no - 1] if scene_no - 1 < len(narrations) else ""
+        seconds = _sprint194_4_estimate_scene_seconds(narration, tts_speed)
+        if scene_no == 1 and first_scene_video is not None:
+            clip_map[1] = _render_scene1_video()
+        else:
+            clip_map[scene_no] = _sprint194_4_render_history_image_clip(image_target, clip_target, seconds, 30, scene_no)
+
+    clip_paths = [clip_map[key] for key in sorted(clip_map)]
+    expected_count = len(images) + (1 if first_scene_video is not None and scene1_missing_from_images else 0)
+    if len(clip_paths) != expected_count:
+        raise RuntimeError(f"history_scene_count_mismatch: expected={expected_count} clips={len(clip_paths)}")
+    print("[Sprint194-47A History Scene Images] READY", {"images": len(images), "scene1_video": bool(first_scene_video is not None), "clips": len(clip_paths), "narrations": len(narrations)}, flush=True)
+    return clip_paths
+
+
+def _sprint194_52_history_scene_no_from_path(value):
+    """Extract the canonical history scene number from a saved clip path."""
+    name = Path(str(value or "")).stem.lower()
+    # Never treat raw/source/cache derivatives as timeline scenes.
+    if "_source" in name or "placeholder" in name or "preview" in name:
+        return None
+    for pattern in (r"^history[_-]0*(\d+)$", r"^scene[_-]0*(\d+)$", r"^gemini[_-]0*(\d+)$"):
+        match = re.match(pattern, name)
+        if match:
+            return int(match.group(1))
+    return None
+
+
+def _sprint194_52_lock_history_clip_order(paths, expected_count=0):
+    """Return exactly scene 1..N once, ignoring *_source and duplicate derivatives."""
+    raw = [str(p or "").strip() for p in list(paths or []) if str(p or "").strip() and Path(str(p)).is_file()]
+    expected = int(expected_count or 0)
+    by_scene = {}
+    unknown = []
+    for path in raw:
+        scene_no = _sprint194_52_history_scene_no_from_path(path)
+        if scene_no is None:
+            unknown.append(path)
+            continue
+        if scene_no < 1 or (expected and scene_no > expected):
+            continue
+        # First canonical scene wins; a duplicate can never create a second timeline slot.
+        by_scene.setdefault(scene_no, path)
+
+    if by_scene:
+        max_scene = expected or max(by_scene)
+        missing = [n for n in range(1, max_scene + 1) if n not in by_scene]
+        if missing:
+            print("[Sprint194-52 History Scene Order Lock] INCOMPLETE", {"missing": missing, "raw": len(raw), "canonical": len(by_scene)}, flush=True)
+            # Do not silently shift scene numbers. Caller/UI will expose the missing slots.
+        ordered = [by_scene[n] for n in range(1, max_scene + 1) if n in by_scene]
+    else:
+        # Legacy fallback only when filenames carry no scene ids at all.
+        ordered = sorted(raw, key=_sprint194_5_scene_sort_key)
+        if expected:
+            ordered = ordered[:expected]
+
+    print("[Sprint194-52 History Scene Order Lock] READY", {
+        "expected": expected,
+        "raw": len(raw),
+        "ordered": len(ordered),
+        "scene_numbers": [_sprint194_52_history_scene_no_from_path(p) for p in ordered],
+        "ignored_unknown_or_source": len(unknown),
+    }, flush=True)
+    return ordered
+
+
+def _sprint194_51_history_source_kind(source):
+    """Return image/video/existing for an uploaded file or saved path."""
+    if isinstance(source, (str, Path)):
+        suffix = Path(str(source)).suffix.lower()
+        if suffix in {".png", ".jpg", ".jpeg", ".webp"}:
+            return "image"
+        if suffix in SUPPORTED_VIRAL_VIDEO_SUFFIXES:
+            return "existing"
+        return "existing"
+    name = str(getattr(source, "name", "") or "")
+    suffix = Path(name).suffix.lower()
+    if suffix in {".png", ".jpg", ".jpeg", ".webp"}:
+        return "image"
+    if suffix in SUPPORTED_VIRAL_VIDEO_SUFFIXES:
+        return "video"
+    return "unknown"
+
+
+def _sprint194_51_save_history_scene_sources(
+    project,
+    scene_sources,
+    clip_narrations=None,
+    tts_speed=1.2,
+    expected_count=0,
+):
+    """Render/copy a 1..N mixed image/video scene map into project-owned MP4 clips."""
+    project_id = str(safe_project_id(project))
+    image_folder = Path("assets/history_scene_images") / f"project_{project_id}"
+    clip_folder = Path("assets/gemini_clips") / f"project_{project_id}"
+    image_folder.mkdir(parents=True, exist_ok=True)
+    clip_folder.mkdir(parents=True, exist_ok=True)
+
+    sources = dict(scene_sources or {})
+    narrations = list(clip_narrations or [])
+    expected = int(expected_count or (max(sources) if sources else 0))
+    missing = [n for n in range(1, expected + 1) if n not in sources]
+    if missing:
+        raise RuntimeError("history_scene_sources_missing: " + ",".join(map(str, missing)))
+
+    def _render_video(source, scene_no):
+        target = clip_folder / f"history_{scene_no:02d}.mp4"
+
+        if isinstance(source, (str, Path)):
+            source_path = Path(str(source))
+            if not source_path.is_file():
+                raise RuntimeError(f"history_scene_source_missing_file: scene={scene_no} path={source_path}")
+        else:
+            source_name = str(getattr(source, "name", f"scene_{scene_no:02d}.mp4") or "")
+            suffix = Path(source_name).suffix.lower()
+            if suffix not in SUPPORTED_VIRAL_VIDEO_SUFFIXES:
+                suffix = ".mp4"
+            source_path = clip_folder / f"history_{scene_no:02d}_source{suffix}"
+            source.seek(0)
+            source_path.write_bytes(source.getbuffer())
+
+        command = [
+            "ffmpeg", "-y", "-i", str(source_path),
+            "-map", "0:v:0", "-an",
+            "-vf",
+            "scale=1080:1920:force_original_aspect_ratio=decrease,"
+            "pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black,"
+            "fps=30,format=yuv420p",
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+            "-pix_fmt", "yuv420p", "-movflags", "+faststart",
+            str(target),
+        ]
+        completed = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+        )
+        ok = completed.returncode == 0 and target.is_file() and target.stat().st_size > 1024
+        if not ok:
+            raise RuntimeError(
+                f"history_scene_video_failed: scene={scene_no}: "
+                + str((completed.stderr or completed.stdout or "")[-1200:])
+            )
+        return str(target)
+
+    clip_paths = []
+    source_types = {}
+    for scene_no in range(1, expected + 1):
+        source = sources[scene_no]
+        kind = _sprint194_51_history_source_kind(source)
+        source_types[scene_no] = kind
+
+        if kind == "image":
+            if isinstance(source, (str, Path)):
+                source_path = Path(str(source))
+                if not source_path.is_file():
+                    raise RuntimeError(f"history_scene_image_missing: scene={scene_no}")
+                suffix = source_path.suffix.lower() or ".png"
+                image_target = image_folder / f"scene_{scene_no:02d}{suffix}"
+                image_target.write_bytes(source_path.read_bytes())
+            else:
+                source_name = str(getattr(source, "name", f"scene_{scene_no:02d}.png") or "")
+                suffix = Path(source_name).suffix.lower()
+                if suffix not in {".png", ".jpg", ".jpeg", ".webp"}:
+                    suffix = ".png"
+                image_target = image_folder / f"scene_{scene_no:02d}{suffix}"
+                source.seek(0)
+                image_target.write_bytes(source.getbuffer())
+
+            narration = narrations[scene_no - 1] if scene_no - 1 < len(narrations) else ""
+            seconds = _sprint194_4_estimate_scene_seconds(narration, tts_speed)
+            clip_target = clip_folder / f"history_{scene_no:02d}.mp4"
+            clip_paths.append(
+                _sprint194_4_render_history_image_clip(
+                    image_target, clip_target, seconds, 30, scene_no
+                )
+            )
+        elif kind in {"video", "existing"}:
+            clip_paths.append(_render_video(source, scene_no))
+        else:
+            raise RuntimeError(f"history_scene_source_unsupported: scene={scene_no}")
+
+    print(
+        "[Sprint194-51 History Mixed Sources] READY",
+        {
+            "project_id": project_id,
+            "expected": expected,
+            "clips": len(clip_paths),
+            "source_types": source_types,
+        },
+        flush=True,
+    )
+    return clip_paths
 
 
 def pipeline_result_path(project):
@@ -1074,6 +1824,7 @@ def run_project_pipeline(
     cta_product_logo_text="",
     voice_audio_path="",
     bgm_audio_path="",
+    bgm_volume_percent=10,
     voice_name="지안",
     voice_id="",
     typecast_api_key="",
@@ -1168,6 +1919,7 @@ def run_project_pipeline(
             cta_product_logo_text=cta_product_logo_text,
             voice_audio_path=voice_audio_path,
             bgm_audio_path=bgm_audio_path,
+            bgm_volume_percent=bgm_volume_percent,
             voice_name=voice_name,
             voice_id=voice_id,
             typecast_api_key=typecast_api_key,
@@ -1216,6 +1968,7 @@ def _run_project_pipeline_impl(
     cta_product_logo_text="",
     voice_audio_path="",
     bgm_audio_path="",
+    bgm_volume_percent=10,
     voice_name="지안",
     voice_id="",
     typecast_api_key="",
@@ -1244,7 +1997,31 @@ def _run_project_pipeline_impl(
     if product_image_path and product_image_path not in product_image_paths:
         product_image_paths.insert(0, product_image_path)
     product_image_path = product_image_paths[0] if product_image_paths else ""
-    viral_video_sources = [str(item).strip() for item in list(viral_video_sources or []) if str(item).strip()][:10]
+    # Sprint194-12: 쇼핑 모드는 기존 최대 10개 소스 제한을 유지하지만,
+    # 역사쿠키는 장면 이미지/MP4가 최대 25장까지 필요하므로 10개로 자르지 않습니다.
+    _raw_viral_video_sources_194_12 = [
+        str(item).strip()
+        for item in list(viral_video_sources or [])
+        if str(item).strip()
+    ]
+    _history_mode_194_12_ui = str(channel_type or "").strip().lower() in {
+        "history", "history_ko", "history_en"
+    }
+    viral_video_sources = (
+        _raw_viral_video_sources_194_12[:25]
+        if _history_mode_194_12_ui
+        else _raw_viral_video_sources_194_12[:10]
+    )
+    print(
+        "[Sprint194-12 History Scene Pass Through]",
+        {
+            "history_mode": _history_mode_194_12_ui,
+            "input_count": len(_raw_viral_video_sources_194_12),
+            "passed_count": len(viral_video_sources),
+            "cap": 25 if _history_mode_194_12_ui else 10,
+        },
+        flush=True,
+    )
 
     print(
         "[Sprint72-1] Review Images:",
@@ -1320,6 +2097,7 @@ def _run_project_pipeline_impl(
         cta_product_logo_text=cta_product_logo_text,
         voice_audio_path=voice_audio_path,
         bgm_audio_path=bgm_audio_path,
+        bgm_volume_percent=bgm_volume_percent,
         voice_name=voice_name,
         voice_id=voice_id,
         typecast_api_key=typecast_api_key,
@@ -2706,16 +3484,204 @@ def _render_ai_image_review(project, result):
 
 
 def show_one_click_pipeline():
-    st.title("⚡ Gemini 쇼츠 원클릭")
-    st.caption("수동 업로드한 Gemini 영상들을 빠르게 연결하고 지안 TTS·자막·BGM·효과음을 적용합니다.")
+    # Sprint194-6: 이전 작업 불러오기는 위젯 생성 뒤 session_state를 수정하면
+    # StreamlitAPIException이 발생합니다. 클릭 시 preset을 pending으로 저장하고
+    # rerun한 다음, 이 지점(어떤 위젯도 생성되기 전)에서 안전하게 복원합니다.
+    pending_preset = st.session_state.pop("sprint194_6_pending_preset", None)
+    _restore_intent_194_45 = st.session_state.pop("sprint194_45_restore_intent", None)
+    if isinstance(pending_preset, dict) and pending_preset:
+        _sprint193_29_apply_preset_to_session(pending_preset)
+        # Sprint194-45: loading a Korean source project must not overwrite the user's
+        # current History Cookie language choice. If English was selected before Load,
+        # keep English selected after the rerun so Oliver/localized render stay active.
+        if isinstance(_restore_intent_194_45, dict):
+            _intent_content_194_45 = str(_restore_intent_194_45.get("content_mode") or "").strip()
+            _intent_lang_194_45 = str(_restore_intent_194_45.get("history_language") or "").strip()
+            if _intent_content_194_45 in {"shopping", "history"}:
+                st.session_state["sprint194_25_content_mode"] = _intent_content_194_45
+            if _intent_lang_194_45 in {"ko", "en"}:
+                st.session_state["sprint194_25_history_language"] = _intent_lang_194_45
+            print("[Sprint194-45 Previous Work Restore Intent] PRESERVED", {
+                "content_mode": st.session_state.get("sprint194_25_content_mode"),
+                "history_language": st.session_state.get("sprint194_25_history_language"),
+                "source_preset_mode": str(pending_preset.get("production_mode") or pending_preset.get("channel_type") or "shopping"),
+            }, flush=True)
+        print(
+            "[Sprint194-6 Previous Work Restore] APPLIED BEFORE WIDGETS",
+            {
+                "project_id": str(pending_preset.get("project_id") or ""),
+                "production_mode": str(pending_preset.get("production_mode") or pending_preset.get("channel_type") or "shopping"),
+                "clip_count": len(list(pending_preset.get("gemini_clip_paths") or [])),
+                "subtitle_count": len(list(pending_preset.get("clip_subtitles") or [])),
+                "narration_count": len(list(pending_preset.get("clip_narrations") or [])),
+            },
+            flush=True,
+        )
+
+    # Sprint194-26: English auto-localization is an explicit user intent.
+    # Apply a one-shot language switch BEFORE widgets are created so a rerun cannot
+    # fall back to the Korean preset value after the localization button is clicked.
+    _pending_history_language = st.session_state.pop("sprint194_26_pending_history_language", "")
+    if _pending_history_language in {"ko", "en"}:
+        st.session_state["sprint194_25_history_language"] = _pending_history_language
+        print("[Sprint194-26 History Language Intent] APPLIED", {
+            "language": _pending_history_language,
+            "before_widgets": True,
+        }, flush=True)
+
+    st.title("⚡ 쇼츠 원클릭")
+    st.caption("쇼핑 쇼츠는 Gemini 영상을, 역사 쇼츠는 장면 이미지를 사용해 TTS·자막·BGM·효과음을 적용합니다.")
     st.caption(f"UI 버전: {UI_VERSION}")
 
+    st.markdown("### 🎯 제작 모드")
+    # Sprint194-25: keep a permanently stable widget tree.
+    # The old single radio had three values (shopping/history_ko/history_en).
+    # Chrome/Streamlit repeatedly hit React removeChild while swapping Korean/English.
+    # Separate content type and language into two widgets that are ALWAYS rendered.
+    _content_mode = st.radio(
+        "쇼츠 종류",
+        options=["shopping", "history"],
+        format_func=lambda value: {"shopping": "🛍️ 쇼핑 쇼츠", "history": "🍪 역사쿠키"}[value],
+        horizontal=True,
+        key="sprint194_25_content_mode",
+    )
+    _history_language = st.radio(
+        "역사쿠키 언어",
+        options=["ko", "en"],
+        format_func=lambda value: {"ko": "🇰🇷 한국어", "en": "🇺🇸 English"}[value],
+        horizontal=True,
+        key="sprint194_25_history_language",
+    )
+    is_history_mode = _content_mode == "history"
+    production_mode = (f"history_{_history_language}" if is_history_mode else "shopping")
+    _history_mode_info = (
+        "🌍 History Cookie English: 한국어 장면을 불러온 뒤 영어 자동 현지화로 영어 자막·나레이션을 생성하고 별도 MP4를 제작합니다."
+        if production_mode == "history_en"
+        else (
+            "🍪 역사 쇼츠 모드: 장면 이미지 1~25장 + 장면별 나레이션/자막/SFX를 넣어 최종 9:16 MP4를 제작합니다."
+            if is_history_mode
+            else "🛍️ 쇼핑 쇼츠 모드: 기존 쇼핑 원클릭 흐름을 그대로 사용합니다."
+        )
+    )
+    _history_mode_caption = (
+        "영어는 미국 Shorts용으로 자연스럽게 현지화하며 장면 수·순서·이미지·모션·SFX·BGM은 그대로 유지합니다."
+        if production_mode == "history_en"
+        else (
+            "쇼핑용 리뷰·평점·상품 CTA는 사용하지 않습니다. 한국어 기본 성우는 기존 설정을 유지합니다."
+            if is_history_mode
+            else "역사쿠키 언어 선택은 쇼핑 모드에서는 무시됩니다."
+        )
+    )
+    # Always render both slots so language changes update text only.
+    st.info(_history_mode_info)
+    st.caption(_history_mode_caption)
+    print("[Sprint194-25 Stable Language State]", {
+        "content_mode": _content_mode,
+        "history_language": _history_language,
+        "production_mode": production_mode,
+        "stable_dom": True,
+    }, flush=True)
+
     st.markdown("### 📂 이전 작업 불러오기")
-    recent_presets = _sprint193_29_recent_edit_presets(limit=30)
+    # Sprint194-49B: 역사쿠키 이전 작업은 ExistingProjectLoader의
+    # 소재별/언어별 최신본을 기준으로 구성합니다.
+    if is_history_mode:
+        _all_recent_presets = _sprint193_29_recent_edit_presets(limit=5000)
+        _preset_by_project = {
+            str(item.get("project_id") or "").strip(): item
+            for item in _all_recent_presets
+        }
+        _allowed_languages = {"ko", "en"} if production_mode == "history_en" else {"ko"}
+        _history_records = ExistingProjectLoader().discover(limit=5000)
+        recent_presets = []
+
+        for _record in _history_records:
+            _meta = dict(_record.get("metadata") or {})
+            if str(_meta.get("content_type") or "").strip().lower() != "history":
+                continue
+
+            _lang = str(
+                _meta.get("language")
+                or _meta.get("history_language")
+                or _meta.get("lang")
+                or ""
+            ).strip().lower()
+            if _lang not in {"ko", "en"}:
+                _lang = "en" if str(_meta.get("production_mode") or "").strip().lower() == "history_en" else "ko"
+            if _lang not in _allowed_languages:
+                continue
+
+            _pid = str(_record.get("project_id") or "").strip()
+            if not _pid:
+                continue
+
+            # edit_preset이 있으면 사용자가 저장한 이름/설정을 그대로 우선 사용합니다.
+            _preset = _preset_by_project.get(_pid)
+            if _preset:
+                _preset = dict(_preset)
+                _preset["history_language"] = _lang
+                recent_presets.append(_preset)
+                continue
+
+            # 최신 history_direct 프로젝트가 edit_preset 목록에 없더라도 버리지 않습니다.
+            _clip_folder = Path("assets/gemini_clips") / f"project_{_pid}"
+            _clip_paths = []
+            if _clip_folder.exists():
+                _clip_paths = [
+                    str(_p) for _p in sorted(_clip_folder.iterdir(), key=_sprint194_5_scene_sort_key)
+                    if _p.is_file() and _p.suffix.lower() in SUPPORTED_VIRAL_VIDEO_SUFFIXES
+                ]
+
+            _sidecar = Path("assets/products") / f"project_{_pid}" / "clip_subtitles.json"
+            _legacy = _sprint193_29_legacy_payload(_pid, _sidecar, _clip_paths)
+            _loader_name = str(
+                _meta.get("display_name")
+                or _meta.get("product_name")
+                or _meta.get("title")
+                or _record.get("display_name")
+                or ""
+            ).strip()
+            if _loader_name and str(_legacy.get("product_name") or "").startswith("프로젝트 "):
+                _legacy["product_name"] = _loader_name
+
+            recent_presets.append({
+                "path": str(_sidecar),
+                "project_id": _pid,
+                "product_name": str(_legacy.get("product_name") or _loader_name or f"프로젝트 {_pid}"),
+                "saved_at": "",
+                "mtime": 0.0,
+                "clip_count": len(_clip_paths),
+                "recovered": True,
+                "legacy_payload": _legacy,
+                "history_language": _lang,
+            })
+
+        print(
+            "[Sprint194-50 History Previous Work Latest]",
+            {
+                "allowed_languages": sorted(_allowed_languages),
+                "visible_count": len(recent_presets),
+                "visible": [
+                    {
+                        "project_id": str(_x.get("project_id") or ""),
+                        "product_name": str(_x.get("product_name") or ""),
+                    }
+                    for _x in recent_presets
+                ],
+            },
+            flush=True,
+        )
+    else:
+        recent_presets = _sprint193_29_recent_edit_presets(limit=30)
+
     if recent_presets:
         preset_options = ["선택 안 함"] + [
             (
-                f"{item['product_name']} · 프로젝트 {item['project_id']} · 영상 {item['clip_count']}개"
+                (
+                    ("[영어] " if str(item.get("history_language") or "").lower() == "en" else "[한글] ")
+                    if is_history_mode else ""
+                )
+                + f"{item['product_name']} · 프로젝트 {item['project_id']} · 영상 {item['clip_count']}개"
                 + (" · 기존작업 복구" if item.get("recovered") else "")
             )
             for item in recent_presets
@@ -2773,16 +3739,25 @@ def show_one_click_pipeline():
 
                 if isinstance(preset, dict) and preset:
                     preset["_preset_path"] = str(selected_meta.get("path") or "")
-                    _sprint193_29_apply_preset_to_session(preset)
+                    # Sprint194-6: 현재 run에서 제작 모드 위젯이 이미 만들어졌으므로
+                    # 여기서 직접 session_state를 수정하지 않습니다. 다음 rerun 시작 전에 적용합니다.
+                    st.session_state["sprint194_6_pending_preset"] = dict(preset)
+                    # Sprint194-45: remember what the user selected BEFORE loading.
+                    # The source preset can be Korean while the requested output is English.
+                    st.session_state["sprint194_45_restore_intent"] = {
+                        "content_mode": str(_content_mode or ""),
+                        "history_language": str(_history_language or ""),
+                    }
                     st.session_state["sprint193_29_preset_loaded_notice"] = (
                         f"{selected_meta['product_name']} 설정을 불러왔습니다."
                     )
                     print(
-                        "[Sprint193-29 Edit Preset] LOADED",
+                        "[Sprint194-6 Previous Work Restore] QUEUED",
                         {
                             "path": selected_meta.get("path"),
                             "project_id": selected_meta["project_id"],
                             "clip_count": selected_meta["clip_count"],
+                            "production_mode": str(preset.get("production_mode") or preset.get("channel_type") or "shopping"),
                             "legacy_recovered": bool(selected_meta.get("recovered")),
                         },
                         flush=True,
@@ -2800,6 +3775,7 @@ def show_one_click_pipeline():
                     "sprint193_29_loaded_clip_paths",
                     "sprint193_29_loaded_preset_path",
                     "sprint193_29_loaded_project_id",
+                    "sprint194_6_pending_preset",
                 }
             ]
             for key in keys_to_clear:
@@ -2818,11 +3794,16 @@ def show_one_click_pipeline():
     st.markdown('<div class="exact-title">영상만 제작</div>', unsafe_allow_html=True)
     top_create_slot = st.empty()
 
-    st.markdown("""<div class="mini-grid">상품명 │ 평점 │ 리뷰수 │ 대표이미지 │ 오디오 │ BGM │ 자막 │ 나레이션 │ 자막효과 │ 사운드효과 │ 장면속도</div><div class="mini-grid">Gemini 영상 수동 업로드 1~10 · 영상별 자막 / 나레이션 / 자막효과 / 사운드효과 한 줄 편집</div>""",unsafe_allow_html=True)
+    st.markdown(
+        ("""<div class="mini-grid">역사 주제 │ 캐릭터 기준이미지 │ 장면이미지 │ 오디오 │ BGM │ 자막 │ 나레이션 │ 자막효과 │ 사운드효과 │ 장면속도</div><div class="mini-grid">역사 장면 이미지 최대 25장 · 이미지 → 9:16 영상 자동 변환 · 장면별 자막/나레이션/SFX/속도 편집</div>"""
+         if is_history_mode else
+         """<div class="mini-grid">상품명 │ 평점 │ 리뷰수 │ 대표이미지 │ 오디오 │ BGM │ 자막 │ 나레이션 │ 자막효과 │ 사운드효과 │ 장면속도</div><div class="mini-grid">Gemini 영상 수동 업로드 1~10 · 영상별 자막 / 나레이션 / 자막효과 / 사운드효과 한 줄 편집</div>"""),
+        unsafe_allow_html=True,
+    )
 
     product_name = st.text_input(
-        "상품명",
-        placeholder="예: 미끄럼 방지 EVA 욕실화",
+        "역사 주제" if is_history_mode else "상품명",
+        placeholder=("예: 조선 코끼리 유배 사건" if is_history_mode else "예: 미끄럼 방지 EVA 욕실화"),
         key="sprint172_product_name",
     )
     # Sprint191-4: 별도 후킹 입력란 제거.
@@ -2846,39 +3827,36 @@ def show_one_click_pipeline():
     video_cta_platform = "none"
     cta_text = ""
 
-    st.markdown("#### 제품 대표이미지")
+    st.markdown("#### 기준 이미지 (선택)" if is_history_mode else "#### 제품 대표이미지")
     hook_product_image = st.file_uploader(
-        "제품 대표 이미지 (선택)",
+        "역사 캐릭터/대표 이미지 (선택)" if is_history_mode else "제품 대표 이미지 (선택)",
         type=["png", "jpg", "jpeg", "webp"],
         accept_multiple_files=False,
         key="sprint189_hook_product_image",
         help="첫 신뢰 후킹 장면의 제품 배경으로 사용합니다. 후킹 배경의 실제 표시 강도는 영상 파이프라인에서 적용됩니다.",
     )
-    st.caption("대표 이미지를 올리지 않으면 첫 Gemini 영상 프레임을 자동으로 사용합니다.")
+    st.caption("이 이미지는 캐릭터 일관성 기준용입니다. 실제 영상 장면은 아래 역사 장면 이미지에서 선택합니다." if is_history_mode else "대표 이미지를 올리지 않으면 첫 Gemini 영상 프레임을 자동으로 사용합니다.")
 
     # Sprint193-8: 최근 한 달 구매수 입력은 제거합니다.
     # 현재 쇼핑 후킹은 리뷰수 + 평점 기준으로 고정합니다.
     monthly_purchase_count = 0
-    st.markdown("#### 평점 · 리뷰수")
-    trust_c1, trust_c2 = st.columns(2)
-    with trust_c1:
-        rating = st.number_input(
-            "평점",
-            min_value=0.0,
-            max_value=5.0,
-            value=4.8,
-            step=0.1,
-            format="%.1f",
-            key="sprint178_rating",
-        )
-    with trust_c2:
-        declared_review_count = st.number_input(
-            "리뷰 수",
-            min_value=0,
-            value=0,
-            step=1,
-            key="sprint178_declared_review_count",
-        )
+    if is_history_mode:
+        declared_review_count = 0
+        rating = 0.0
+        st.caption("역사 모드에서는 쇼핑용 평점·리뷰 신뢰 후킹을 사용하지 않습니다.")
+    else:
+        st.markdown("#### 평점 · 리뷰수")
+        trust_c1, trust_c2 = st.columns(2)
+        with trust_c1:
+            rating = st.number_input(
+                "평점", min_value=0.0, max_value=5.0, value=4.8, step=0.1,
+                format="%.1f", key="sprint178_rating",
+            )
+        with trust_c2:
+            declared_review_count = st.number_input(
+                "리뷰 수", min_value=0, value=0, step=1,
+                key="sprint178_declared_review_count",
+            )
 
     # Sprint193-4: 구매수 유무에 따라 신뢰 후킹 문구를 자동 분기합니다.
     # 구매수가 없으면 리뷰 수를 첫 줄에 배치하고, 평점은 질문형으로 연결합니다.
@@ -2901,11 +3879,19 @@ def show_one_click_pipeline():
         st.info(auto_hook_text)
 
     hook_text = st.text_area(
-        "후킹멘트",
+        "역사 후킹멘트" if is_history_mode else "후킹멘트",
         height=78,
-        placeholder="예: 양치할 때 아직도 손으로 물 받아 쓰세요?",
+        placeholder=(
+            "예: 조선시대에 코끼리가 유배를 갔다?!"
+            if is_history_mode
+            else "예: 양치할 때 아직도 손으로 물 받아 쓰세요?"
+        ),
         key="sprint193_9_hook_phrase",
-        help="신뢰 후킹 다음, 첫 Gemini 영상 시작 시 표시·나레이션될 후킹 문장입니다.",
+        help=(
+            "구독 요청이 아니라, 사건에서 가장 궁금한 사실을 첫 문장으로 넣습니다."
+            if is_history_mode
+            else "신뢰 후킹 다음, 첫 Gemini 영상 시작 시 표시·나레이션될 후킹 문장입니다."
+        ),
     )
 
     st.markdown("#### 성우 · 오디오 · BGM")
@@ -2966,7 +3952,44 @@ def show_one_click_pipeline():
 
     _voice_choices = _typecast_voice_choices(typecast_api_key)
     _voice_labels = [name for name, _ in _voice_choices]
+
+    # Sprint194-22: History Cookie English uses Oliver as the channel voice.
+    # Typecast may expose the display name as Aaron / 에런 / 애런, so resolve by name
+    # from the already-authenticated voices_v2() list and keep the actual voice_id.
+    def _sprint194_41_find_oliver_voice(choices):
+        aliases = ("oliver", "올리버")
+        normalized = []
+        for _name, _vid in list(choices or []):
+            _label = str(_name or "").strip()
+            _low = _label.casefold()
+            _rank = None
+            if _low in aliases:
+                _rank = 0
+            elif any(_alias in _low for _alias in aliases):
+                _rank = 1
+            if _rank is not None and str(_vid or "").strip():
+                normalized.append((_rank, _label, str(_vid).strip()))
+        normalized.sort(key=lambda row: (row[0], len(row[1]), row[1]))
+        return (normalized[0][1], normalized[0][2]) if normalized else ("", "")
+
+    _oliver_voice_name, _oliver_voice_id = _sprint194_41_find_oliver_voice(_voice_choices)
+    # Sprint194-23: never mutate the selectbox's saved/default value merely because the
+    # language radio changed.  Oliver is applied only to the internal English TTS values
+    # after the stable voice widget has been rendered.
     _saved_voice_name = str(_saved_typecast.get("last_voice_name") or "지안")
+    if production_mode == "history_en" and _oliver_voice_name and _oliver_voice_id:
+        print("[Sprint194-23 English Stable Voice] FOUND", {
+            "voice_name": _oliver_voice_name,
+            "voice_id_present": True,
+            "voice_count": len(_voice_choices),
+            "widget_value_preserved": True,
+        }, flush=True)
+    elif production_mode == "history_en":
+        print("[Sprint194-23 English Stable Voice] NOT_FOUND", {
+            "aliases": ["Oliver", "올리버"],
+            "voice_count": len(_voice_choices),
+            "widget_value_preserved": True,
+        }, flush=True)
     _default_voice_index = (
         _voice_labels.index(_saved_voice_name)
         if _saved_voice_name in _voice_labels
@@ -2992,12 +4015,27 @@ def show_one_click_pipeline():
             index=_filtered_default_index,
             key="sprint193_19_voice_select",
         )
-        selected_voice_id = dict(_voice_choices).get(selected_voice_name, "")
-        if selected_voice_name != _saved_voice_name or selected_voice_id != str(_saved_typecast.get("last_voice_id") or ""):
+        _widget_voice_name = selected_voice_name
+        _widget_voice_id = dict(_voice_choices).get(_widget_voice_name, "")
+        selected_voice_id = _widget_voice_id
+        _auto_voice_message = "현재 선택 성우를 사용합니다."
+        if production_mode == "history_en" and _oliver_voice_name and _oliver_voice_id:
+            selected_voice_name = _oliver_voice_name
+            selected_voice_id = _oliver_voice_id
+            _auto_voice_message = f"🌍 English 자동 성우: {selected_voice_name} · Typecast voice_id 자동 적용"
+        elif production_mode == "history_en" and typecast_api_key:
+            _auto_voice_message = "🌍 올리버 자동 검색 실패 · 현재 선택 성우를 영어 TTS에 사용합니다."
+        elif production_mode == "history_ko":
+            _auto_voice_message = f"🍪 한국어 성우: {_widget_voice_name}"
+        st.caption(_auto_voice_message)
+
+        # Persist only what the user chose in the stable widget.  Do not overwrite the
+        # Korean saved voice with Oliver just because English mode was viewed.
+        if _widget_voice_name != _saved_voice_name or _widget_voice_id != str(_saved_typecast.get("last_voice_id") or ""):
             TypecastSettingsStore.save({
                 "api_key": typecast_api_key,
-                "last_voice_name": selected_voice_name,
-                "last_voice_id": selected_voice_id,
+                "last_voice_name": _widget_voice_name,
+                "last_voice_id": _widget_voice_id,
             })
     else:
         selected_voice_name = _saved_voice_name
@@ -3011,6 +4049,13 @@ def show_one_click_pipeline():
         "voice_id_present": bool(selected_voice_id),
         "voice_count": len(_voice_choices),
     }, flush=True)
+    if production_mode == "history_en":
+        print("[Sprint194-45 English Voice Lock]", {
+            "production_mode": production_mode,
+            "voice_name": selected_voice_name,
+            "is_oliver": str(selected_voice_name or "").strip().casefold() in {"oliver", "올리버"},
+            "voice_id_present": bool(selected_voice_id),
+        }, flush=True)
 
     uploaded_voice_audio = st.file_uploader(
         "TTS 음성 파일 직접 업로드 (선택)",
@@ -3024,6 +4069,10 @@ def show_one_click_pipeline():
         accept_multiple_files=False,
         key="sprint173_bgm_audio",
     )
+    restored_bgm_audio_path_194_55 = str(st.session_state.get("sprint194_55_restored_bgm_audio_path") or "").strip()
+    if uploaded_bgm_audio is None and restored_bgm_audio_path_194_55 and Path(restored_bgm_audio_path_194_55).is_file():
+        st.caption(f"🎵 기존 BGM 자동 사용: {restored_bgm_audio_path_194_55}")
+        print("[Sprint194-55 History BGM Restore] READY", {"path": restored_bgm_audio_path_194_55, "exists": True}, flush=True)
 
     audio_c1, audio_c2, audio_c3 = st.columns(3)
     with audio_c1:
@@ -3047,6 +4096,19 @@ def show_one_click_pipeline():
             format="%.1f배",
             key="sprint193_1_tts_speed",
         )
+    # Sprint194-41: English History Cookie uses a slightly brisker Oliver delivery.
+    # The visible/saved slider and Korean voice speed remain untouched.
+    _effective_tts_speech_speed_194_41 = (
+        max(1.1, float(tts_speech_speed or 1.0)) if production_mode == "history_en"
+        else float(tts_speech_speed or 1.0)
+    )
+    if production_mode == "history_en":
+        print("[Sprint194-41 English Oliver Voice] READY", {
+            "voice_name": selected_voice_name,
+            "speed": _effective_tts_speech_speed_194_41,
+            "korean_setting_untouched": True,
+        }, flush=True)
+
     with audio_c3:
         bgm_volume_percent = st.slider(
             "BGM 볼륨",
@@ -3058,29 +4120,171 @@ def show_one_click_pipeline():
             key="sprint193_1_bgm_volume",
         )
 
-    st.markdown("#### Gemini 영상수동업로드 · 1~10")
-    uploaded_gemini_clips = st.file_uploader(
-        "편집 순서대로 영상 선택",
-        type=["mp4", "mov", "mkv", "webm", "m4v"],
-        accept_multiple_files=True,
-        key="sprint172_gemini_clips",
-    )
+    uploaded_history_scene_images = []
+    history_scene_overrides = {}
+    history_scene_source_map = {}
+    history_missing_scene_ids = []
+    history_new_source_supplied = False
+    uploaded_gemini_clips = []
+    history_expected_scene_count = 0
+
+    if is_history_mode:
+        st.info("🎨 역사쿠키 장면 소스: 각 장면마다 이미지 또는 영상을 선택할 수 있습니다.")
+        history_expected_scene_count = st.number_input(
+            "이번 영상의 장면 수",
+            min_value=1,
+            max_value=25,
+            value=17,
+            step=1,
+            key="sprint194_5_expected_history_scene_count",
+            help="17컷 영상이면 17로 두세요.",
+        )
+
+        st.markdown("#### 역사 장면 이미지 일괄 업로드 · 선택")
+        primary_history_images = st.file_uploader(
+            "편집 순서대로 장면 이미지 선택",
+            type=["png", "jpg", "jpeg", "webp"],
+            accept_multiple_files=True,
+            key="sprint194_2_history_scene_images",
+            help="1.png~17.png처럼 번호를 붙이면 자동으로 장면 번호를 인식합니다.",
+        )
+        extra_history_images = st.file_uploader(
+            "누락 이미지 추가 (선택)",
+            type=["png", "jpg", "jpeg", "webp"],
+            accept_multiple_files=True,
+            key="sprint194_5_history_scene_images_extra",
+            help="같은 장면 번호를 다시 올리면 아래 장면별 교체에서 최종 선택할 수 있습니다.",
+        )
+        uploaded_history_scene_images = _sprint194_5_merge_history_uploads(
+            primary_history_images, extra_history_images
+        )
+
+        with st.expander("🎬 장면별 이미지 / 영상 교체", expanded=False):
+            st.caption(
+                "원하는 장면만 새 파일을 선택하세요. 이미지(PNG/JPG/WEBP)와 영상(MP4/MOV 등) 모두 가능합니다. "
+                "이전 작업을 불러온 상태라면 선택하지 않은 장면은 기존 장면을 그대로 유지합니다."
+            )
+            for _scene_no_194_51 in range(1, int(history_expected_scene_count) + 1):
+                _override_194_51 = st.file_uploader(
+                    f"{_scene_no_194_51}번 장면 소스",
+                    type=["png", "jpg", "jpeg", "webp", "mp4", "mov", "mkv", "webm", "m4v"],
+                    accept_multiple_files=False,
+                    key=f"sprint194_51_history_scene_source_{_scene_no_194_51}",
+                    help="이미지 또는 영상 중 하나를 선택하면 이 장면만 교체됩니다. 영상 오디오는 제거됩니다.",
+                )
+                if _override_194_51 is not None:
+                    history_scene_overrides[_scene_no_194_51] = _override_194_51
+                    _kind_194_51 = _sprint194_51_history_source_kind(_override_194_51)
+                    st.caption(
+                        f"→ {_scene_no_194_51}번: "
+                        + ("영상 사용" if _kind_194_51 == "video" else "이미지 사용")
+                        + f" · {getattr(_override_194_51, 'name', '')}"
+                    )
+    else:
+        st.markdown("#### Gemini 영상수동업로드 · 1~10")
+        uploaded_gemini_clips = st.file_uploader(
+            "편집 순서대로 영상 선택",
+            type=["mp4", "mov", "mkv", "webm", "m4v"],
+            accept_multiple_files=True,
+            key="sprint172_gemini_clips",
+        )
+
     loaded_gemini_clip_paths = [
         str(item or "").strip()
         for item in list(st.session_state.get("sprint193_29_loaded_clip_paths") or [])
         if str(item or "").strip() and Path(str(item)).is_file()
     ]
-    if uploaded_gemini_clips:
-        editor_clip_sources = list(uploaded_gemini_clips)
-        loaded_gemini_clip_paths = []
-        st.session_state["sprint193_29_loaded_clip_paths"] = []
-        st.caption("새로 업로드한 영상 목록의 순서대로 연결합니다. 기존 불러온 영상 대신 새 영상을 사용합니다.")
-    else:
-        editor_clip_sources = list(loaded_gemini_clip_paths)
-        if loaded_gemini_clip_paths:
-            st.success(f"이전 작업의 Gemini 영상 {len(loaded_gemini_clip_paths)}개를 다시 사용합니다. 영상 재업로드가 필요 없습니다.")
+
+    if is_history_mode:
+        _target_count_194_51 = int(history_expected_scene_count or 0)
+        loaded_gemini_clip_paths = _sprint194_52_lock_history_clip_order(
+            loaded_gemini_clip_paths, _target_count_194_51
+        )
+        # Keep the corrected canonical order in session state so every later path uses it.
+        st.session_state["sprint193_29_loaded_clip_paths"] = list(loaded_gemini_clip_paths)
+
+        # 1) 이전 작업 장면을 fallback으로 먼저 채웁니다.
+        for _idx_194_51, _path_194_51 in enumerate(loaded_gemini_clip_paths, start=1):
+            _saved_scene_no_194_52 = _sprint194_52_history_scene_no_from_path(_path_194_51)
+            _scene_key_194_52 = int(_saved_scene_no_194_52 or _idx_194_51)
+            if 1 <= _scene_key_194_52 <= _target_count_194_51:
+                history_scene_source_map[_scene_key_194_52] = _path_194_51
+
+        # 2) 일괄 업로드 이미지는 해당 장면을 교체합니다.
+        for _fallback_194_51, _img_194_51 in enumerate(uploaded_history_scene_images, start=1):
+            _nm_194_51 = str(getattr(_img_194_51, "name", "") or "")
+            _m_194_51 = re.search(r"(\d+)", Path(_nm_194_51).stem)
+            _scene_no_194_51 = int(_m_194_51.group(1)) if _m_194_51 else int(_fallback_194_51)
+            if 1 <= _scene_no_194_51 <= _target_count_194_51:
+                history_scene_source_map[_scene_no_194_51] = _img_194_51
+
+        # 3) 장면별 선택이 최우선입니다.
+        history_scene_source_map.update(history_scene_overrides)
+        history_new_source_supplied = bool(uploaded_history_scene_images or history_scene_overrides)
+
+        history_missing_scene_ids = [
+            _n_194_51
+            for _n_194_51 in range(1, _target_count_194_51 + 1)
+            if _n_194_51 not in history_scene_source_map
+        ]
+
+        editor_clip_sources = [
+            history_scene_source_map[_n_194_51]
+            for _n_194_51 in range(1, _target_count_194_51 + 1)
+            if _n_194_51 in history_scene_source_map
+        ]
+
+        if history_scene_source_map:
+            _source_summary_194_51 = {
+                _n: _sprint194_51_history_source_kind(_src)
+                for _n, _src in history_scene_source_map.items()
+            }
+            st.caption(
+                f"장면 소스 감지: {len(history_scene_source_map)}/{_target_count_194_51}"
+                + (
+                    f" · 누락: {', '.join(map(str, history_missing_scene_ids))}"
+                    if history_missing_scene_ids else ""
+                )
+            )
+            print(
+                "[Sprint194-51 History Scene Source Map]",
+                {
+                    "expected": _target_count_194_51,
+                    "loaded_fallbacks": len(loaded_gemini_clip_paths),
+                    "bulk_images": len(uploaded_history_scene_images),
+                    "overrides": sorted(history_scene_overrides.keys()),
+                    "missing": history_missing_scene_ids,
+                    "source_types": _source_summary_194_51,
+                },
+                flush=True,
+            )
+
+        if history_new_source_supplied and not history_missing_scene_ids:
+            st.success("선택한 장면만 교체하고 나머지 장면은 기존 소스를 유지합니다.")
+        elif history_missing_scene_ids and history_new_source_supplied:
+            st.error(
+                "새 장면 소스를 적용하려면 전체 장면이 연결되어야 합니다. "
+                f"현재 누락 장면: {', '.join(map(str, history_missing_scene_ids))}"
+            )
+        elif loaded_gemini_clip_paths:
+            st.success(f"이전 작업의 역사 장면 {len(editor_clip_sources)}개를 다시 사용합니다.")
         else:
-            st.caption("업로드 목록의 순서대로 연결합니다. Gemini 영상의 기존 BGM과 음향은 자동 제거됩니다.")
+            st.caption("이미지를 일괄 업로드하거나, 장면별 이미지/영상을 선택하세요.")
+    else:
+        newly_uploaded_sources = list(uploaded_gemini_clips or [])
+        if newly_uploaded_sources:
+            editor_clip_sources = list(newly_uploaded_sources)
+            loaded_gemini_clip_paths = []
+            st.session_state["sprint193_29_loaded_clip_paths"] = []
+            st.caption("새로 업로드한 영상 목록의 순서대로 연결합니다.")
+        else:
+            editor_clip_sources = list(loaded_gemini_clip_paths)
+            if loaded_gemini_clip_paths:
+                st.success(
+                    f"이전 작업의 Gemini 영상 {len(loaded_gemini_clip_paths)}개를 다시 사용합니다. 영상 재업로드가 필요 없습니다."
+                )
+            else:
+                st.caption("업로드 목록의 순서대로 연결합니다. Gemini 영상의 기존 BGM과 음향은 자동 제거됩니다.")
 
     clip_subtitles = []
     clip_narrations = []
@@ -3097,18 +4301,117 @@ def show_one_click_pipeline():
         "highlight_color": "#FFD700",
     }
     if editor_clip_sources:
-        st.markdown("#### 영상별 편집")
+        st.markdown("#### 장면별 편집" if is_history_mode else "#### 영상별 편집")
         st.caption(
-            "영상마다 한 줄에서 자막 · 나레이션 · 자막효과 · 사운드효과를 바로 입력합니다. "
-            "확정 대본이 비어 있으면 입력한 나레이션을 영상 순서대로 합쳐 사용합니다."
+            ("장면마다 한 줄에서 자막 · 나레이션 · 자막효과 · 사운드효과를 바로 입력합니다. "
+             "입력한 나레이션을 장면 순서대로 합쳐 확정 대본으로 사용합니다.")
+            if is_history_mode else
+            ("영상마다 한 줄에서 자막 · 나레이션 · 자막효과 · 사운드효과를 바로 입력합니다. "
+             "확정 대본이 비어 있으면 입력한 나레이션을 영상 순서대로 합쳐 사용합니다.")
         )
 
+        # Sprint194-23: render the same localization controls in both history languages.
+        # Korean mode keeps the button disabled; switching to English changes props/text
+        # only, not the surrounding DOM tree.
+        if is_history_mode:
+            st.markdown("#### 🌍 영어 자동 현지화")
+            _localize_enabled = production_mode == "history_en"
+            st.caption(
+                "한국어판을 불러온 상태에서 누르면 같은 장면 수로 영어 Shorts 자막·나레이션을 자동 생성합니다."
+                if _localize_enabled
+                else "영어 모드로 전환하면 현재 한국어 장면을 자동 현지화할 수 있습니다."
+            )
+            _saved_openai_localization_key = _sprint194_28_load_openai_localization_key()
+            _openai_localization_key = st.text_input(
+                "OpenAI API Key · 영어 현지화 1순위",
+                value=_saved_openai_localization_key,
+                type="password",
+                key="sprint194_28_openai_localization_key",
+                help="한 번 저장하면 영어 역사쿠키 자동 현지화에 재사용합니다. 키가 없으면 Gemini fallback을 사용합니다.",
+            )
+            _key_c1, _key_c2 = st.columns([1, 2])
+            with _key_c1:
+                if st.button("OpenAI Key 저장", key="sprint194_28_save_openai_localization_key", use_container_width=True):
+                    _present = _sprint194_28_save_openai_localization_key(_openai_localization_key)
+                    st.success("OpenAI API Key 저장 완료" if _present else "OpenAI API Key 삭제 완료")
+            with _key_c2:
+                st.caption(
+                    "OpenAI → Gemini 순서로 자동 현지화 · 성공 결과는 캐시되어 다시 API를 호출하지 않습니다."
+                )
+
+            _localize_clicked = st.button(
+                "✨ 영어 버전 자동 생성",
+                use_container_width=True,
+                key="sprint194_24_auto_localize_en",
+                disabled=False,
+            )
+            print("[Sprint194-26 English Auto Localize Button]", {
+                "production_mode": production_mode,
+                "enabled": True,
+                "scene_count": len(editor_clip_sources),
+            }, flush=True)
+            if _localize_clicked:
+                # Sprint194-26: clicking this button itself means "make English".
+                # Do not trust production_mode here because a loaded Korean preset can
+                # momentarily restore the radio state during the button rerun.
+                _requested_language = "en"
+                print("[Sprint194-26 English Auto Localize Intent] CLICKED", {
+                    "ui_production_mode": production_mode,
+                    "requested_language": _requested_language,
+                    "scene_count": len(editor_clip_sources),
+                }, flush=True)
+                _src=[]
+                for _i in range(1, len(editor_clip_sources)+1):
+                    _src.append({
+                        "subtitle": st.session_state.get(f"sprint193_9_clip_subtitle_{_i}", ""),
+                        "narration": st.session_state.get(f"sprint193_9_clip_narration_{_i}", ""),
+                    })
+                if not any(x.get("narration") for x in _src):
+                    st.error("한국어 나레이션이 없습니다. 먼저 한국어 이전 작업을 불러와 주세요.")
+                else:
+                    try:
+                        _localized=_sprint194_21_auto_localize_history_to_english(_src, openai_api_key=_openai_localization_key, project_id=str(st.session_state.get("sprint193_29_loaded_project_id") or ""))
+                        _localized_subtitles_194_30 = []
+                        _localized_narrations_194_30 = []
+                        for _row in _localized:
+                            _i=int(_row["scene"])
+                            _sub_194_30 = str(_row.get("subtitle") or "").strip()
+                            _nar_194_30 = str(_row.get("narration") or "").strip()
+                            st.session_state[f"sprint193_9_clip_subtitle_{_i}"]=_sub_194_30
+                            st.session_state[f"sprint193_9_clip_narration_{_i}"]=_nar_194_30
+                            _localized_subtitles_194_30.append(_sub_194_30)
+                            _localized_narrations_194_30.append(_nar_194_30)
+                        # Sprint194-30: keep a dedicated English render snapshot.
+                        # Widget/preset reruns may restore Korean edit fields; final English render
+                        # must use the localization result, not whatever preset happens to be visible later.
+                        st.session_state["sprint194_30_english_subtitles"] = list(_localized_subtitles_194_30)
+                        st.session_state["sprint194_30_english_narrations"] = list(_localized_narrations_194_30)
+                        st.session_state["sprint194_21_localized_ready"]=True
+                        st.session_state["sprint194_26_pending_history_language"] = "en"
+                        st.session_state["sprint194_23_localized_notice"] = f"영어 {len(_localized)}개 장면 자동 현지화 완료"
+                        print("[Sprint194-26 English Auto Localize Intent] COMPLETED", {
+                            "localized_count": len(_localized),
+                            "next_language": "en",
+                        }, flush=True)
+                        st.rerun()
+                    except Exception as _exc:
+                        print("[Sprint194-21 History Auto Localization] ERROR", repr(_exc), flush=True)
+                        st.error(f"영어 자동 현지화 실패: {_exc}")
+            _localized_notice = str(st.session_state.pop("sprint194_23_localized_notice", "") or "")
+            st.caption(
+                ("✅ " + _localized_notice)
+                if _localized_notice
+                else ("English localization READY" if st.session_state.get("sprint194_21_localized_ready") else "Localization standby")
+            )
+
         st.markdown("#### 자막 스타일")
+        if is_history_mode:
+            st.caption("역사쿠키 자동 연출: 본문은 읽기 쉬운 고딕, 후킹·강조는 굵은 폰트, 핵심 단어는 겨자/금색으로 자동 강조합니다. 장면 의미에 따라 Pop/Fade/Impact와 SFX가 자동 적용됩니다.")
         style_c1, style_c2, style_c3 = st.columns(3)
         with style_c1:
             subtitle_font = st.selectbox(
                 "자막 글씨체",
-                options=["Gmarket Sans Bold", "Noto Sans CJK KR"],
+                options=["Gmarket Sans Bold", "Noto Sans CJK KR", "Malgun Gothic", "Segoe UI", "Arial"],
                 index=0,
                 key="sprint190_9_subtitle_font",
             )
@@ -3181,7 +4484,7 @@ def show_one_click_pipeline():
         header_cols = st.columns([0.7, 2.8, 2.8, 1.15, 1.25, 1.0])
         for col, label in zip(
             header_cols,
-            ["영상", "자막", "나레이션", "자막효과", "사운드효과", "속도"],
+            ["장면" if is_history_mode else "영상", "자막", "나레이션", "자막효과", "사운드효과", "속도"],
         ):
             with col:
                 st.markdown(f"**{label}**")
@@ -3191,8 +4494,8 @@ def show_one_click_pipeline():
                 clip_name = Path(str(uploaded_clip)).name
             else:
                 clip_name = str(
-                    getattr(uploaded_clip, "name", f"영상 {index}")
-                    or f"영상 {index}"
+                    getattr(uploaded_clip, "name", f"장면 {index}" if is_history_mode else f"영상 {index}")
+                    or (f"장면 {index}" if is_history_mode else f"영상 {index}")
                 )
             row_c0, row_c1, row_c2, row_c3, row_c4, row_c5 = st.columns(
                 [0.7, 2.8, 2.8, 1.15, 1.25, 1.0],
@@ -3200,7 +4503,16 @@ def show_one_click_pipeline():
             )
             with row_c0:
                 st.markdown(f"**{index}**")
-                st.caption(clip_name)
+                if is_history_mode:
+                    _kind_194_51 = _sprint194_51_history_source_kind(uploaded_clip)
+                    _label_194_51 = {
+                        "image": "이미지",
+                        "video": "영상",
+                        "existing": "기존 장면",
+                    }.get(_kind_194_51, "장면")
+                    st.caption(f"{clip_name} · {_label_194_51}")
+                else:
+                    st.caption(clip_name)
             with row_c1:
                 subtitle_value = st.text_area(
                     f"영상 {index} 자막",
@@ -3249,6 +4561,71 @@ def show_one_click_pipeline():
             clip_sfx.append(str(sfx_value or "없음").strip())
             clip_playback_speeds.append(0.0 if scene_speed_value == "자동" else float(scene_speed_value or 1.5))
 
+        # Sprint194-47B: a Scene 1 MP4 is visual-source replacement only.
+        # Keep all 1..N editing arrays aligned so Scene 1 still receives subtitle/TTS/effects.
+        if is_history_mode:
+            _edit_count_194_47b = len(editor_clip_sources)
+            _edit_arrays_194_47b = {
+                "subtitles": len(clip_subtitles),
+                "narrations": len(clip_narrations),
+                "subtitle_effects": len(clip_subtitle_effects),
+                "sfx": len(clip_sfx),
+                "speeds": len(clip_playback_speeds),
+            }
+            if any(v != _edit_count_194_47b for v in _edit_arrays_194_47b.values()):
+                raise RuntimeError(
+                    f"history_scene_edit_count_mismatch: scenes={_edit_count_194_47b} arrays={_edit_arrays_194_47b}"
+                )
+            print(
+                "[Sprint194-51 History Scene Edit Preserve]",
+                {
+                    "scene_count": _edit_count_194_47b,
+                    "mixed_overrides": sorted(history_scene_overrides.keys()),
+                    "scene1_subtitle_present": bool(clip_subtitles[0]) if clip_subtitles else False,
+                    "scene1_narration_present": bool(clip_narrations[0]) if clip_narrations else False,
+                    "arrays": _edit_arrays_194_47b,
+                },
+                flush=True,
+            )
+
+        # Sprint194-30: English Render Input Lock.
+        # Never let the final History Cookie English renderer fall back to the Korean preset arrays.
+        if production_mode == "history_en":
+            _en_subs_194_30 = [str(x or "").strip() for x in list(st.session_state.get("sprint194_30_english_subtitles") or [])]
+            _en_nars_194_30 = [str(x or "").strip() for x in list(st.session_state.get("sprint194_30_english_narrations") or [])]
+            _scene_count_194_30 = len(editor_clip_sources)
+            _snapshot_ready_194_30 = (
+                len(_en_subs_194_30) == _scene_count_194_30
+                and len(_en_nars_194_30) == _scene_count_194_30
+                and all(_en_nars_194_30)
+            )
+            if _snapshot_ready_194_30:
+                clip_subtitles = list(_en_subs_194_30)
+                clip_narrations = list(_en_nars_194_30)
+            else:
+                # If the app was restarted after localization, the visible English widget values
+                # are allowed as a recovery source, but Korean leakage is blocked below.
+                _en_subs_194_30 = list(clip_subtitles or [])
+                _en_nars_194_30 = list(clip_narrations or [])
+
+            import re as _re_194_30
+            _hangul_194_30 = _re_194_30.compile(r"[가-힣]")
+            _ko_sub_count_194_30 = sum(bool(_hangul_194_30.search(str(x or ""))) for x in list(clip_subtitles or []))
+            _ko_nar_count_194_30 = sum(bool(_hangul_194_30.search(str(x or ""))) for x in list(clip_narrations or []))
+            print("[Sprint194-30 English Render Input Lock]", {
+                "scene_count": _scene_count_194_30,
+                "snapshot_ready": bool(_snapshot_ready_194_30),
+                "subtitle_count": len(list(clip_subtitles or [])),
+                "narration_count": len(list(clip_narrations or [])),
+                "hangul_subtitles": _ko_sub_count_194_30,
+                "hangul_narrations": _ko_nar_count_194_30,
+                "first_subtitle": str((list(clip_subtitles or [""])+[""])[0])[:90],
+                "first_narration": str((list(clip_narrations or [""])+[""])[0])[:90],
+            }, flush=True)
+            if _ko_sub_count_194_30 or _ko_nar_count_194_30:
+                st.error("영어 영상 렌더 입력에 한국어가 남아 있습니다. '영어 버전 자동 생성'을 한 번 눌러 영어 17개 장면을 만든 뒤 다시 제작해 주세요.")
+                return
+
         narration_script = " ".join(
             item for item in clip_narrations if str(item or "").strip()
         ).strip()
@@ -3256,25 +4633,38 @@ def show_one_click_pipeline():
         if narration_script:
             st.caption("영상별 나레이션을 순서대로 합쳐 내부 확정 대본으로 사용합니다.")
 
-    st.markdown("#### CTA 상단 상품명")
-    cta_product_logo_text = st.text_input(
-        "CTA 상단 로고 자막",
-        value="",
-        placeholder="예: 미소랩 스윙글 워터탭",
-        key="sprint193_25_cta_product_logo_text",
-        help="마지막 수동 CTA 장면 상단에 로고형 상품명 자막으로 표시합니다. 비워두면 표시하지 않습니다.",
-    )
-    st.caption("마지막 CTA 장면에만 표시됩니다. 자동 CTA 문구를 생성하지는 않습니다.")
-
-    c1, c2, c3 = st.columns(3)
-    with c1:
+    if is_history_mode:
+        # Sprint194-3: 역사 모드에는 쇼핑 CTA 상품명 입력을 노출하지 않습니다.
+        cta_product_logo_text = ""
+        channel_type = production_mode
+        st.markdown("#### 채널")
+        st.success(
+            "🍪 역사쿠키 (한국어)"
+            if production_mode == "history_ko"
+            else "🌍 History Cookie (English)"
+        )
+    else:
+        st.markdown("#### CTA 상단 상품명")
+        cta_product_logo_text = st.text_input(
+            "CTA 상단 로고 자막",
+            value="",
+            placeholder="예: 미소랩 스윙글 워터탭",
+            key="sprint193_25_cta_product_logo_text",
+            help="마지막 수동 CTA 장면 상단에 로고형 상품명 자막으로 표시합니다. 비워두면 표시하지 않습니다.",
+        )
+        st.caption("마지막 CTA 장면에만 표시됩니다. 자동 CTA 문구를 생성하지는 않습니다.")
         channel_type = st.selectbox(
             "채널",
             options=["shopping", "standing"],
-            format_func=lambda value: "쇼핑 쇼츠" if value == "shopping" else "일어서기",
+            format_func=lambda value: {
+                "shopping": "쇼핑 쇼츠",
+                "standing": "일어서기",
+            }.get(value, value),
             index=0,
             key="sprint172_channel_type",
         )
+
+    c2, c3 = st.columns(2)
     with c2:
         playback_speed = st.slider(
             "영상 속도",
@@ -3284,7 +4674,7 @@ def show_one_click_pipeline():
             step=0.1,
             format="%.1f배",
             key="sprint176_playback_speed",
-            help="Gemini 원본 영상 속도를 0.5배부터 2.0배까지 직접 조절합니다.",
+            help=("역사 장면의 기본 재생 속도입니다. 장면별 자동맞춤을 선택하면 나레이션 길이에 맞춰 개별 조절됩니다." if is_history_mode else "Gemini 원본 영상 속도를 0.5배부터 2.0배까지 직접 조절합니다."),
         )
     with c3:
         youtube_privacy_status = st.selectbox(
@@ -3329,9 +4719,14 @@ def show_one_click_pipeline():
             {
                 "run_counter": direct_run_counter,
                 "force_run_id": direct_force_run_id,
+                "bgm_volume_percent": int(bgm_volume_percent if bgm_volume_percent is not None else 10),
             },
             flush=True,
         )
+        print("[Sprint194-39 UI BGM Volume] PASS", {
+            "ui_percent": int(bgm_volume_percent if bgm_volume_percent is not None else 10),
+            "history_mode": bool(is_history_mode),
+        }, flush=True)
         if not str(locked_script or "").strip():
             st.error("영상별 나레이션을 한 줄 이상 입력해 주세요.")
             return
@@ -3345,11 +4740,16 @@ def show_one_click_pipeline():
 
         direct_errors = []
         if not str(product_name or "").strip():
-            direct_errors.append("상품명을 입력해 주세요.")
+            direct_errors.append("역사 주제를 입력해 주세요." if is_history_mode else "상품명을 입력해 주세요.")
         if not str(locked_script or "").strip():
             direct_errors.append("확정 대본을 입력해 주세요.")
         if not editor_clip_sources:
-            direct_errors.append("Gemini 영상 파일을 업로드하거나 이전 작업을 불러와 주세요.")
+            direct_errors.append("역사 장면 이미지를 한 장 이상 업로드하거나 이전 작업을 불러와 주세요." if is_history_mode else "Gemini 영상 파일을 업로드하거나 이전 작업을 불러와 주세요.")
+        if is_history_mode and history_new_source_supplied and history_missing_scene_ids:
+            direct_errors.append(
+                "역사 장면 소스가 누락되었습니다: "
+                + ", ".join(map(str, history_missing_scene_ids))
+            )
 
         if direct_errors:
             for error in direct_errors:
@@ -3360,7 +4760,7 @@ def show_one_click_pipeline():
             "coupang_url": "",
             "product_name": product_name.strip(),
             "title": product_name.strip(),
-            "source": "manual_gemini_video_edit_193_27_repeat",
+            "source": ("manual_history_image_edit_194_4" if is_history_mode else "manual_gemini_video_edit_193_27_repeat"),
             "direct_run_id": direct_force_run_id,
             "hook_text": hook_text.strip(),
             "suppress_separate_hook": False,
@@ -3432,14 +4832,26 @@ def show_one_click_pipeline():
             product_target.write_bytes(hook_product_image.getbuffer())
             direct_hook_product_image_path = str(product_target)
 
-        # Gemini 클립 저장 또는 이전 작업 클립 재사용
+        # 역사 이미지는 9:16 MP4 장면으로 변환하고, 쇼핑 모드는 기존 Gemini 클립을 저장합니다.
         direct_folder = (
             Path("assets/gemini_clips")
             / f"project_{safe_project_id(direct_project)}"
         )
         direct_folder.mkdir(parents=True, exist_ok=True)
         direct_clip_paths = []
-        if uploaded_gemini_clips:
+        if is_history_mode and history_new_source_supplied:
+            try:
+                direct_clip_paths = _sprint194_51_save_history_scene_sources(
+                    direct_project,
+                    history_scene_source_map,
+                    clip_narrations,
+                    _effective_tts_speech_speed_194_41,
+                    int(history_expected_scene_count or 0),
+                )
+            except Exception as exc:
+                st.error(f"역사 장면 이미지/영상 변환 실패: {type(exc).__name__}: {exc}")
+                return
+        elif uploaded_gemini_clips:
             for index, uploaded in enumerate(uploaded_gemini_clips, start=1):
                 suffix = Path(
                     getattr(uploaded, "name", "clip.mp4")
@@ -3454,7 +4866,7 @@ def show_one_click_pipeline():
                 if Path(str(path)).is_file()
             ]
             print(
-                "[Sprint193-29 Edit Preset] REUSE CLIPS",
+                "[Sprint194-2 Edit Preset] REUSE CLIPS",
                 {"count": len(direct_clip_paths), "paths": direct_clip_paths},
                 flush=True,
             )
@@ -3467,6 +4879,10 @@ def show_one_click_pipeline():
         direct_audio_folder.mkdir(parents=True, exist_ok=True)
         direct_voice_audio_path = ""
         direct_bgm_audio_path = ""
+        _restored_bgm_194_55 = str(st.session_state.get("sprint194_55_restored_bgm_audio_path") or "").strip()
+        if uploaded_bgm_audio is None and _restored_bgm_194_55 and Path(_restored_bgm_194_55).is_file():
+            direct_bgm_audio_path = _restored_bgm_194_55
+            print("[Sprint194-55 History BGM Restore] REUSED", {"path": direct_bgm_audio_path}, flush=True)
 
         if uploaded_voice_audio is not None:
             suffix = Path(
@@ -3507,9 +4923,11 @@ def show_one_click_pipeline():
             "voice_id": str(selected_voice_id or ""),
             "tts_volume_percent": int(tts_volume_percent or 100),
             "tts_speech_speed": float(tts_speech_speed or 1.0),
-            "bgm_volume_percent": int(bgm_volume_percent or 10),
+            "bgm_volume_percent": int(bgm_volume_percent if bgm_volume_percent is not None else 10),
             "voice_audio_path": str(direct_voice_audio_path or ""),
             "bgm_audio_path": str(direct_bgm_audio_path or ""),
+            "production_mode": str(production_mode or "shopping"),
+            "history_expected_scene_count": int(history_expected_scene_count or 0),
             "saved_at": datetime.now(ZoneInfo("Asia/Seoul")).isoformat(),
         }
         edit_preset_path = _sprint193_29_save_edit_preset(
@@ -3549,7 +4967,9 @@ def show_one_click_pipeline():
         )
 
         with st.spinner(
-            "영상만 제작 중입니다... 자막·신뢰 후킹·BGM·효과음을 적용하고 있습니다."
+            ("역사쿠키 제작 중입니다... 장면 순서대로 나레이션·자막·BGM·효과음을 적용하고 있습니다."
+             if is_history_mode else
+             "영상만 제작 중입니다... 자막·신뢰 후킹·BGM·효과음을 적용하고 있습니다.")
         ):
             try:
                 direct_result = run_project_pipeline(
@@ -3570,11 +4990,12 @@ def show_one_click_pipeline():
                     cta_product_logo_text=str(cta_product_logo_text or "").strip(),
                     voice_audio_path=direct_voice_audio_path,
                     bgm_audio_path=direct_bgm_audio_path,
+                    bgm_volume_percent=int(bgm_volume_percent if bgm_volume_percent is not None else 10),
                     voice_name=str(selected_voice_name or "지안"),
                     voice_id=str(selected_voice_id or ""),
                     typecast_api_key=str(typecast_api_key or ""),
                     tts_volume_percent=int(tts_volume_percent or 100),
-                    tts_speech_speed=float(tts_speech_speed or 1.0),
+                    tts_speech_speed=float(_effective_tts_speech_speed_194_41),
                     clip_subtitles=list(clip_subtitles or []),
                     clip_subtitle_effects=list(clip_subtitle_effects or []),
                     clip_sfx=list(clip_sfx or []),
@@ -5730,11 +7151,16 @@ def show_one_click_pipeline():
 
     errors = []
     if not str(product_name or "").strip():
-        errors.append("상품명을 입력해 주세요.")
+        errors.append("역사 주제를 입력해 주세요." if is_history_mode else "상품명을 입력해 주세요.")
     if not str(locked_script or "").strip():
         errors.append("확정 대본을 입력해 주세요.")
-    if not uploaded_gemini_clips:
-        errors.append("Gemini 영상 파일을 한 개 이상 업로드해 주세요.")
+    if not editor_clip_sources:
+        errors.append("역사 장면 이미지를 한 장 이상 업로드하거나 이전 작업을 불러와 주세요." if is_history_mode else "Gemini 영상 파일을 한 개 이상 업로드해 주세요.")
+    if is_history_mode and history_new_source_supplied and history_missing_scene_ids:
+        errors.append(
+            "역사 장면 소스가 누락되었습니다: "
+            + ", ".join(map(str, history_missing_scene_ids))
+        )
     if errors:
         for error in errors:
             st.error(error)
@@ -5744,7 +7170,7 @@ def show_one_click_pipeline():
         "coupang_url": "",
         "product_name": product_name.strip(),
         "title": product_name.strip(),
-        "source": "manual_gemini_video_edit_189_2",
+        "source": ("manual_history_image_edit_194_4" if is_history_mode else "manual_gemini_video_edit_189_2"),
         "hook_text": hook_text.strip(),
         "suppress_separate_hook": False,
         "locked_script": locked_script.strip(),
@@ -5757,7 +7183,7 @@ def show_one_click_pipeline():
         "cta_text": cta_text.strip(),
         "cta_platform": str(video_cta_platform),
         "cta_keyword": str(cta_keyword or "").strip(),
-        "gemini_clip_count": len(uploaded_gemini_clips),
+        "gemini_clip_count": len(editor_clip_sources),
         "youtube_privacy_status": youtube_privacy_status,
         "upload_enabled": bool(upload_enabled),
         "channel_type": channel_type,
@@ -5810,16 +7236,35 @@ def show_one_click_pipeline():
     folder = Path("assets/gemini_clips") / f"project_{safe_project_id(project)}"
     folder.mkdir(parents=True, exist_ok=True)
     clip_paths = []
-    for index, uploaded in enumerate(uploaded_gemini_clips, start=1):
-        suffix = Path(getattr(uploaded, "name", "clip.mp4")).suffix.lower() or ".mp4"
-        destination = folder / f"gemini_{index:02d}{suffix}"
-        destination.write_bytes(uploaded.getbuffer())
-        clip_paths.append(str(destination))
+    if is_history_mode and history_new_source_supplied:
+        try:
+            clip_paths = _sprint194_51_save_history_scene_sources(
+                project,
+                history_scene_source_map,
+                clip_narrations,
+                _effective_tts_speech_speed_194_41,
+                int(history_expected_scene_count or 0),
+            )
+        except Exception as exc:
+            st.error(f"역사 장면 이미지/영상 변환 실패: {type(exc).__name__}: {exc}")
+            return
+    elif uploaded_gemini_clips:
+        for index, uploaded in enumerate(uploaded_gemini_clips, start=1):
+            suffix = Path(getattr(uploaded, "name", "clip.mp4")).suffix.lower() or ".mp4"
+            destination = folder / f"gemini_{index:02d}{suffix}"
+            destination.write_bytes(uploaded.getbuffer())
+            clip_paths.append(str(destination))
+    else:
+        clip_paths = [str(path) for path in loaded_gemini_clip_paths if Path(str(path)).is_file()]
 
     audio_folder = Path("assets/manual_audio") / f"project_{safe_project_id(project)}"
     audio_folder.mkdir(parents=True, exist_ok=True)
     voice_audio_path = ""
     bgm_audio_path = ""
+    _restored_bgm_194_55 = str(st.session_state.get("sprint194_55_restored_bgm_audio_path") or "").strip()
+    if uploaded_bgm_audio is None and _restored_bgm_194_55 and Path(_restored_bgm_194_55).is_file():
+        bgm_audio_path = _restored_bgm_194_55
+        print("[Sprint194-55 History BGM Restore] REUSED", {"path": bgm_audio_path}, flush=True)
     if uploaded_voice_audio is not None:
         suffix = Path(getattr(uploaded_voice_audio, "name", "voice.mp3")).suffix.lower() or ".mp3"
         voice_target = audio_folder / f"jian_voice{suffix}"
@@ -5893,7 +7338,8 @@ def show_one_click_pipeline():
                 voice_id=str(selected_voice_id or ""),
                 typecast_api_key=str(typecast_api_key or ""),
                 tts_volume_percent=int(tts_volume_percent or 100),
-                tts_speech_speed=float(tts_speech_speed or 1.0),
+                tts_speech_speed=float(_effective_tts_speech_speed_194_41),
+                clip_subtitles=list(clip_subtitles or []),
                 clip_subtitle_effects=list(clip_subtitle_effects or []),
                 clip_sfx=list(clip_sfx or []),
                 clip_playback_speeds=list(clip_playback_speeds or []),
@@ -5909,12 +7355,12 @@ def show_one_click_pipeline():
             )
         except Exception as exc:
             Path("full_error.log").write_text(traceback.format_exc(), encoding="utf-8")
-            st.error(f"Gemini 영상 자동 편집 실패: {type(exc).__name__}: {exc}")
+            st.error(f"쇼츠 자동 편집 실패: {type(exc).__name__}: {exc}")
             return
 
     final_path = _resolve_final_video_path(result)
     if final_path and Path(final_path).is_file():
-        st.success("Gemini 쇼츠 자동 편집이 완료됐습니다.")
+        st.success("역사쿠키 쇼츠 제작이 완료됐습니다." if is_history_mode else "Gemini 쇼츠 자동 편집이 완료됐습니다.")
         st.video(final_path)
         st.caption(f"최종 영상: {final_path}")
         st.caption(f"적용 속도: {float(playback_speed):.2f}배 / 음성 파일: {'적용' if voice_audio_path else '자동 모듈 탐색'} / 공개 설정: {youtube_privacy_status}")

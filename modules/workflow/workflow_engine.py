@@ -105,7 +105,9 @@ for _stream in (getattr(sys, "stdout", None), getattr(sys, "stderr", None)):
     except Exception:
         pass
 
-print("######## WORKFLOW_ENGINE SPRINT193-33 RESTORE EFFECT CUE METHOD LOADED ########", flush=True)
+print("######## WORKFLOW_ENGINE SPRINT194-36 HISTORY TTS VOICE ID CACHE FALLBACK LOADED ########", flush=True)
+print("######## WORKFLOW_ENGINE SPRINT194-38A HISTORY RENDER FILTER HOTFIX LOADED ########", flush=True)
+print("######## WORKFLOW_ENGINE SPRINT194-60 HISTORY YOUTH FONT DIRECT ONLY LOADED ########", flush=True)
 
 
 class WorkflowEngine:
@@ -130,7 +132,7 @@ class WorkflowEngine:
     → CapCutExport
     """
 
-    WORKFLOW_VERSION = "workflow-engine-193-33-restore-effect-cue-method"
+    WORKFLOW_VERSION = "workflow-engine-194-60-history-youth-font-direct-only"
     
 
     # Sprint153-2: 비용 없는 자막/음성/병합 재시험 모드입니다.
@@ -4562,6 +4564,7 @@ class WorkflowEngine:
         cta_product_logo_text="",
         voice_audio_path="",
         bgm_audio_path="",
+        bgm_volume_percent=10,
         voice_name="지안",
         voice_id="",
         typecast_api_key="",
@@ -4630,8 +4633,11 @@ class WorkflowEngine:
         cta = ""  # Sprint193-14: CTA 완전 제거
 
         trust_narration_parts = []
-        review_value = int(declared_review_count or 0)
-        rating_value = float(rating or 0.0)
+        is_history_channel = str(channel_type or "").strip().lower() in {"history", "history_ko", "history_en"}
+        review_value = 0 if is_history_channel else int(declared_review_count or 0)
+        rating_value = 0.0 if is_history_channel else float(rating or 0.0)
+        if is_history_channel:
+            print("[Sprint194-1 History Mode] TRUST HOOK SKIPPED", {"channel_type": channel_type}, flush=True)
         if review_value > 0:
             trust_narration_parts.append(f"리뷰 {review_value:,}개.")
         if rating_value > 0:
@@ -4658,10 +4664,44 @@ class WorkflowEngine:
 
         generated_files = list(supplied)
 
+        # Sprint194-11: 역사 모드는 장면별 TTS만 생성하고, 전체 대본 TTS/intro를 별도로 만들지 않습니다.
+        # 최종 음성은 scene_01~N을 정확히 한 번씩 이어붙인 단일 트랙만 사용합니다.
+        _history_mode_194_11 = str(channel_type or "").strip() in {"history", "history_ko", "history_en"}
+        # Sprint194-20: history_en uses native English TTS and language-isolated audio/output paths.
+        _history_language_194_20 = "eng" if str(channel_type or "").strip().lower() == "history_en" else "kor"
+        _history_lang_tag_194_20 = "en" if _history_language_194_20 == "eng" else "ko"
+        # Sprint194-30 defensive lock: an English render must never silently burn Korean
+        # subtitle/narration arrays into the final MP4. Fail early instead.
+        if str(channel_type or "").strip().lower() == "history_en":
+            _hangul_re_194_30 = re.compile(r"[가-힣]")
+            _ko_subs_194_30 = sum(bool(_hangul_re_194_30.search(str(x or ""))) for x in list(clip_subtitles or []))
+            _ko_nars_194_30 = sum(bool(_hangul_re_194_30.search(str(x or ""))) for x in list(normalized_clip_narrations or []))
+            print("[Sprint194-30 English Workflow Input Guard]", {
+                "subtitles": len(list(clip_subtitles or [])),
+                "narrations": len(list(normalized_clip_narrations or [])),
+                "hangul_subtitles": _ko_subs_194_30,
+                "hangul_narrations": _ko_nars_194_30,
+            }, flush=True)
+            if _ko_subs_194_30 or _ko_nars_194_30:
+                return {
+                    "ok": False,
+                    "job_id": "",
+                    "state": {},
+                    "outputs": {
+                        "workflow_version": self.WORKFLOW_VERSION,
+                        "execution_mode": "history_en_input_guard",
+                        "error": "history_english_render_input_contains_korean",
+                    },
+                    "summary": "영어 영상 렌더 입력에 한국어 자막/나레이션이 남아 있어 제작을 중단했습니다.",
+                    "final_video_path": "",
+                }
+        if _history_mode_194_11:
+            print("[Sprint194-21 History Global] LANGUAGE", {"channel_type": channel_type, "tts_language": _history_language_194_20, "lang_tag": _history_lang_tag_194_20}, flush=True)
+
         # Sprint193-9: 직접 업로드 음성이 없으면 Typecast로 나레이션 자동 생성.
         resolved_voice_audio_path = str(voice_audio_path or "").strip()
         tts_generation = {"ok": False, "status": "not_requested", "voice_name": str(voice_name or "지안")}
-        if not resolved_voice_audio_path and narration_text:
+        if not resolved_voice_audio_path and narration_text and not _history_mode_194_11:
             try:
                 import os as _os
                 from typecast import Typecast
@@ -4693,7 +4733,7 @@ class WorkflowEngine:
                     text=narration_text,
                     model="ssfm-v30",
                     voice_id=resolved_voice_id,
-                    language="kor",
+                    language=_history_language_194_20,
                     output=Output(
                         target_lufs=float(target_lufs),
                         audio_tempo=max(0.5, min(2.0, float(tts_speech_speed or 1.0))),
@@ -4755,7 +4795,74 @@ class WorkflowEngine:
         intro_voice_path = ""
         clip_voice_paths = []
         scene_tts_generation = []
-        if narration_text and str(typecast_api_key or _os.getenv("TYPECAST_API_KEY", "") or "").strip() and normalized_clip_narrations:
+        # Sprint194-46: English history is hard-locked at the workflow boundary.
+        # UI/preset reruns may still pass the previously selected Korean/other voice (e.g. Junho).
+        # Never trust that value for history_en; resolve Oliver from Typecast in the TTS stage itself.
+        _effective_history_voice_name_194_46 = (
+            "Oliver" if _history_lang_tag_194_20 == "en" else str(voice_name or "지안").strip()
+        )
+        if _history_lang_tag_194_20 == "en":
+            print("[Sprint194-46 English Voice Hard Lock] REQUESTED", {
+                "incoming_voice_name": str(voice_name or ""),
+                "effective_voice_name": _effective_history_voice_name_194_46,
+                "incoming_voice_id_ignored": bool(str(voice_id or "").strip()),
+            }, flush=True)
+        # Sprint194-43: Streamlit may invoke the history pipeline more than once during one UI action.
+        # Persist the 17 scene TTS paths with a content hash so a second invocation can recover them
+        # instead of starting with audio_slots=0.
+        _scene_tts_cache_dir_194_43 = Path("assets/manual_audio") / f"project_{project_id}" / f"scene_tts_{_history_lang_tag_194_20}"
+        _scene_tts_cache_dir_194_43.mkdir(parents=True, exist_ok=True)
+        _scene_tts_cache_manifest_194_43 = _scene_tts_cache_dir_194_43 / "scene_tts_manifest_194_43.json"
+        _scene_tts_cache_key_payload_194_43 = {
+            "lang": _history_lang_tag_194_20,
+            "narrations": [str(x or "").strip() for x in list(normalized_clip_narrations or [])],
+            "voice_name": _effective_history_voice_name_194_46,
+            "voice_id": ("" if _history_lang_tag_194_20 == "en" else str(voice_id or "").strip()),
+            "speed": float(tts_speech_speed or 1.0),
+            "volume": int(tts_volume_percent or 100),
+        }
+        _scene_tts_cache_hash_194_43 = hashlib.sha256(
+            json.dumps(_scene_tts_cache_key_payload_194_43, ensure_ascii=False, sort_keys=True).encode("utf-8")
+        ).hexdigest()
+
+        def _sprint194_43_load_scene_tts_cache():
+            try:
+                if not _scene_tts_cache_manifest_194_43.is_file():
+                    return []
+                _meta = json.loads(_scene_tts_cache_manifest_194_43.read_text(encoding="utf-8"))
+                if str(_meta.get("source_hash") or "") != _scene_tts_cache_hash_194_43:
+                    return []
+                _paths = [str(x or "") for x in list(_meta.get("paths") or [])]
+                if len(_paths) != len(normalized_clip_narrations or []):
+                    return []
+                if not all(p and Path(p).is_file() and Path(p).stat().st_size > 1024 for p in _paths):
+                    return []
+                return _paths
+            except Exception as _cache_exc:
+                print("[Sprint194-43 History Scene TTS Cache] INVALID", type(_cache_exc).__name__, str(_cache_exc), flush=True)
+                return []
+
+        _cached_scene_tts_194_43 = _sprint194_43_load_scene_tts_cache()
+        if _cached_scene_tts_194_43:
+            clip_voice_paths = list(_cached_scene_tts_194_43)
+            scene_tts_generation = [
+                {"index": i + 1, "ok": True, "status": "cache_reused", "path": p}
+                for i, p in enumerate(clip_voice_paths)
+            ]
+            print("[Sprint194-43 History Scene TTS Cache] HIT", {
+                "scene_count": len(clip_voice_paths),
+                "lang": _history_lang_tag_194_20,
+            }, flush=True)
+
+        # Sprint194-42: history scene TTS must be driven by the 1:N scene narrations themselves.
+        # English auto-localization can legitimately leave narration_text empty while all 17
+        # localized scene narrations are present. The old narration_text gate skipped TTS entirely,
+        # producing narrations=17 / audio_slots=0.
+        import os as _os_scene_194_42
+        _scene_tts_api_key_194_42 = str(
+            typecast_api_key or _os_scene_194_42.getenv("TYPECAST_API_KEY", "") or ""
+        ).strip()
+        if normalized_clip_narrations and _scene_tts_api_key_194_42 and not clip_voice_paths:
             try:
                 import os as _os2
                 from typecast import Typecast as _Typecast2
@@ -4765,20 +4872,58 @@ class WorkflowEngine:
                     typecast_api_key or _os2.getenv("TYPECAST_API_KEY", "") or ""
                 ).strip()
                 _client2 = _Typecast2(api_key=_api_key2)
-                _voice_id2 = str(voice_id or "").strip()
-                _voice_name2 = str(voice_name or "지안").strip()
+                _voice_name2 = _effective_history_voice_name_194_46
+                # English must not inherit a stale Junho/other voice_id from the UI/preset.
+                _voice_id2 = "" if _history_lang_tag_194_20 == "en" else str(voice_id or "").strip()
                 if not _voice_id2:
-                    for _voice in list(_client2.voices_v2() or []):
-                        if str(getattr(_voice, "voice_name", "") or "").strip() == _voice_name2:
-                            _voice_id2 = str(getattr(_voice, "voice_id", "") or "").strip()
-                            if _voice_id2:
-                                break
+                    # Sprint194-36: Typecast voices_v2() 목록 조회가 실패해도
+                    # 이전 프로젝트에서 저장된 voice_id를 재사용할 수 있도록 복구합니다.
+                    try:
+                        _wanted_voice_194_42 = _voice_name2.casefold()
+                        _aliases_194_42 = {_wanted_voice_194_42}
+                        if _history_lang_tag_194_20 == "en" and _wanted_voice_194_42 in {"oliver", "올리버"}:
+                            _aliases_194_42.update({"oliver", "올리버"})
+                        for _voice in list(_client2.voices_v2() or []):
+                            _candidate_name_194_42 = str(getattr(_voice, "voice_name", "") or "").strip()
+                            _candidate_fold_194_42 = _candidate_name_194_42.casefold()
+                            if _candidate_fold_194_42 in _aliases_194_42 or any(
+                                alias and alias in _candidate_fold_194_42 for alias in _aliases_194_42
+                            ):
+                                _voice_id2 = str(getattr(_voice, "voice_id", "") or "").strip()
+                                if _voice_id2:
+                                    print("[Sprint194-42 History Scene TTS Voice] RESOLVED", {
+                                        "requested": _voice_name2,
+                                        "resolved": _candidate_name_194_42,
+                                        "lang": _history_lang_tag_194_20,
+                                    }, flush=True)
+                                    break
+                    except Exception as _voice_list_exc:
+                        print("[Sprint194-36 History TTS Voice List] ERROR", type(_voice_list_exc).__name__, str(_voice_list_exc), flush=True)
+
                 if not _voice_id2:
-                    raise RuntimeError(f"Typecast 성우 ID를 찾지 못했습니다: {_voice_name2}")
+                    # 프로젝트/환경에 저장된 ID 후보를 재귀적으로 찾습니다.
+                    try:
+                        _pd2 = self._project_data(project)
+                    except Exception:
+                        _pd2 = {}
+                    _voice_id2 = str(
+                        self._find_nested_value(_pd2, (
+                            "voice_id", "typecast_voice_id", "tts_voice_id",
+                            "history_voice_id", "ko_voice_id", "en_voice_id", "english_voice_id",
+                        )) or _os2.getenv("TYPECAST_VOICE_ID", "") or ""
+                    ).strip()
+                    if _voice_id2:
+                        print("[Sprint194-36 History TTS Voice ID Fallback] RECOVERED", {"voice_name": _voice_name2, "voice_id": _voice_id2}, flush=True)
+
+                if not _voice_id2:
+                    raise RuntimeError(
+                        f"Typecast 성우 ID를 찾지 못했습니다: {_voice_name2}. "
+                        "보이스 목록 조회 실패 시 UI/프로젝트의 voice_id 또는 TYPECAST_VOICE_ID가 필요합니다."
+                    )
 
                 _volume_pct2 = max(0, min(200, int(tts_volume_percent or 100)))
                 _target_lufs2 = -32.0 + (_volume_pct2 / 200.0) * 24.0
-                _tts_dir2 = Path("assets/manual_audio") / f"project_{project_id}" / "scene_tts"
+                _tts_dir2 = Path("assets/manual_audio") / f"project_{project_id}" / f"scene_tts_{_history_lang_tag_194_20}"
                 _tts_dir2.mkdir(parents=True, exist_ok=True)
 
                 def _synth_scene_tts(_text, _target):
@@ -4786,7 +4931,7 @@ class WorkflowEngine:
                         text=str(_text or "").strip(),
                         model="ssfm-v30",
                         voice_id=_voice_id2,
-                        language="kor",
+                        language=_history_language_194_20,
                         output=_Output2(
                             target_lufs=float(_target_lufs2),
                             audio_tempo=max(0.5, min(2.0, float(tts_speech_speed or 1.0))),
@@ -4811,7 +4956,7 @@ class WorkflowEngine:
                         raise RuntimeError(f"장면 TTS 파일 생성 실패: {_target}")
                     return str(_target)
 
-                _intro_text = " ".join(
+                _intro_text = "" if _history_mode_194_11 else " ".join(
                     value for value in (trust_narration, hook) if str(value or "").strip()
                 ).strip()
                 if _intro_text:
@@ -4820,6 +4965,11 @@ class WorkflowEngine:
                     )
 
                 for _idx, _scene_text in enumerate(normalized_clip_narrations, start=1):
+                    print(
+                        "[Sprint194-13 History Scene Text Map]",
+                        {"scene": _idx, "tts_text": str(_scene_text or "").strip()},
+                        flush=True,
+                    )
                     if not _scene_text:
                         clip_voice_paths.append("")
                         scene_tts_generation.append(
@@ -4843,6 +4993,28 @@ class WorkflowEngine:
                     },
                     flush=True,
                 )
+                # Sprint194-44: cache persistence is optional. A cache write failure must NEVER
+                # erase 17 scene MP3s that Typecast has already generated successfully.
+                try:
+                    _scene_tts_cache_manifest_194_43.write_text(
+                        json.dumps({
+                            "version": "scene-tts-cache-194-44",
+                            "source_hash": _scene_tts_cache_hash_194_43,
+                            "paths": list(clip_voice_paths),
+                            "lang": _history_lang_tag_194_20,
+                        }, ensure_ascii=False, indent=2),
+                        encoding="utf-8",
+                    )
+                    print("[Sprint194-44 History Scene TTS Cache] SAVED", {
+                        "scene_count": len(clip_voice_paths),
+                        "path": str(_scene_tts_cache_manifest_194_43),
+                    }, flush=True)
+                except Exception as _cache_save_exc_194_44:
+                    print("[Sprint194-44 History Scene TTS Cache] SAVE_FAILED_PRESERVED", {
+                        "error": f"{type(_cache_save_exc_194_44).__name__}: {_cache_save_exc_194_44}",
+                        "scene_count": len(clip_voice_paths),
+                        "audio_slots_preserved": len(clip_voice_paths),
+                    }, flush=True)
             except Exception as _scene_exc:
                 print(
                     "[Sprint193-14 Scene TTS] ERROR",
@@ -4850,11 +5022,452 @@ class WorkflowEngine:
                     str(_scene_exc),
                     flush=True,
                 )
-                intro_voice_path = ""
-                clip_voice_paths = []
-                scene_tts_generation = [
-                    {"ok": False, "status": "failed", "error": f"{type(_scene_exc).__name__}: {_scene_exc}"}
+                # Sprint194-44: if all expected scene audio files already exist, preserve them.
+                _expected_scene_count_194_44 = len(normalized_clip_narrations or [])
+                _valid_generated_paths_194_44 = (
+                    len(clip_voice_paths) == _expected_scene_count_194_44
+                    and _expected_scene_count_194_44 > 0
+                    and all(
+                        str(_p or "").strip() and Path(str(_p)).is_file() and Path(str(_p)).stat().st_size > 1024
+                        for _p in clip_voice_paths
+                    )
+                )
+                if _valid_generated_paths_194_44:
+                    print("[Sprint194-44 History Scene TTS] ERROR_AFTER_GENERATION_PATHS_PRESERVED", {
+                        "narrations": _expected_scene_count_194_44,
+                        "audio_slots": len(clip_voice_paths),
+                        "error": f"{type(_scene_exc).__name__}: {_scene_exc}",
+                    }, flush=True)
+                else:
+                    intro_voice_path = ""
+                    clip_voice_paths = []
+                    scene_tts_generation = [
+                        {"ok": False, "status": "failed", "error": f"{type(_scene_exc).__name__}: {_scene_exc}"}
+                    ]
+        elif normalized_clip_narrations and not _scene_tts_api_key_194_42:
+            print("[Sprint194-42 History Scene TTS] BLOCKED", {
+                "reason": "typecast_api_key_missing",
+                "narrations": len(normalized_clip_narrations),
+                "lang": _history_lang_tag_194_20,
+            }, flush=True)
+
+        print("[Sprint194-42 History Scene TTS Gate] READY", {
+            "narration_text_present": bool(str(narration_text or "").strip()),
+            "scene_narrations": len(normalized_clip_narrations or []),
+            "api_key_present": bool(_scene_tts_api_key_194_42),
+            "audio_slots": len(clip_voice_paths),
+            "voice_name": str(voice_name or ""),
+            "voice_id_present": bool(str(voice_id or "").strip()),
+            "lang": _history_lang_tag_194_20,
+        }, flush=True)
+
+        # Sprint194-8: 역사 모드는 장면 TTS 1~N을 앞뒤 무음 제거 후 하나의 음성으로 합칩니다.
+        # 각 장면 영상 길이도 추정치가 아니라 실제 TTS 길이에 맞춰 다시 렌더링합니다.
+        _history_mode_194_8 = str(channel_type or "").strip() in {"history", "history_ko", "history_en"}
+        _history_full_voice_194_8 = ""
+        _history_scene_durations_194_8 = []
+        if _history_mode_194_8 and normalized_clip_narrations and clip_voice_paths:
+            try:
+                _history_audio_root = Path("assets/manual_audio") / f"project_{project_id}" / f"history_194_8_{_history_lang_tag_194_20}"
+                _history_audio_root.mkdir(parents=True, exist_ok=True)
+
+                def _ffprobe_duration_194_8(_path):
+                    _probe = subprocess.run(
+                        ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1", str(_path)],
+                        capture_output=True, text=True, encoding="utf-8", errors="replace", check=False,
+                    )
+                    try:
+                        return max(0.0, float((_probe.stdout or "0").strip() or 0.0))
+                    except Exception:
+                        return 0.0
+
+                def _trim_to_wav_194_8(_source, _target):
+                    _target = Path(_target)
+                    _cmd = [
+                        "ffmpeg", "-y", "-i", str(_source),
+                        "-af", "silenceremove=start_periods=1:start_duration=0.02:start_threshold=-48dB:stop_periods=1:stop_duration=0.06:stop_threshold=-48dB",
+                        "-ar", "44100", "-ac", "2", "-c:a", "pcm_s16le", str(_target),
+                    ]
+                    _done = subprocess.run(_cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
+                    if _done.returncode != 0 or not _target.is_file() or _target.stat().st_size <= 1024 or _ffprobe_duration_194_8(_target) < 0.20:
+                        _cmd = ["ffmpeg", "-y", "-i", str(_source), "-ar", "44100", "-ac", "2", "-c:a", "pcm_s16le", str(_target)]
+                        _done = subprocess.run(_cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
+                    if _done.returncode != 0 or not _target.is_file() or _target.stat().st_size <= 1024:
+                        raise RuntimeError("history_scene_audio_trim_failed: " + str((_done.stderr or _done.stdout or "")[-800:]))
+                    return str(_target)
+
+                def _concat_wavs_194_8(_paths, _target):
+                    # Sprint194-45: concat demuxer resolves relative paths from the list file,
+                    # so always write absolute paths. Relative assets/... paths previously became
+                    # duplicated under history_194_8 and caused history_audio_concat_failed.
+                    _paths = [str(Path(p).resolve()) for p in _paths if p and Path(str(p)).is_file()]
+                    if not _paths:
+                        return ""
+                    if len(_paths) == 1:
+                        shutil.copyfile(_paths[0], _target)
+                        return str(_target)
+                    _list = Path(str(_target) + ".concat.txt")
+                    _list.write_text("\n".join("file '" + p.replace("'", "'\\''") + "'" for p in _paths) + "\n", encoding="utf-8")
+                    _done = subprocess.run(
+                        ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(_list), "-c:a", "pcm_s16le", str(_target)],
+                        capture_output=True, text=True, encoding="utf-8", errors="replace", check=False,
+                    )
+                    if _done.returncode != 0 or not Path(_target).is_file() or Path(_target).stat().st_size <= 1024:
+                        raise RuntimeError("history_audio_concat_failed: " + str((_done.stderr or _done.stdout or "")[-800:]))
+                    return str(_target)
+
+                # 첫 장면 나레이션에 후킹이 이미 포함되어 있으면 intro를 중복 사용하지 않습니다.
+                def _norm_194_8(_text):
+                    return re.sub(r"[^0-9A-Za-z가-힣]+", "", str(_text or "")).lower()
+
+                _trimmed_scene_wavs = []
+                for _idx, _voice_path in enumerate(list(clip_voice_paths or []), start=1):
+                    if not _voice_path or not Path(str(_voice_path)).is_file():
+                        continue
+                    _trimmed_scene_wavs.append(
+                        _trim_to_wav_194_8(_voice_path, _history_audio_root / f"scene_{_idx:02d}_trim.wav")
+                    )
+
+                if len(_trimmed_scene_wavs) != len([x for x in normalized_clip_narrations if str(x).strip()]):
+                    raise RuntimeError(
+                        f"history_scene_tts_count_mismatch: narration={len([x for x in normalized_clip_narrations if str(x).strip()])} audio={len(_trimmed_scene_wavs)}"
+                    )
+
+                _scene_slot_wavs = list(_trimmed_scene_wavs)
+                _hook_norm = _norm_194_8(hook)
+                _first_norm = _norm_194_8(normalized_clip_narrations[0] if normalized_clip_narrations else "")
+                _intro_needed = bool(intro_voice_path and _hook_norm and _hook_norm not in _first_norm)
+                if _intro_needed:
+                    _intro_trim = _trim_to_wav_194_8(intro_voice_path, _history_audio_root / "intro_trim.wav")
+                    _first_slot = _concat_wavs_194_8(
+                        [_intro_trim, _scene_slot_wavs[0]],
+                        _history_audio_root / "scene_01_with_hook.wav",
+                    )
+                    _scene_slot_wavs[0] = _first_slot
+
+                _history_scene_durations_194_8 = [
+                    max(1.0, _ffprobe_duration_194_8(_p)) for _p in _scene_slot_wavs
                 ]
+
+                _full_wav = _concat_wavs_194_8(_scene_slot_wavs, _history_audio_root / "narration_full.wav")
+                _full_mp3 = _history_audio_root / "narration_full.mp3"
+                _done = subprocess.run(
+                    ["ffmpeg", "-y", "-i", str(_full_wav), "-c:a", "libmp3lame", "-b:a", "192k", str(_full_mp3)],
+                    capture_output=True, text=True, encoding="utf-8", errors="replace", check=False,
+                )
+                if _done.returncode != 0 or not _full_mp3.is_file() or _full_mp3.stat().st_size <= 1024:
+                    raise RuntimeError("history_full_narration_encode_failed: " + str((_done.stderr or _done.stdout or "")[-800:]))
+                _history_full_voice_194_8 = str(_full_mp3)
+                resolved_voice_audio_path = _history_full_voice_194_8
+                intro_voice_path = ""
+
+                # 실제 TTS 길이로 1:1 역사 이미지 영상을 다시 렌더링합니다.
+                _image_root = Path("assets/history_scene_images") / f"project_{project_id}"
+                _image_paths = sorted(
+                    [p for p in _image_root.glob("scene_*.*") if p.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}],
+                    key=lambda p: [int(x) if x.isdigit() else x for x in re.split(r"(\d+)", p.stem.lower())],
+                )
+                if len(_image_paths) >= len(_history_scene_durations_194_8):
+                    _clip_root = Path("assets/gemini_clips") / f"project_{project_id}"
+                    _clip_root.mkdir(parents=True, exist_ok=True)
+                    _rerendered = []
+                    for _idx, (_img, _dur) in enumerate(zip(_image_paths, _history_scene_durations_194_8), start=1):
+                        _target = _clip_root / f"history_{_idx:02d}.mp4"
+                        _mode = (_idx - 1) % 5
+                        _d = max(1.0, float(_dur))
+                        _moves = [
+                            f"crop=1080:1920:x='(iw-1080)*t/{_d:.6f}':y='(ih-1920)/2'",
+                            f"crop=1080:1920:x='(iw-1080)*(1-t/{_d:.6f})':y='(ih-1920)/2'",
+                            f"crop=1080:1920:x='(iw-1080)/2':y='(ih-1920)*t/{_d:.6f}'",
+                            f"crop=1080:1920:x='(iw-1080)/2':y='(ih-1920)*(1-t/{_d:.6f})'",
+                            "crop=1080:1920:x='(iw-1080)/2':y='(ih-1920)/2'",
+                        ]
+                        _vf = "scale=1188:2112:force_original_aspect_ratio=increase," + _moves[_mode] + ",fps=30,format=yuv420p"
+                        _cmd = [
+                            "ffmpeg", "-y", "-loop", "1", "-i", str(_img),
+                            "-vf", _vf, "-t", f"{_d:.3f}", "-an",
+                            "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+                            "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(_target),
+                        ]
+                        _render = subprocess.run(_cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
+                        if _render.returncode != 0 or not _target.is_file() or _target.stat().st_size <= 1024:
+                            raise RuntimeError("history_audio_driven_scene_render_failed: " + str((_render.stderr or _render.stdout or "")[-800:]))
+                        _rerendered.append(str(_target))
+                    generated_files = _rerendered
+                else:
+                    print("[Sprint194-8 History Audio Driven Scenes] IMAGE COUNT FALLBACK", {"images": len(_image_paths), "durations": len(_history_scene_durations_194_8)}, flush=True)
+
+                print("[Sprint194-8 History Narration Concat] READY", {
+                    "scene_count": len(_history_scene_durations_194_8),
+                    "durations": [round(x, 3) for x in _history_scene_durations_194_8],
+                    "voice_duration": round(_ffprobe_duration_194_8(_history_full_voice_194_8), 3),
+                    "video_duration_target": round(sum(_history_scene_durations_194_8), 3),
+                    "intro_merged_to_scene1": bool(_intro_needed),
+                    "gap_seconds": 0.0,
+                    "voice_path": _history_full_voice_194_8,
+                }, flush=True)
+            except Exception as _history_exc:
+                print("[Sprint194-8 History Narration Concat] ERROR", type(_history_exc).__name__, str(_history_exc), flush=True)
+                _history_full_voice_194_8 = ""
+                _history_scene_durations_194_8 = []
+
+        # Sprint194-11: 역사쿠키의 최종 기준 타임라인을 장면별 TTS 실제 길이로 단일화합니다.
+        # intro/전체대본 TTS는 사용하지 않고 scene_01~N만 정확히 한 번씩 사용합니다.
+        _history_full_voice_194_11 = ""
+        _history_scene_durations_194_11 = []
+        if _history_mode_194_11:
+            try:
+                if not normalized_clip_narrations:
+                    raise RuntimeError("history_timeline_missing_narrations")
+                if len(clip_voice_paths) != len(normalized_clip_narrations):
+                    # Sprint194-45: generated scene MP3s are the source of truth. Recover them
+                    # directly from disk before consulting any optional cache manifest. This
+                    # closes the observed GENERATED=17 -> audio_slots=0 rerun/state-loss path.
+                    _direct_tts_dir_194_45 = Path("assets/manual_audio") / f"project_{project_id}" / f"scene_tts_{_history_lang_tag_194_20}"
+                    _direct_paths_194_45 = [
+                        str(_direct_tts_dir_194_45 / f"scene_{_i:02d}.mp3")
+                        for _i in range(1, len(normalized_clip_narrations) + 1)
+                    ]
+                    if _direct_paths_194_45 and all(
+                        Path(_p).is_file() and Path(_p).stat().st_size > 1024
+                        for _p in _direct_paths_194_45
+                    ):
+                        clip_voice_paths = list(_direct_paths_194_45)
+                        print("[Sprint194-45 History Timeline TTS Recovery] DIRECT_FILES_RESTORED", {
+                            "narrations": len(normalized_clip_narrations),
+                            "audio_slots": len(clip_voice_paths),
+                            "lang": _history_lang_tag_194_20,
+                            "dir": str(_direct_tts_dir_194_45),
+                        }, flush=True)
+                if len(clip_voice_paths) != len(normalized_clip_narrations):
+                    _recovered_194_43 = _sprint194_43_load_scene_tts_cache()
+                    if _recovered_194_43:
+                        clip_voice_paths = list(_recovered_194_43)
+                        print("[Sprint194-44 History Timeline TTS Recovery] CACHE_RESTORED", {
+                            "narrations": len(normalized_clip_narrations),
+                            "audio_slots": len(clip_voice_paths),
+                        }, flush=True)
+
+                # Sprint194-46: final timeline is self-sufficient. If an earlier Streamlit/pipeline
+                # invocation generated 17 files under another project/run and this invocation has
+                # audio_slots=0, generate the 17 current scene TTS files RIGHT HERE instead of
+                # failing with a secondary count-mismatch error. This is the final source of truth.
+                if len(clip_voice_paths) != len(normalized_clip_narrations):
+                    try:
+                        import os as _os_sync_194_46
+                        from typecast import Typecast as _Typecast_sync_194_46
+                        from typecast.models import TTSRequest as _TTSRequest_sync_194_46, Output as _Output_sync_194_46
+
+                        _sync_api_key_194_46 = str(
+                            typecast_api_key or _os_sync_194_46.getenv("TYPECAST_API_KEY", "") or ""
+                        ).strip()
+                        if not _sync_api_key_194_46:
+                            raise RuntimeError("Typecast API Key가 없습니다.")
+                        _sync_client_194_46 = _Typecast_sync_194_46(api_key=_sync_api_key_194_46)
+
+                        _sync_voice_name_194_46 = _effective_history_voice_name_194_46
+                        _sync_voice_id_194_46 = "" if _history_lang_tag_194_20 == "en" else str(voice_id or "").strip()
+                        _sync_resolved_name_194_46 = ""
+                        if not _sync_voice_id_194_46:
+                            _wanted_194_46 = _sync_voice_name_194_46.casefold()
+                            _aliases_194_46 = {_wanted_194_46}
+                            if _history_lang_tag_194_20 == "en":
+                                _aliases_194_46.update({"oliver", "올리버"})
+                            for _v194_46 in list(_sync_client_194_46.voices_v2() or []):
+                                _vn194_46 = str(getattr(_v194_46, "voice_name", "") or "").strip()
+                                _vf194_46 = _vn194_46.casefold()
+                                if _vf194_46 in _aliases_194_46 or any(
+                                    _a and _a in _vf194_46 for _a in _aliases_194_46
+                                ):
+                                    _vid194_46 = str(getattr(_v194_46, "voice_id", "") or "").strip()
+                                    if _vid194_46:
+                                        _sync_voice_id_194_46 = _vid194_46
+                                        _sync_resolved_name_194_46 = _vn194_46
+                                        break
+                        if not _sync_voice_id_194_46:
+                            raise RuntimeError(f"Typecast 성우 ID를 찾지 못했습니다: {_sync_voice_name_194_46}")
+
+                        if _history_lang_tag_194_20 == "en":
+                            print("[Sprint194-46 English Voice Hard Lock] RESOLVED", {
+                                "requested": "Oliver",
+                                "resolved": _sync_resolved_name_194_46 or _sync_voice_name_194_46,
+                                "voice_id_present": True,
+                            }, flush=True)
+
+                        _sync_vol_pct_194_46 = max(0, min(200, int(tts_volume_percent or 100)))
+                        _sync_target_lufs_194_46 = -32.0 + (_sync_vol_pct_194_46 / 200.0) * 24.0
+                        _sync_tts_dir_194_46 = Path("assets/manual_audio") / f"project_{project_id}" / f"scene_tts_{_history_lang_tag_194_20}"
+                        _sync_tts_dir_194_46.mkdir(parents=True, exist_ok=True)
+                        _sync_paths_194_46 = []
+                        for _si194_46, _stext194_46 in enumerate(normalized_clip_narrations, start=1):
+                            _stext194_46 = str(_stext194_46 or "").strip()
+                            if not _stext194_46:
+                                raise RuntimeError(f"빈 장면 나레이션: scene={_si194_46}")
+                            _target194_46 = _sync_tts_dir_194_46 / f"scene_{_si194_46:02d}.mp3"
+                            _resp194_46 = _sync_client_194_46.text_to_speech(_TTSRequest_sync_194_46(
+                                text=_stext194_46,
+                                model="ssfm-v30",
+                                voice_id=_sync_voice_id_194_46,
+                                language=_history_language_194_20,
+                                output=_Output_sync_194_46(
+                                    target_lufs=float(_sync_target_lufs_194_46),
+                                    audio_tempo=max(0.5, min(2.0, float(tts_speech_speed or 1.0))),
+                                    audio_format="mp3",
+                                ),
+                            ))
+                            _bytes194_46 = None
+                            for _attr194_46 in ("audio_data", "audio", "content", "data"):
+                                _cand194_46 = getattr(_resp194_46, _attr194_46, None)
+                                if isinstance(_cand194_46, (bytes, bytearray)) and len(_cand194_46) > 0:
+                                    _bytes194_46 = bytes(_cand194_46)
+                                    break
+                            if _bytes194_46 is not None:
+                                _target194_46.write_bytes(_bytes194_46)
+                            elif hasattr(_resp194_46, "save") and callable(getattr(_resp194_46, "save")):
+                                _resp194_46.save(str(_target194_46))
+                            elif hasattr(_resp194_46, "save_to_file") and callable(getattr(_resp194_46, "save_to_file")):
+                                _resp194_46.save_to_file(str(_target194_46))
+                            else:
+                                raise RuntimeError(f"Typecast 오디오 응답 없음: scene={_si194_46}")
+                            if not _target194_46.is_file() or _target194_46.stat().st_size <= 1024:
+                                raise RuntimeError(f"장면 TTS 파일 생성 실패: scene={_si194_46} path={_target194_46}")
+                            _sync_paths_194_46.append(str(_target194_46))
+                        clip_voice_paths = list(_sync_paths_194_46)
+                        scene_tts_generation = [
+                            {"index": _i + 1, "ok": True, "status": "final_sync_selfheal", "path": _p}
+                            for _i, _p in enumerate(clip_voice_paths)
+                        ]
+                        print("[Sprint194-46 History Timeline TTS SelfHeal] GENERATED", {
+                            "narrations": len(normalized_clip_narrations),
+                            "audio_slots": len(clip_voice_paths),
+                            "project_id": str(project_id),
+                            "lang": _history_lang_tag_194_20,
+                            "voice": _sync_resolved_name_194_46 or _sync_voice_name_194_46,
+                        }, flush=True)
+                    except Exception as _selfheal_exc_194_46:
+                        print("[Sprint194-46 History Timeline TTS SelfHeal] ERROR",
+                              type(_selfheal_exc_194_46).__name__, str(_selfheal_exc_194_46), flush=True)
+                        raise RuntimeError(
+                            "history_timeline_tts_selfheal_failed: "
+                            f"{type(_selfheal_exc_194_46).__name__}: {_selfheal_exc_194_46}"
+                        ) from _selfheal_exc_194_46
+
+                print("[Sprint194-46 History Timeline TTS PreSync]", {
+                    "narrations": len(normalized_clip_narrations),
+                    "audio_slots": len(clip_voice_paths),
+                    "nonempty_audio_slots": len([p for p in clip_voice_paths if p and Path(str(p)).is_file()]),
+                    "channel_type": str(channel_type or ""),
+                    "lang": _history_lang_tag_194_20,
+                    "voice_name": str(voice_name or ""),
+                }, flush=True)
+                if len(clip_voice_paths) != len(normalized_clip_narrations):
+                    raise RuntimeError(
+                        f"history_timeline_tts_count_mismatch: narrations={len(normalized_clip_narrations)} audio_slots={len(clip_voice_paths)}"
+                    )
+
+                _sync_root = Path("assets/manual_audio") / f"project_{project_id}" / f"history_194_11_{_history_lang_tag_194_20}"
+                _sync_root.mkdir(parents=True, exist_ok=True)
+
+                def _probe_194_11(_path):
+                    if not _path or not Path(str(_path)).is_file():
+                        return 0.0
+                    _r = subprocess.run(
+                        ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1", str(_path)],
+                        capture_output=True, text=True, encoding="utf-8", errors="replace", check=False,
+                    )
+                    try:
+                        return max(0.0, float((_r.stdout or "0").strip() or 0.0))
+                    except Exception:
+                        return 0.0
+
+                _scene_wavs_194_11 = []
+                _scene_durs_194_11 = []
+                for _idx, (_text, _voice) in enumerate(zip(normalized_clip_narrations, clip_voice_paths), start=1):
+                    if not str(_text or "").strip():
+                        raise RuntimeError(f"history_timeline_empty_narration: scene={_idx}")
+                    if not _voice or not Path(str(_voice)).is_file():
+                        raise RuntimeError(f"history_timeline_missing_tts: scene={_idx} path={_voice!r}")
+                    _wav = _sync_root / f"scene_{_idx:02d}_trim.wav"
+                    _trim = subprocess.run(
+                        [
+                            "ffmpeg", "-y", "-i", str(_voice),
+                            "-af", "silenceremove=start_periods=1:start_duration=0.01:start_threshold=-50dB",
+                            "-ar", "44100", "-ac", "2", "-c:a", "pcm_s16le", str(_wav),
+                        ],
+                        capture_output=True, text=True, encoding="utf-8", errors="replace", check=False,
+                    )
+                    if _trim.returncode != 0 or not _wav.is_file() or _wav.stat().st_size <= 1024 or _probe_194_11(_wav) < 0.15:
+                        _trim = subprocess.run(
+                            ["ffmpeg", "-y", "-i", str(_voice), "-ar", "44100", "-ac", "2", "-c:a", "pcm_s16le", str(_wav)],
+                            capture_output=True, text=True, encoding="utf-8", errors="replace", check=False,
+                        )
+                    _dur = _probe_194_11(_wav)
+                    if _trim.returncode != 0 or _dur < 0.15:
+                        raise RuntimeError(f"history_timeline_trim_failed: scene={_idx} duration={_dur:.3f}")
+                    _scene_wavs_194_11.append(str(_wav))
+                    _scene_durs_194_11.append(_dur)
+
+                _concat_file = _sync_root / "scene_audio_concat.txt"
+                _concat_file.write_text(
+                    "\n".join("file '" + str(Path(x).resolve()).replace("'", "'\\''") + "'" for x in _scene_wavs_194_11) + "\n",
+                    encoding="utf-8",
+                )
+                _full_wav = _sync_root / "narration_full.wav"
+                _join = subprocess.run(
+                    ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(_concat_file), "-c:a", "pcm_s16le", str(_full_wav)],
+                    capture_output=True, text=True, encoding="utf-8", errors="replace", check=False,
+                )
+                if _join.returncode != 0 or not _full_wav.is_file() or _full_wav.stat().st_size <= 1024:
+                    raise RuntimeError("history_timeline_audio_concat_failed: " + str((_join.stderr or _join.stdout or "")[-1000:]))
+
+                _full_mp3 = _sync_root / "narration_full.mp3"
+                _enc = subprocess.run(
+                    ["ffmpeg", "-y", "-i", str(_full_wav), "-c:a", "libmp3lame", "-b:a", "192k", str(_full_mp3)],
+                    capture_output=True, text=True, encoding="utf-8", errors="replace", check=False,
+                )
+                if _enc.returncode != 0 or not _full_mp3.is_file() or _full_mp3.stat().st_size <= 1024:
+                    raise RuntimeError("history_timeline_audio_encode_failed: " + str((_enc.stderr or _enc.stdout or "")[-1000:]))
+
+                _full_dur_194_11 = _probe_194_11(_full_mp3)
+                _sum_dur_194_11 = sum(_scene_durs_194_11)
+                # concat 컨테이너/인코딩 오차는 마지막 장면에만 보정하여 모든 장면 시작점이 누적 TTS 길이와 동일하게 유지됩니다.
+                if _scene_durs_194_11:
+                    _scene_durs_194_11[-1] += _full_dur_194_11 - _sum_dur_194_11
+
+                _history_full_voice_194_11 = str(_full_mp3)
+                _history_scene_durations_194_11 = list(_scene_durs_194_11)
+                resolved_voice_audio_path = _history_full_voice_194_11
+                intro_voice_path = ""
+
+                print("[Sprint194-13 History TTS Boundary Trim]", {
+                    "mode": "leading_silence_only",
+                    "internal_pause_preserved": True,
+                    "scene_count": len(_scene_wavs_194_11),
+                }, flush=True)
+                print("[Sprint194-11 History Single Timeline] READY", {
+                    "narrations": len(normalized_clip_narrations),
+                    "tts_files": len(_scene_wavs_194_11),
+                    "durations": [round(x, 3) for x in _history_scene_durations_194_11],
+                    "duration_sum": round(sum(_history_scene_durations_194_11), 3),
+                    "full_voice_seconds": round(_full_dur_194_11, 3),
+                    "intro_used": False,
+                    "full_script_tts_used": False,
+                    "voice_track_count": 1,
+                }, flush=True)
+            except Exception as _sync_exc:
+                print("[Sprint194-11 History Single Timeline] ERROR", type(_sync_exc).__name__, str(_sync_exc), flush=True)
+                return {
+                    "ok": False,
+                    "job_id": "",
+                    "state": {},
+                    "outputs": {
+                        "workflow_version": self.WORKFLOW_VERSION,
+                        "execution_mode": "history_single_timeline",
+                        "error": f"{type(_sync_exc).__name__}: {_sync_exc}",
+                    },
+                    "summary": "역사쿠키 장면별 나레이션 동기화에 실패했습니다.",
+                    "final_video_path": "",
+                }
 
         if narration_text and not str(resolved_voice_audio_path or "").strip():
             return {
@@ -4866,6 +5479,780 @@ class WorkflowEngine:
                 },
                 "summary": "나레이션 음성 생성에 실패해 영상 제작을 중단했습니다.",
             }
+
+        # Sprint194-9: 역사 모드는 기존 쇼핑 VideoPipeline의 음성/러닝타임 규칙을 완전히 우회합니다.
+        # 전체 TTS 1트랙의 실제 길이를 기준으로 이미지 1~N을 직접 렌더링하고,
+        # 자막/BGM도 여기서 처리하여 첫 장면 음성만 남는 문제를 차단합니다.
+        _history_mode_194_9 = str(channel_type or "").strip() in {"history", "history_ko", "history_en"}
+        if _history_mode_194_9:
+            try:
+                _history_root = Path("exports/history_direct") / f"project_{project_id}"
+                _history_root.mkdir(parents=True, exist_ok=True)
+
+                def _probe_dur_194_9(_path):
+                    if not _path or not Path(str(_path)).is_file():
+                        return 0.0
+                    _r = subprocess.run(
+                        ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1", str(_path)],
+                        capture_output=True, text=True, encoding="utf-8", errors="replace", check=False,
+                    )
+                    try:
+                        return max(0.0, float((_r.stdout or "0").strip() or 0.0))
+                    except Exception:
+                        return 0.0
+
+                # 장면별 TTS concat이 성공했으면 그것을 우선 사용하고,
+                # 실패했어도 전체 대본 TTS(typecast_auto_voice.mp3)는 반드시 사용할 수 있게 폴백합니다.
+                _full_voice = str(_history_full_voice_194_11 or resolved_voice_audio_path or "").strip()
+                _voice_duration = _probe_dur_194_9(_full_voice)
+                if _voice_duration <= 0.5:
+                    raise RuntimeError(f"history_full_voice_invalid: path={_full_voice!r} duration={_voice_duration}")
+
+                _image_root = Path("assets/history_scene_images") / f"project_{project_id}"
+                _images = sorted(
+                    [x for x in _image_root.glob("scene_*.*") if x.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}],
+                    key=lambda x: [int(v) if v.isdigit() else v for v in re.split(r"(\d+)", x.stem.lower())],
+                )
+                _scene_texts = [str(x or "").strip() for x in list(normalized_clip_narrations or [])]
+                # Sprint194-10: Streamlit 업로드 이미지는 UI 단계에서 history_XX.mp4로 변환된 뒤
+                # 원본 임시 이미지가 사라질 수 있습니다. 원본 이미지가 없으면 이미 전달된
+                # history_XX.mp4(generated_files)를 역사 장면 소스로 사용합니다.
+                _history_clips = [Path(str(x)) for x in list(generated_files or []) if str(x).strip() and Path(str(x)).is_file()]
+                _source_kind = "images" if _images else ("history_clips" if _history_clips else "missing")
+                _source_count = len(_images) if _images else len(_history_clips)
+                _scene_count = min(_source_count, len(_scene_texts))
+                print("[Sprint194-12 History Scene Source]", {
+                    "source_kind": _source_kind,
+                    "images": len(_images),
+                    "history_clips": len(_history_clips),
+                    "narrations": len(_scene_texts),
+                    "scene_count": _scene_count,
+                }, flush=True)
+                if _scene_count <= 0:
+                    raise RuntimeError(f"history_scene_missing: images={len(_images)} clips={len(_history_clips)} narrations={len(_scene_texts)}")
+                _images = _images[:_scene_count]
+                _history_clips = _history_clips[:_scene_count]
+                _scene_texts = _scene_texts[:_scene_count]
+
+                # Sprint194-12: 역사 장면은 UI에서 전달된 1~N 전체 소스를 그대로 사용합니다.
+                print(
+                    "[Sprint194-12 History 1to1 Check]",
+                    {
+                        "timeline": len(_history_scene_durations_194_11),
+                        "scene_sources": _scene_count,
+                        "narrations": len(_scene_texts),
+                        "source_kind": _source_kind,
+                    },
+                    flush=True,
+                )
+                # 이미지/자막/나레이션은 동일한 장면별 TTS 실제 길이를 공유합니다.
+                if len(_history_scene_durations_194_11) != _scene_count:
+                    raise RuntimeError(
+                        f"history_timeline_scene_count_mismatch: timeline={len(_history_scene_durations_194_11)} scenes={_scene_count}"
+                    )
+                _durations = [max(0.15, float(x)) for x in _history_scene_durations_194_11]
+                _durations[-1] += _voice_duration - sum(_durations)
+                if min(_durations) <= 0:
+                    raise RuntimeError(f"history_timeline_invalid_duration: {_durations}")
+                _timeline = []
+                _cursor = 0.0
+                for _i, _d in enumerate(_durations, start=1):
+                    _timeline.append({"scene": _i, "start": _cursor, "end": _cursor + _d, "duration": _d})
+                    _cursor += _d
+                print("[Sprint194-12 History Scene Timeline] READY", {
+                    "scene_count": len(_timeline),
+                    "start0": round(_timeline[0]["start"], 3) if _timeline else None,
+                    "end_last": round(_timeline[-1]["end"], 3) if _timeline else None,
+                    "voice_seconds": round(_voice_duration, 3),
+                }, flush=True)
+
+                _scene_dir = _history_root / "scenes"
+                _scene_dir.mkdir(parents=True, exist_ok=True)
+                _scene_videos = []
+                _scene_sources = list(_images) if _images else list(_history_clips)
+
+                # Sprint194-18 History Motion Director
+                # 장면 번호가 아니라 장면의 의미를 분류해 모든 역사쿠키 영상에 공통 적용합니다.
+                # 194-13의 TTS/자막/장면 타임라인은 절대 변경하지 않습니다.
+                def _history_role_194_18(idx, text):
+                    t = str(text or "").strip()
+                    if idx == _scene_count:
+                        return "ending"
+                    if idx == 1 or any(k in t for k in ["?!", "정말", "놀랍게도", "믿기", "진짜 이야기"]):
+                        return "hook"
+                    if any(k in t for k in ["쿵", "밟", "충돌", "들이받", "폭발", "쓰러", "사고", "침을 뱉", "비웃"]):
+                        return "impact"
+                    if any(k in t for k in ["눈물", "울", "야위", "초라", "불쌍", "슬퍼", "외로", "힘없이", "심각해"]):
+                        return "emotion"
+                    if any(k in t for k in ["다가가", "힐끗", "노려", "긴장", "위협", "다가오", "발이 움직"]):
+                        return "tension"
+                    if any(k in t for k in ["배를 타", "바다", "건너", "향함", "돌아오", "육지", "멀어지는", "도착"]):
+                        return "travel"
+                    if any(k in t for k in ["다시", "풀어", "해제", "돌려보", "돌아왔", "살게", "결국"]):
+                        return "resolution"
+                    if any(k in t for k in ["정신없이 먹", "엄청나게 먹", "먹이", "콩", "황당", "난감"]):
+                        return "comedy"
+                    if any(k in t for k in ["실록", "기록", "보고서", "지도", "장부", "회의", "논의", "태종", "신하"]):
+                        return "explain"
+                    return "normal"
+
+                _scene_roles_194_18 = [
+                    _history_role_194_18(i, _scene_texts[i-1] if i-1 < len(_scene_texts) else "")
+                    for i in range(1, _scene_count + 1)
+                ]
+
+                # Sprint194-19: 역할별 강도를 명시적으로 차등화합니다.
+                # IMPACT는 전체 장면을 흔들지 않고 시작 0.32초만 강한 zoom-punch + 감쇠 shake를 적용합니다.
+                _motion_intensity_194_19 = {
+                    "normal": 0.30, "explain": 0.35, "travel": 0.50, "comedy": 0.60,
+                    "tension": 0.72, "emotion": 0.80, "resolution": 0.55,
+                    "hook": 0.85, "ending": 0.90, "impact": 1.00,
+                }
+
+                # Sprint194-37: History framing/motion tuning.
+                # Keep normal scenes slightly wider so characters/props are not always edge-to-edge.
+                # Reserve stronger scale only for semantic emphasis, so impact zoom has visible room to move.
+                def _motion_filter_194_18(role, idx, dur):
+                    d = max(0.5, float(dur))
+                    intensity = _motion_intensity_194_19.get(role, 0.30)
+                    if role == "impact":
+                        # Wider base -> short 1.07x punch + restrained 0.28s decay shake.
+                        return ("scale='if(lt(t,0.14),1080*(1+0.07*t/0.14),1156)':"
+                                "h='if(lt(t,0.14),1920*(1+0.07*t/0.14),2055)':eval=frame:"
+                                "force_original_aspect_ratio=increase,"
+                                "crop=1080:1920:"
+                                "x='(iw-1080)/2+if(lt(t,0.28),12*sin(105*t)*(1-t/0.28),0)':"
+                                "y='(ih-1920)/2+if(lt(t,0.28),8*sin(131*t)*(1-t/0.28),0)',"
+                                "fps=30,format=yuv420p")
+                    if role == "hook":
+                        return "scale=1165:2072:force_original_aspect_ratio=increase,crop=1080:1920:x='(iw-1080)/2':y='(ih-1920)/2',fps=30,format=yuv420p"
+                    if role == "emotion":
+                        return (f"scale='1080+90*t/{d:.6f}':h='1920+160*t/{d:.6f}':eval=frame:force_original_aspect_ratio=increase,"
+                                f"crop=1080:1920:x='(iw-1080)/2':y='(ih-1920)*(0.58-0.16*t/{d:.6f})',fps=30,format=yuv420p")
+                    if role == "tension":
+                        return (f"scale='1080+110*t/{d:.6f}':h='1920+196*t/{d:.6f}':eval=frame:force_original_aspect_ratio=increase,"
+                                f"crop=1080:1920:x='(iw-1080)*(0.20+0.60*t/{d:.6f})':y='(ih-1920)/2',fps=30,format=yuv420p")
+                    if role == "travel":
+                        return ("scale=1125:2000:force_original_aspect_ratio=increase,"
+                                f"crop=1080:1920:x='(iw-1080)*(0.10+0.80*t/{d:.6f})':y='(ih-1920)/2',fps=30,format=yuv420p")
+                    if role == "resolution":
+                        return ("scale=1115:1982:force_original_aspect_ratio=increase,"
+                                f"crop=1080:1920:x='(iw-1080)/2':y='(ih-1920)*(0.58-0.16*t/{d:.6f})',fps=30,format=yuv420p")
+                    if role == "comedy":
+                        return ("scale=1150:2045:force_original_aspect_ratio=increase,"
+                                f"crop=1080:1920:x='(iw-1080)*(0.22+0.56*t/{d:.6f})':y='(ih-1920)/2',fps=30,format=yuv420p")
+                    if role == "ending":
+                        return ("scale='if(lt(t,0.24),1135+80*(1-t/0.24),1135)':"
+                                "h='if(lt(t,0.24),2018+142*(1-t/0.24),2018)':eval=frame:"
+                                "force_original_aspect_ratio=increase,crop=1080:1920:"
+                                "x='(iw-1080)/2':y='(ih-1920)/2',fps=30,format=yuv420p")
+                    if role == "explain":
+                        return (f"scale='1080+70*t/{d:.6f}':h='1920+124*t/{d:.6f}':eval=frame:force_original_aspect_ratio=increase,"
+                                f"crop=1080:1920:x='(iw-1080)*(0.78-0.56*t/{d:.6f})':y='(ih-1920)/2',fps=30,format=yuv420p")
+                    if idx % 2:
+                        return (f"scale='1080+60*t/{d:.6f}':h='1920+107*t/{d:.6f}':eval=frame:force_original_aspect_ratio=increase,"
+                                f"crop=1080:1920:x='(iw-1080)/2':y='(ih-1920)*(0.47+0.06*t/{d:.6f})',fps=30,format=yuv420p")
+                    return (f"scale='1080+60*t/{d:.6f}':h='1920+107*t/{d:.6f}':eval=frame:force_original_aspect_ratio=increase,"
+                            f"crop=1080:1920:x='(iw-1080)/2':y='(ih-1920)*(0.53-0.06*t/{d:.6f})',fps=30,format=yuv420p")
+
+                _scene_videos = []
+                _motion_plan_194_18 = []
+                for _idx, (_src, _dur) in enumerate(zip(_scene_sources, _durations), start=1):
+                    _out = _scene_dir / f"scene_{_idx:02d}.mp4"
+                    _d = max(0.5, float(_dur))
+                    _role = _scene_roles_194_18[_idx-1]
+                    _src_path_194_56 = Path(str(_src))
+                    _is_native_clip_194_56 = _source_kind != "images"
+
+                    # Sprint194-58: regression restore. Native history MP4s are NOT re-rendered per scene.
+                    # They are registered here and trimmed/concatenated once in a single FFmpeg filter graph below.
+                    # This restores the pre-cache behavior that preserved Scene 1 motion.
+                    if _is_native_clip_194_56:
+                        _scene_videos.append(str(_src_path_194_56))
+                        print("[Sprint194-58 History Native Direct Source]", {
+                            "scene": _idx, "source": str(_src_path_194_56), "target_seconds": round(_d, 3),
+                            "intermediate_render": False,
+                        }, flush=True)
+                    else:
+                        _vf = _motion_filter_194_18(_role, _idx, _d)
+                        _cmd = ["ffmpeg", "-y", "-loop", "1", "-i", str(_src_path_194_56), "-vf", _vf,
+                                "-t", f"{_d:.3f}", "-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+                                "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(_out)]
+                        _r = subprocess.run(_cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
+                        if _r.returncode != 0 or not _out.is_file() or _out.stat().st_size <= 1024:
+                            raise RuntimeError("history_scene_render_failed: " + str((_r.stderr or _r.stdout or "")[-1200:]))
+                        _scene_videos.append(str(_out))
+                        print("[Sprint194-58 History Image Scene Render]", {"scene": _idx, "path": str(_out)}, flush=True)
+
+                    _motion_plan_194_18.append({"scene": _idx, "role": _role, "intensity": _motion_intensity_194_19.get(_role, 0.30), "motion": (
+                        "native-video-preserved" if _is_native_clip_194_56 else {
+                            "hook":"impact-framing", "explain":"slow-pan", "comedy":"quick-pan", "tension":"tension-push",
+                            "impact":"impact-zoom-framing+0.28s-shake", "emotion":"emotion-push", "travel":"wide-pan",
+                            "resolution":"gentle-release", "ending":"cookie-pop-framing", "normal":"soft-drift"}.get(_role, "soft-drift")
+                    )})
+                    print("[Sprint194-57 History Native Clip Verify]", {"scene": _idx, "native_video": _is_native_clip_194_56, "source": str(_src_path_194_56)}, flush=True)
+
+                print("[Sprint194-38 History Motion Render Verify] READY", {
+                    "scene_count": len(_scene_videos),
+                    "roles": _scene_roles_194_18,
+                    "motion_plan": _motion_plan_194_18,
+                    "impact_shake_seconds": 0.28,
+                    "random_motion": False,
+                    "timeline_locked": True,
+                    "voice_seconds": round(_voice_duration, 3),
+                    "shopping_pipeline_untouched": True,
+                    "rendered_scene_files": _scene_videos,
+                }, flush=True)
+
+                _silent_video = _history_root / "history_silent.mp4"
+                if _source_kind != "images":
+                    # Sprint194-58: decode each ORIGINAL MP4 once, trim to its TTS slot, then concatenate.
+                    # No scene_XX.mp4 intermediate exists for native clips.
+                    _native_inputs_194_58 = []
+                    _native_filters_194_58 = []
+                    for _j58, (_src58, _d58) in enumerate(zip(_scene_videos, _durations)):
+                        _native_inputs_194_58 += ["-i", str(_src58)]
+                        _dd58 = max(0.5, float(_d58))
+                        _native_filters_194_58.append(
+                            f"[{_j58}:v]setpts=PTS-STARTPTS,scale=1080:1920:force_original_aspect_ratio=increase,"
+                            f"crop=1080:1920,fps=30,tpad=stop_mode=clone:stop_duration={_dd58:.3f},"
+                            f"trim=duration={_dd58:.3f},setpts=PTS-STARTPTS,format=yuv420p[v{_j58}]"
+                        )
+                    _native_filters_194_58.append(
+                        "".join(f"[v{k}]" for k in range(len(_scene_videos))) +
+                        f"concat=n={len(_scene_videos)}:v=1:a=0[vout]"
+                    )
+                    _cmd58 = ["ffmpeg", "-y"] + _native_inputs_194_58 + [
+                        "-filter_complex", ";".join(_native_filters_194_58), "-map", "[vout]",
+                        "-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+                        "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(_silent_video),
+                    ]
+                    _r = subprocess.run(_cmd58, capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
+                    if _r.returncode != 0 or not _silent_video.is_file() or _silent_video.stat().st_size <= 1024:
+                        raise RuntimeError("history_native_direct_concat_failed: " + str((_r.stderr or _r.stdout or "")[-1600:]))
+                    print("[Sprint194-58 History Native Direct Timeline] READY", {
+                        "scene_count": len(_scene_videos), "intermediate_scene_renders": 0,
+                        "voice_seconds": round(_voice_duration, 3), "silent_video": str(_silent_video),
+                    }, flush=True)
+                    # Scene-1 regression guard against the actual combined timeline.
+                    def _frame_md5_194_58(_path, _sec):
+                        _p58 = subprocess.run(["ffmpeg", "-v", "error", "-ss", f"{max(0.0,float(_sec)):.3f}", "-i", str(_path),
+                                               "-frames:v", "1", "-f", "md5", "-"],
+                                              capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
+                        return str((_p58.stdout or "").strip())
+                    _probe58 = max(0.35, min(1.25, float(_durations[0]) * 0.65))
+                    _src1_58 = Path(str(_scene_videos[0]))
+                    _sm58 = _frame_md5_194_58(_src1_58, 0.12) != _frame_md5_194_58(_src1_58, _probe58)
+                    _fm58 = _frame_md5_194_58(_silent_video, 0.12) != _frame_md5_194_58(_silent_video, _probe58)
+                    print("[Sprint194-58 History Scene1 Motion Guard]", {"source_moves": _sm58, "final_timeline_moves": _fm58, "probe_second": round(_probe58,3)}, flush=True)
+                    if _sm58 and not _fm58:
+                        raise RuntimeError("history_scene1_motion_regression_after_direct_timeline")
+                else:
+                    _concat_list = _history_root / "video_concat.txt"
+                    _concat_list.write_text("\n".join("file '" + str(Path(v).resolve()).replace("'", "'\\''") + "'" for v in _scene_videos) + "\n", encoding="utf-8")
+                    _r = subprocess.run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(_concat_list), "-c", "copy", str(_silent_video)],
+                                        capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
+                    if _r.returncode != 0 or not _silent_video.is_file() or _silent_video.stat().st_size <= 1024:
+                        raise RuntimeError("history_video_concat_failed: " + str((_r.stderr or _r.stdout or "")[-1200:]))
+
+                # ASS 자막: 장면 길이와 1:1 타이밍. 빈 자막은 건너뜁니다.
+                def _ass_time_194_9(sec):
+                    sec = max(0.0, float(sec))
+                    h = int(sec // 3600); sec -= h * 3600
+                    m = int(sec // 60); sec -= m * 60
+                    s2 = int(sec); cs = int(round((sec - s2) * 100))
+                    if cs >= 100: s2 += 1; cs -= 100
+                    return f"{h}:{m:02d}:{s2:02d}.{cs:02d}"
+
+                _subs = [str(x or "").strip() for x in list(clip_subtitles or [])][: _scene_count]
+
+                # Sprint194-31: English-only mobile subtitle readability.
+                # Balance long English captions into at most two word-boundary lines.
+                # Korean History Cookie and shopping subtitles are untouched.
+                _is_history_en_194_31 = str(channel_type or "").strip().lower() == "history_en"
+                def _wrap_english_subtitle_194_31(text, target=23, hard=28):
+                    text = " ".join(str(text or "").replace("\n", " ").split()).strip()
+                    if not text or not _is_history_en_194_31 or len(text) <= hard:
+                        return text
+                    words = text.split()
+                    if len(words) < 2:
+                        return text
+                    # Pick the split whose two line lengths are most balanced, while
+                    # preferring lines near the mobile-safe target width.
+                    best = None
+                    for i in range(1, len(words)):
+                        a = " ".join(words[:i]); b = " ".join(words[i:])
+                        score = abs(len(a)-len(b)) + max(0, len(a)-hard)*8 + max(0, len(b)-hard)*8
+                        score += abs(max(len(a),len(b))-target) * 0.15
+                        if best is None or score < best[0]:
+                            best = (score, a, b)
+                    return (best[1] + "\n" + best[2]) if best else text
+                # Sprint194-35: merge the English subtitle unicode/emoji safety fix with
+                # the Korean mobile-audio branch.  This runs only on rendered English
+                # subtitles; narration text and Korean subtitles are intentionally untouched.
+                def _sanitize_english_subtitle_194_35(text):
+                    import unicodedata
+                    out = []
+                    removed = 0
+                    for ch in str(text or ""):
+                        cp = ord(ch)
+                        cat = unicodedata.category(ch)
+                        is_emoji_range = (
+                            0x1F000 <= cp <= 0x1FAFF or
+                            0x2600 <= cp <= 0x27BF or
+                            0x2300 <= cp <= 0x23FF or
+                            0xFE00 <= cp <= 0xFE0F or
+                            0x1F1E6 <= cp <= 0x1F1FF or
+                            cp in {0x200D, 0x20E3}
+                        )
+                        # Strip emoji/pictographs, variation selectors, joiners, private-use
+                        # and surrogate/control artifacts that commonly render as tofu boxes.
+                        if is_emoji_range or cat in {"Cs", "Co"}:
+                            removed += 1
+                            continue
+                        if cat == "Cf" and ch not in {"\n", "\t"}:
+                            removed += 1
+                            continue
+                        out.append(ch)
+                    cleaned = "".join(out)
+                    cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
+                    cleaned = re.sub(r" *\n *", "\n", cleaned).strip()
+                    return cleaned, removed
+
+                if _is_history_en_194_31:
+                    _cleaned_subs_194_35 = []
+                    _removed_unicode_194_35 = 0
+                    for _sub_194_35 in _subs:
+                        _clean_194_35, _removed_194_35 = _sanitize_english_subtitle_194_35(_sub_194_35)
+                        _cleaned_subs_194_35.append(_clean_194_35)
+                        _removed_unicode_194_35 += _removed_194_35
+                    _subs = [_wrap_english_subtitle_194_31(x) for x in _cleaned_subs_194_35]
+                    print("[Sprint194-35 English Subtitle Unicode Safe] READY", {
+                        "count": len(_subs),
+                        "removed_codepoints": _removed_unicode_194_35,
+                        "narration_untouched": True,
+                        "korean_subtitles_untouched": True,
+                    }, flush=True)
+                    print("[Sprint194-31 English Subtitle] READY", {
+                        "count": len(_subs),
+                        "wrapped": sum("\n" in x for x in _subs),
+                        "max_line_chars": max([max([len(y) for y in x.split("\n")]+[0]) for x in _subs]+[0]),
+                    }, flush=True)
+
+                # Sprint194-58: restore History Cookie typography from the known-good 194-48/49A path.
+                _history_body_font_194_48 = "Cinzel" if _is_history_en_194_31 else "이순신 돋움체"
+                _history_emphasis_font_194_48 = "Bebas Neue" if _is_history_en_194_31 else "청소년성취포상제체"
+                _history_body_size_194_48 = 68 if _is_history_en_194_31 else 76
+                _history_emphasis_size_194_48 = int(round(_history_body_size_194_48 * 1.18))
+                _font_dir_194_48d = _history_root / "fonts_48d"
+                _font_dir_194_48d.mkdir(parents=True, exist_ok=True)
+                _font_resolve_194_48d = {}
+                try:
+                    import winreg
+                    import shutil as _shutil_194_48d
+                    _font_registry_194_48d = []
+                    for _hive in (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER):
+                        try:
+                            with winreg.OpenKey(_hive, r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts") as _rk:
+                                _j = 0
+                                while True:
+                                    try:
+                                        _n, _v, _typ = winreg.EnumValue(_rk, _j); _j += 1
+                                        _font_registry_194_48d.append((str(_n), str(_v)))
+                                    except OSError: break
+                        except OSError: pass
+                    _targets_194_48d = {
+                        "body": ["Cinzel"] if _is_history_en_194_31 else ["이순신 돋움", "이순신돋움", "YiSunShin Dotum", "YiSunShinDotum"],
+                        "emphasis": ["Bebas Neue", "BebasNeue"] if _is_history_en_194_31 else ["청소년성취포상제", "청소년 성취포상제", "Korea Youth Award"],
+                    }
+                    _win_fonts_194_48d = Path(os.environ.get("WINDIR", r"C:\Windows")) / "Fonts"
+                    _user_fonts_194_59 = Path(os.environ.get("LOCALAPPDATA", "")) / "Microsoft" / "Windows" / "Fonts"
+
+                    def _norm_font_name_194_59(_value):
+                        return re.sub(r"[^0-9a-z가-힣]+", "", str(_value or "").lower())
+
+                    def _copy_font_hit_194_59(_srcf, _display_name, _source_kind):
+                        try:
+                            _srcf = Path(_srcf)
+                            if not _srcf.is_file():
+                                return None
+                            _dstf = _font_dir_194_48d / _srcf.name
+                            _shutil_194_48d.copy2(_srcf, _dstf)
+                            return {"registry_name": str(_display_name), "source": str(_srcf), "local": str(_dstf), "resolver": _source_kind}
+                        except Exception:
+                            return None
+
+                    def _font_file_family_names_194_59(_font_path):
+                        _names = []
+                        try:
+                            from fontTools.ttLib import TTFont
+                            _tt = TTFont(str(_font_path), lazy=True, fontNumber=0)
+                            try:
+                                for _rec in _tt["name"].names:
+                                    if _rec.nameID not in (1, 4, 6, 16):
+                                        continue
+                                    try:
+                                        _txt = _rec.toUnicode().strip()
+                                    except Exception:
+                                        continue
+                                    if _txt and _txt not in _names:
+                                        _names.append(_txt)
+                            finally:
+                                _tt.close()
+                        except Exception:
+                            pass
+                        return _names
+
+                    for _kind, _aliases in _targets_194_48d.items():
+                        _hit = None
+                        _alias_norms = [_norm_font_name_194_59(a) for a in _aliases if a]
+
+                        # 1) Preserve the known-good registry lookup first.
+                        for _reg_name, _reg_file in _font_registry_194_48d:
+                            _reg_norm = _norm_font_name_194_59(_reg_name)
+                            if any(a and a in _reg_norm for a in _alias_norms):
+                                _srcf = Path(_reg_file)
+                                if not _srcf.is_absolute():
+                                    _srcf = _win_fonts_194_48d / _srcf
+                                _hit = _copy_font_hit_194_59(_srcf, _reg_name, "registry")
+                                if _hit:
+                                    break
+
+                        # 2) Sprint194-59 ONLY fallback: scan installed font files.
+                        #    This fixes fonts that exist in Windows/User Fonts but have no
+                        #    matching registry display name. No renderer/TTS/timeline code changes.
+                        if _hit is None:
+                            _font_files = []
+                            for _font_root in (_user_fonts_194_59, _win_fonts_194_48d):
+                                if not _font_root.is_dir():
+                                    continue
+                                try:
+                                    _font_files.extend([x for x in _font_root.iterdir() if x.is_file() and x.suffix.lower() in (".ttf", ".otf", ".ttc")])
+                                except Exception:
+                                    pass
+
+                            # Fast filename/stem match first.
+                            for _font_path in _font_files:
+                                _stem_norm = _norm_font_name_194_59(_font_path.stem)
+                                if any(a and (a in _stem_norm or _stem_norm in a) for a in _alias_norms):
+                                    _hit = _copy_font_hit_194_59(_font_path, _font_path.stem, "filename-scan")
+                                    if _hit:
+                                        break
+
+                            # If filename is unrelated, inspect the font's internal family names.
+                            if _hit is None:
+                                for _font_path in _font_files:
+                                    _family_names = _font_file_family_names_194_59(_font_path)
+                                    _matched_family = None
+                                    for _family_name in _family_names:
+                                        _family_norm = _norm_font_name_194_59(_family_name)
+                                        if any(a and (a in _family_norm or _family_norm in a) for a in _alias_norms):
+                                            _matched_family = _family_name
+                                            break
+                                    if _matched_family:
+                                        _hit = _copy_font_hit_194_59(_font_path, _matched_family, "font-name-table")
+                                        if _hit:
+                                            break
+
+                        # Sprint194-60 ONLY: Korean emphasis font is installed under the
+                        # Windows family name "청소년서체" and file Youth.ttf. Bind that exact
+                        # known path without changing any subtitle selection/render/timeline logic.
+                        if _kind == "emphasis" and (not _is_history_en_194_31):
+                            _youth_font_194_60 = Path(os.environ.get("LOCALAPPDATA", "")) / "Microsoft" / "Windows" / "Fonts" / "Youth.ttf"
+                            if _youth_font_194_60.is_file():
+                                _direct_hit_194_60 = _copy_font_hit_194_59(_youth_font_194_60, "청소년서체 (TrueType)", "direct-youth-194-60")
+                                if _direct_hit_194_60:
+                                    _hit = _direct_hit_194_60
+
+                        _font_resolve_194_48d[_kind] = _hit
+                except Exception as _font_exc_194_48d:
+                    _font_resolve_194_48d["error"] = f"{type(_font_exc_194_48d).__name__}: {_font_exc_194_48d}"
+                def _ass_family_194_58(_hit, _fallback):
+                    _name = str((_hit or {}).get("registry_name") or "").strip()
+                    if not _name: return _fallback
+                    _name = re.sub(r"\s*\((?:TrueType|OpenType)\)\s*$", "", _name, flags=re.I).strip()
+                    _name = re.sub(r"\s+(?:Regular|Normal)\s*$", "", _name, flags=re.I).strip()
+                    return _name or _fallback
+                _history_body_font_194_48 = _ass_family_194_58(_font_resolve_194_48d.get("body"), _history_body_font_194_48)
+                _history_emphasis_font_194_48 = _ass_family_194_58(_font_resolve_194_48d.get("emphasis"), _history_emphasis_font_194_48)
+                print("[Sprint194-60 History Youth Font Direct] READY", {"body": _history_body_font_194_48, "emphasis": _history_emphasis_font_194_48, "resolved": _font_resolve_194_48d}, flush=True)
+
+                _ass = _history_root / "history_subtitles.ass"
+                _ass_lines = [
+                    "[Script Info]", "ScriptType: v4.00+", "PlayResX: 1080", "PlayResY: 1920", "WrapStyle: 2", "ScaledBorderAndShadow: yes", "",
+                    "[V4+ Styles]",
+                    "Format: Name,Fontname,Fontsize,PrimaryColour,SecondaryColour,OutlineColour,BackColour,Bold,Italic,Underline,StrikeOut,ScaleX,ScaleY,Spacing,Angle,BorderStyle,Outline,Shadow,Alignment,MarginL,MarginR,MarginV,Encoding",
+                    f"Style: Default,{_history_body_font_194_48},{_history_body_size_194_48},&H00FFFFFF,&H000000FF,&H00000000,&H64000000,-1,0,0,0,100,100,0,0,1,4,0,2,96,96,500,1",
+                    f"Style: Hook,{_history_body_font_194_48},{_history_body_size_194_48},&H00FFFFFF,&H000000FF,&H00000000,&H64000000,-1,0,0,0,100,100,0,0,1,4,0,2,96,96,500,1",
+                    f"Style: Impact,{_history_body_font_194_48},{_history_body_size_194_48},&H00FFFFFF,&H000000FF,&H00000000,&H64000000,-1,0,0,0,100,100,0,0,1,4,0,2,96,96,500,1",
+                    f"Style: Emotion,{_history_body_font_194_48},{_history_body_size_194_48},&H00FFFFFF,&H000000FF,&H00000000,&H64000000,-1,-1,0,0,100,100,0,0,1,4,0,2,96,96,500,1",
+                    f"Style: Comedy,{_history_body_font_194_48},{_history_body_size_194_48},&H00FFFFFF,&H000000FF,&H00000000,&H64000000,-1,0,0,0,100,100,0,0,1,4,0,2,96,96,500,1",
+                    f"Style: Ending,{_history_body_font_194_48},{_history_body_size_194_48},&H00FFFFFF,&H000000FF,&H00000000,&H64000000,-1,0,0,0,100,100,0,0,1,4,0,2,96,96,500,1", "",
+                    "[Events]", "Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text",
+                ]
+                _t = 0.0
+                _emphasis_verify_194_38 = []
+                for _i, _d in enumerate(_durations):
+                    _sub = _subs[_i] if _i < len(_subs) else ""
+                    if _sub:
+                        _role = _scene_roles_194_18[_i] if _i < len(_scene_roles_194_18) else "normal"
+                        _style = {"hook":"Hook", "impact":"Impact", "emotion":"Emotion", "comedy":"Comedy", "ending":"Ending"}.get(_role, "Default")
+                        _fx = r"{\fs72}" if _is_history_en_194_31 else ""
+                        if _role in {"hook", "impact"}:
+                            _fx = r"{\fad(40,100)\fscx112\fscy112\t(0,180,\fscx100\fscy100)}"
+                        elif _role == "comedy":
+                            _fx = r"{\fad(70,120)\fscx106\fscy106\t(0,220,\fscx100\fscy100)}"
+                        elif _role == "emotion":
+                            _fx = r"{\fad(280,220)}"
+                        elif _role == "ending":
+                            _fx = r"{\fad(80,180)\fscx110\fscy110\t(0,240,\fscx100\fscy100)}"
+                        else:
+                            _fx = r"{\fad(100,120)}"
+
+                        if _is_history_en_194_31:
+                            # Sprint194-41: fixed English subtitle size + safe horizontal margins.
+                            # Disable scale-up transforms that can clip hook text at frame edges.
+                            if _role in {"hook", "impact", "comedy", "ending"}:
+                                _fx = r"{\fs72\fad(80,140)}"
+                            else:
+                                _fx = r"{\fs72}" + _fx
+
+                        # Sprint194-17: 핵심 단어만 겨자/금색. [수동강조]가 있으면 그것을 최우선 사용합니다.
+                        # ASS 색상은 BGR 순서: #D4A72C -> &H002CA7D4&
+                        def _esc_ass_194_17(v):
+                            return str(v or "").replace("\\", r"\\").replace("{", r"\{").replace("}", r"\}").replace("\n", r"\N")
+                        _gold_open = r"{\c&H002CA7D4&}"
+                        _gold_close = r"{\c&H00FFFFFF&}"
+                        _manual = re.search(r"\[([^\[\]]+)\]", _sub)
+                        if _manual:
+                            _plain = _sub.replace("[" + _manual.group(1) + "]", "__HIGHLIGHT__", 1)
+                            _manual_fx = rf"{{\fn{_history_emphasis_font_194_48}\fs{_history_emphasis_size_194_48}\b1\c&H002CA7D4&\bord5\shad0}}"
+                            _esc = _esc_ass_194_17(_plain).replace("__HIGHLIGHT__", _manual_fx + _esc_ass_194_17(_manual.group(1)) + r"{\r" + _style + "}", 1)
+                            _emphasis_verify_194_38.append({"scene": _i+1, "keyword": _manual.group(1), "source": "manual", "style": _style})
+                        else:
+                            _esc = _esc_ass_194_17(_sub)
+                            # Sprint194-58: selective semantic emphasis, topic-independent.
+                            # Strong phrases only; connective scenes stay white. Manual [brackets] still win.
+                            _picked_kw = ""
+                            _clean_kw_text = re.sub(r"[\n]+", " ", _sub).strip()
+                            _clean_kw_text = re.sub(r"\s{2,}", " ", _clean_kw_text)
+                            if _is_history_en_194_31:
+                                _patterns58 = [
+                                    r"\b(?:do not|never|must not)\s+[^,.!?]{2,24}",
+                                    r"\b(?:King|Queen|Emperor|General|Prince|Princess)\s+[A-Z][A-Za-z-]+(?:\s+[A-Z][A-Za-z-]+)?\b",
+                                    r"\b(?:banished|executed|assassinated|abdicated|fell|defeated|survived|recorded)\b",
+                                ]
+                            else:
+                                _patterns58 = [
+                                    r"(?:말에서\s*)?떨어졌다",
+                                    r"(?:사관(?:에게|이)?\s*)?(?:알게\s*)?하지\s*말라",
+                                    r"사관에게\s*알리지\s*말라",
+                                    r"숨기라고\s*한\s*것도",
+                                    r"(?:태종|세종|정조|영조|숙종|선조|광해군|연산군|이순신)(?:\s+[가-힣]{2,4})?",
+                                    r"(?:낙마|유배|즉위|폐위|반란|처형|암살)",
+                                    r"(?:구독|좋아요)",
+                                ]
+                            for _pat58 in _patterns58:
+                                _m58 = re.search(_pat58, _clean_kw_text, flags=re.IGNORECASE if _is_history_en_194_31 else 0)
+                                if _m58:
+                                    _picked_kw = _m58.group(0).strip(" ,.!?…~:;")
+                                    break
+                            # Avoid weak one-word repeats such as generic '사관'/'기록' unless the whole caption is that concept.
+                            if _picked_kw and len(_picked_kw) < 2:
+                                _picked_kw = ""
+                            if _picked_kw:
+                                print("[Sprint194-58 History Semantic Emphasis] PICK", {"scene": _i+1, "keyword": _picked_kw, "role": _role, "subtitle": _sub}, flush=True)
+                            else:
+                                print("[Sprint194-58 History Semantic Emphasis] SKIP", {"scene": _i+1, "role": _role, "subtitle": _sub}, flush=True)
+                            if _picked_kw:
+                                _esc = _esc.replace(_esc_ass_194_17(_picked_kw), rf"{{\fn{_history_emphasis_font_194_48}\fs{_history_emphasis_size_194_48}\b1\c&H002CA7D4&\bord5\shad0}}" + _esc_ass_194_17(_picked_kw) + r"{\r" + _style + "}", 1)
+                                _emphasis_verify_194_38.append({"scene": _i+1, "keyword": _picked_kw, "source": "auto", "style": _style})
+                        _ass_lines.append(f"Dialogue: 0,{_ass_time_194_9(_t)},{_ass_time_194_9(_t+_d)},{_style},,0,0,0,,{_fx}{_esc}")
+                    _t += _d
+                _ass.write_text("\n".join(_ass_lines) + "\n", encoding="utf-8")
+                print("[Sprint194-38 History Emphasis Render Verify] READY", {"count": len(_emphasis_verify_194_38), "items": _emphasis_verify_194_38, "ass_path": str(_ass), "ass_has_gold": any("2CA7D4" in x for x in _ass_lines)}, flush=True)
+
+                # Sprint194-16: 역할 기반 SFX. 외부 파일 의존 없이 FFmpeg로 짧은 효과음을 생성합니다.
+                # TTS/장면 타임라인은 변경하지 않고 타임라인 위에만 얹습니다.
+                _sfx_dir = _history_root / "sfx"
+                _sfx_dir.mkdir(parents=True, exist_ok=True)
+                _sfx_specs = {
+                    "impact": ("sine=frequency=82:duration=0.22", 0.20),
+                    "eat": ("anoisesrc=color=brown:duration=0.20:amplitude=0.42", 0.11),
+                    "paper": ("anoisesrc=color=pink:duration=0.20:amplitude=0.25", 0.055),
+                    "wave": ("anoisesrc=color=pink:duration=0.55:amplitude=0.22", 0.045),
+                    "ending": ("sine=frequency=880:duration=0.13", 0.12),
+                }
+                def _sfx_kind_194_17(idx, text, role):
+                    t = str(text or "")
+                    if role == "ending": return "ending"
+                    if role == "impact": return "impact"
+                    if any(k in t for k in ["싫", "거절", "안 먹", "마다", "단호"]): return "impact"
+                    if any(k in t for k in ["먹", "뜯", "고기", "콩", "먹이"]): return "eat"
+                    if any(k in t for k in ["실록", "보고서", "지도", "장부"]): return "paper"
+                    if any(k in t for k in ["배를 타", "바다", "섬으로", "육지로"]): return "wave"
+                    return ""
+                _sfx_events = []
+                _fx_plan_194_17 = []
+                for _ev, _role in zip(_timeline, _scene_roles_194_18):
+                    _idx = int(_ev.get("scene") or 0)
+                    _txt = _scene_texts[_idx-1] if 0 < _idx <= len(_scene_texts) else ""
+                    _kind = _sfx_kind_194_17(_idx, _txt, _role)
+                    _fx_plan_194_17.append({"scene": _idx, "role": _role, "sfx": _kind or "none"})
+                    if _kind not in _sfx_specs:
+                        continue
+                    _lavfi, _vol = _sfx_specs[_kind]
+                    _sfx = _sfx_dir / f"{_kind}.wav"
+                    if not _sfx.is_file():
+                        subprocess.run(["ffmpeg","-y","-f","lavfi","-i",_lavfi,"-af",f"volume={_vol}",str(_sfx)], capture_output=True, check=False)
+                    if _sfx.is_file():
+                        _sfx_events.append((_sfx, int(round(float(_ev["start"]) * 1000.0)), _kind))
+                print("[Sprint194-38 History SFX Render Verify] READY", {"count": len(_sfx_events), "events": [{"file": str(a), "delay_ms": b, "kind": c} for a,b,c in _sfx_events]}, flush=True)
+
+                _final_name_194_20 = f"{project_id}_history_en_final.mp4" if _history_lang_tag_194_20 == "en" else f"{project_id}_final.mp4"
+                _final = Path("exports/videos") / _final_name_194_20
+                _final.parent.mkdir(parents=True, exist_ok=True)
+                _inputs = ["-i", str(_silent_video), "-i", str(_full_voice)]
+                _filter_parts = []
+                # Sprint194-34: History mobile voice presence master.
+                # Korean narration needed more phone-speaker intelligibility even after the -14 LUFS master.
+                # Keep English on the proven 194-29 balance; give Korean a tighter, more present voice chain
+                # and slightly lower bed/SFX so the narration stays clearly in front. Shopping is untouched.
+                _is_ko_audio_194_34 = str(_history_lang_tag_194_20 or "").strip().lower() != "en"
+                # Sprint194-39: BGM slider must reach the history renderer unchanged.
+                # 20% in One Click now means FFmpeg volume=0.20 instead of the old hard-coded 0.09 (KO) / 0.14 (EN).
+                try:
+                    _bgm_ui_percent_194_39 = max(0, min(100, int(bgm_volume_percent if bgm_volume_percent is not None else 10)))
+                except Exception:
+                    _bgm_ui_percent_194_39 = 10
+                _bgm_gain_194_39 = float(_bgm_ui_percent_194_39) / 100.0
+                if _is_ko_audio_194_34:
+                    _filter_parts.append("[1:a]highpass=f=95,lowpass=f=12500,equalizer=f=2800:t=q:w=1.1:g=2.5,acompressor=threshold=-20dB:ratio=3:attack=8:release=90:makeup=3,volume=1.18[voice]")
+                    _sfx_gain_194_34 = 1.12
+                    _final_lufs_194_34 = -13
+                    _final_lra_194_34 = 8
+                else:
+                    _filter_parts.append("[1:a]volume=1.20[voice]")
+                    _sfx_gain_194_34 = 1.25
+                    _final_lufs_194_34 = -14
+                    _final_lra_194_34 = 11
+                _bgm_gain_194_34 = _bgm_gain_194_39
+                print("[Sprint194-39 History BGM UI Volume] READY", {
+                    "ui_percent": _bgm_ui_percent_194_39,
+                    "ffmpeg_gain": round(_bgm_gain_194_39, 4),
+                    "mapping": "linear-percent",
+                    "legacy_fixed_gain_removed": True,
+                    "history_only": True,
+                }, flush=True)
+                _audio_inputs = ["[voice]"]
+                _next_input = 2
+                if bgm_audio_path and Path(str(bgm_audio_path)).is_file():
+                    _inputs += ["-stream_loop", "-1", "-i", str(bgm_audio_path)]
+                    _filter_parts.append(f"[{_next_input}:a]volume={_bgm_gain_194_34}[bgm]")
+                    _audio_inputs.append("[bgm]")
+                    _next_input += 1
+                for _j, (_sfx, _delay, _role) in enumerate(_sfx_events):
+                    _inputs += ["-i", str(_sfx)]
+                    _tag = f"sfx{_j}"
+                    _filter_parts.append(f"[{_next_input}:a]volume={_sfx_gain_194_34},adelay={_delay}|{_delay}[{_tag}]")
+                    _audio_inputs.append(f"[{_tag}]")
+                    _next_input += 1
+                if len(_audio_inputs) > 1:
+                    _filter_parts.append("".join(_audio_inputs) + f"amix=inputs={len(_audio_inputs)}:duration=first:dropout_transition=0:normalize=0[mixraw]")
+                else:
+                    _filter_parts.append("[voice]anull[mixraw]")
+                _filter_parts.append(f"[mixraw]loudnorm=I={_final_lufs_194_34}:TP=-1:LRA={_final_lra_194_34}[aout]")
+                _audio_map = "[aout]"
+                print("[Sprint194-34 History Mobile Voice Presence] READY", {
+                    "language": "ko" if _is_ko_audio_194_34 else "en",
+                    "ko_voice_presence_eq_db": 2.5 if _is_ko_audio_194_34 else 0.0,
+                    "ko_compressor": bool(_is_ko_audio_194_34),
+                    "bgm_gain": _bgm_gain_194_34,
+                    "sfx_gain": _sfx_gain_194_34,
+                    "final_lufs": _final_lufs_194_34,
+                    "true_peak": -1,
+                    "amix_normalize": False,
+                }, flush=True)
+                print("[Sprint194-19 History Presentation FX] READY", {
+                    "roles": _scene_roles_194_18, "sfx_events": len(_sfx_events),
+                    "fx_plan": _fx_plan_194_17,
+                    "subtitle_fx": "role-aware+keyword-gold",
+                    "fonts": {"body": _history_body_font_194_48, "emphasis": _history_emphasis_font_194_48},
+                    "impact_motion": "semantic-impact-wide-base-0.28s-zoom-punch+restrained-shake",
+                    "framing": "wider-default-1100px; emphasis-only-1150~1165px",
+                    "emphasis_subtitle": "topic-independent+manual-bracket+gold-pop",
+                    "timeline_locked": True, "voice_seconds": round(_voice_duration, 3),
+                    "mobile_audio_master": {"profile": "ko-presence" if _is_ko_audio_194_34 else "en-standard", "bgm_gain": _bgm_gain_194_34, "sfx_gain": _sfx_gain_194_34, "lufs": _final_lufs_194_34, "true_peak": -1, "amix_normalize": False},
+                }, flush=True)
+
+                _vf_ass = "ass=" + str(_ass).replace("\\", "/").replace(":", r"\:")
+                if any(_font_dir_194_48d.iterdir()):
+                    _vf_ass += ":fontsdir=" + str(_font_dir_194_48d).replace("\\", "/")
+                _cmd = ["ffmpeg", "-y"] + _inputs
+                if _filter_parts:
+                    _cmd += ["-filter_complex", ";".join(_filter_parts)]
+                _cmd += ["-vf", _vf_ass, "-map", "0:v:0", "-map", _audio_map,
+                         "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-c:a", "aac", "-b:a", "192k",
+                         "-t", f"{_voice_duration:.3f}", "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(_final)]
+                _r = subprocess.run(_cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
+                if _r.returncode != 0 or not _final.is_file() or _final.stat().st_size <= 1024:
+                    raise RuntimeError("history_final_render_failed: " + str((_r.stderr or _r.stdout or "")[-1600:]))
+                print("[Sprint194-38 History Final Burn Verify] READY", {"final": str(_final), "bytes": _final.stat().st_size if _final.is_file() else 0, "ass": str(_ass), "emphasis_count": len(_emphasis_verify_194_38), "sfx_count": len(_sfx_events), "ffmpeg_rc": _r.returncode}, flush=True)
+
+                _final_d = _probe_dur_194_9(_final)
+                print("[Sprint194-11 History Dedicated Renderer] READY", {
+                    "scene_count": _scene_count,
+                    "tts_scene_input_count": len([x for x in _scene_texts if x]),
+                    "full_voice_path": _full_voice,
+                    "full_voice_seconds": round(_voice_duration, 3),
+                    "final_video_seconds": round(_final_d, 3),
+                    "video_covers_voice": bool(_final_d + 0.20 >= _voice_duration),
+                    "subtitles": len([x for x in _subs if x]),
+                    "bgm": bool(bgm_audio_path and Path(str(bgm_audio_path)).is_file()),
+                    "bgm_volume_percent": _bgm_ui_percent_194_39,
+                    "bgm_ffmpeg_gain": round(_bgm_gain_194_39, 4),
+                    "shopping_video_pipeline_bypassed": True,
+                    "single_voice_track": True,
+                    "intro_used": False,
+                    "timeline_source": "scene_tts_actual_durations",
+                    "language": _history_language_194_20,
+                    "lang_tag": _history_lang_tag_194_20,
+                }, flush=True)
+                if _final_d + 0.20 < _voice_duration:
+                    raise RuntimeError(f"history_final_too_short: video={_final_d:.3f} voice={_voice_duration:.3f}")
+
+                outputs = {
+                    "workflow_version": self.WORKFLOW_VERSION,
+                    "execution_mode": "history_dedicated_renderer",
+                    "final_video_path": str(_final),
+                    "history_scene_count": _scene_count,
+                    "history_voice_duration": _voice_duration,
+                    "history_final_duration": _final_d,
+                    "shopping_video_pipeline_bypassed": True,
+                }
+                return {
+                    "ok": True,
+                    "job_id": "",
+                    "state": {},
+                    "outputs": outputs,
+                    "summary": "역사쿠키 전용 렌더러로 영상 제작 완료",
+                    "final_video_path": str(_final),
+                }
+            except Exception as _history_194_9_exc:
+                print("[Sprint194-11 History Dedicated Renderer] ERROR", type(_history_194_9_exc).__name__, str(_history_194_9_exc), flush=True)
+                return {
+                    "ok": False,
+                    "job_id": "",
+                    "state": {},
+                    "outputs": {
+                        "workflow_version": self.WORKFLOW_VERSION,
+                        "execution_mode": "history_dedicated_renderer",
+                        "error": f"{type(_history_194_9_exc).__name__}: {_history_194_9_exc}",
+                        "shopping_video_pipeline_bypassed": True,
+                    },
+                    "summary": "역사쿠키 전용 렌더러 제작 실패",
+                    "final_video_path": "",
+                }
 
         generation = {
             "status": "manual_uploaded_clips_reused" if supplied else "manual_clips_missing",
@@ -4882,6 +6269,21 @@ class WorkflowEngine:
                 "summary": "수동으로 업로드한 Gemini 영상 클립이 없습니다.",
             }
 
+        # Sprint194-8: 역사 영상은 합쳐진 전체 나레이션 1트랙을 사용하고,
+        # 장면별 음성 경로는 VideoPipeline에 넘기지 않습니다.
+        _effective_clip_voice_paths_194_8 = [] if _history_mode_194_8 else list(clip_voice_paths or [])
+        _effective_auto_sync_194_8 = False if _history_mode_194_8 else True
+        _effective_playback_speed_194_8 = 1.0 if _history_mode_194_8 else float(playback_speed or 1.5)
+        if _history_mode_194_8:
+            print("[Sprint194-8 History Runtime Lock]", {
+                "requested_playback_speed": float(playback_speed or 1.5),
+                "pipeline_playback_speed": _effective_playback_speed_194_8,
+                "voice_mode": "scene_tts_trim_concat_full_track",
+                "scene_voice_gap_removed": True,
+                "full_voice_ready": bool(_history_full_voice_194_8),
+                "scene_count": len(_history_scene_durations_194_8),
+            }, flush=True)
+
         content_pack = {
             "project_id": project_id,
             "product_name": product_name,
@@ -4897,9 +6299,9 @@ class WorkflowEngine:
             "cta_product_logo_text": str(cta_product_logo_text or "").strip(),
             "voice_audio_path": str(resolved_voice_audio_path or ""),
             "intro_voice_path": str(intro_voice_path or ""),
-            "clip_voice_paths": list(clip_voice_paths or []),
+            "clip_voice_paths": list(_effective_clip_voice_paths_194_8),
             "scene_tts_generation": list(scene_tts_generation or []),
-            "auto_sync_narration": True,
+            "auto_sync_narration": bool(_effective_auto_sync_194_8),
             "bgm_audio_path": str(bgm_audio_path or ""),
             "voice_name": str(voice_name or "지안"),
             "voice_id": str(voice_id or ""),
@@ -4919,7 +6321,7 @@ class WorkflowEngine:
             "gemini_clip_paths": generated_files,
             "tts_voice": str(voice_name or "지안"),
             "channel_type": str(channel_type or "shopping"),
-            "playback_speed": float(playback_speed or 1.5),
+            "playback_speed": float(_effective_playback_speed_194_8),
             "monthly_purchase_count": int(monthly_purchase_count or 0),
             "declared_review_count": int(declared_review_count or 0),
             "review_count": int(declared_review_count or 0),
@@ -4950,9 +6352,28 @@ class WorkflowEngine:
             apply_voice=True,
             apply_bgm=True,
             apply_effects=True,
-            playback_speed=float(playback_speed or 1.5),
+            playback_speed=float(_effective_playback_speed_194_8),
         )
         final_path = str(video_result.get("output_path") or "")
+        if _history_mode_194_8 and final_path and Path(final_path).is_file():
+            try:
+                _final_probe = subprocess.run(
+                    ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1", final_path],
+                    capture_output=True, text=True, encoding="utf-8", errors="replace", check=False,
+                )
+                _final_duration = float((_final_probe.stdout or "0").strip() or 0.0)
+                _voice_probe = subprocess.run(
+                    ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1", str(resolved_voice_audio_path or "")],
+                    capture_output=True, text=True, encoding="utf-8", errors="replace", check=False,
+                )
+                _voice_duration = float((_voice_probe.stdout or "0").strip() or 0.0)
+                print("[Sprint194-8 History Final Duration Check]", {
+                    "final_video_seconds": round(_final_duration, 3),
+                    "full_voice_seconds": round(_voice_duration, 3),
+                    "video_covers_voice": bool(_final_duration + 0.20 >= _voice_duration),
+                }, flush=True)
+            except Exception as _duration_exc:
+                print("[Sprint194-8 History Final Duration Check] ERROR", repr(_duration_exc), flush=True)
         reservation_result = {"ok": True, "status": "disabled", "count": 0, "items": []}
         reservation_config = dict(reservation_payload or {})
         if reservation_config.get("enabled") and final_path and Path(final_path).is_file():
@@ -5040,6 +6461,7 @@ class WorkflowEngine:
         cta_product_logo_text="",
         voice_audio_path="",
         bgm_audio_path="",
+        bgm_volume_percent=10,
         voice_name="지안",
         voice_id="",
         typecast_api_key="",
@@ -5065,6 +6487,7 @@ class WorkflowEngine:
                 cta_product_logo_text=cta_product_logo_text,
                 voice_audio_path=voice_audio_path,
                 bgm_audio_path=bgm_audio_path,
+                bgm_volume_percent=bgm_volume_percent,
                 voice_name=voice_name,
                 voice_id=voice_id,
                 typecast_api_key=typecast_api_key,

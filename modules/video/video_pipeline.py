@@ -16,11 +16,11 @@ except ImportError:
 from modules.audio.bgm_manager import BGMManager
 from modules.audio.sfx_manager import SFXManager
 
-print("######## VIDEO_PIPELINE SPRINT193-33 RESTORE EFFECT CUE METHOD LOADED ########", flush=True)
+print("######## VIDEO_PIPELINE SPRINT194-58 HISTORY REGRESSION RESTORE LOADED ########", flush=True)
 
 
 class VideoPipeline:
-    PIPELINE_VERSION = "video-pipeline-193-33-restore-effect-cue-method"
+    PIPELINE_VERSION = "video-pipeline-194-58-history-regression-restore"
 
     def __init__(
         self,
@@ -49,6 +49,10 @@ class VideoPipeline:
         playback_speed=1.5,
     ):
         content_pack = dict(content_pack or {})
+        channel_type = str(content_pack.get("channel_type") or "shopping").strip().lower()
+        production_mode = str(content_pack.get("production_mode") or "").strip().lower()
+        is_history_mode = channel_type == "history" or production_mode.startswith("history_")
+        content_pack["_is_history_mode"] = bool(is_history_mode)
         project_id = self._project_id(project, content_pack)
         content_pack["_project_id"] = project_id
         project_payload = self._project_payload(project)
@@ -241,31 +245,45 @@ class VideoPipeline:
             result["errors"].append("병합 영상 길이를 확인하지 못했습니다.")
             return result
 
-        # 첫 장면은 신뢰 수치를 담은 크림색 배경 카드로 분리합니다.
-        # 리뷰/평점과 '리뷰 미쳤!!!'는 후킹 카드 자체에 표시합니다.
-        trust_output = self.merged_dir / f"{project_id}_trust_intro.mp4"
-        trust_step = self._prepend_trust_card(current, trust_output, content_pack)
-        result["steps"]["trust_card"] = trust_step
-        if trust_step.get("ok"):
-            current = Path(trust_step["output_path"])
-            duration = self._probe_duration(current)
-            content_pack["_effective_trust_duration"] = float(
-                trust_step.get("card_duration")
-                or content_pack.get("trust_card_duration")
-                or 0.0
+        # Sprint194-53: 역사쿠키는 쇼핑용 Trust 카드 없이 Scene 1부터 즉시 시작합니다.
+        if is_history_mode:
+            content_pack["_effective_trust_duration"] = 0.0
+            result["steps"]["trust_card"] = {
+                "ok": True,
+                "status": "history_trust_card_skipped",
+                "output_path": str(current),
+                "card_duration": 0.0,
+            }
+            print(
+                "[Sprint194-53 History Timeline] TRUST SKIPPED",
+                {"project_id": project_id, "clip_count": len(clips)},
+                flush=True,
             )
         else:
-            content_pack["_effective_trust_duration"] = 0.0
-            result["warnings"].append("Trust 후킹 생성 실패: 본문 타임라인을 0초부터 시작합니다.")
+            # 쇼핑 쇼츠는 기존 Trust 후킹 카드를 유지합니다.
+            trust_output = self.merged_dir / f"{project_id}_trust_intro.mp4"
+            trust_step = self._prepend_trust_card(current, trust_output, content_pack)
+            result["steps"]["trust_card"] = trust_step
+            if trust_step.get("ok"):
+                current = Path(trust_step["output_path"])
+                duration = self._probe_duration(current)
+                content_pack["_effective_trust_duration"] = float(
+                    trust_step.get("card_duration")
+                    or content_pack.get("trust_card_duration")
+                    or 0.0
+                )
+            else:
+                content_pack["_effective_trust_duration"] = 0.0
+                result["warnings"].append("Trust 후킹 생성 실패: 본문 타임라인을 0초부터 시작합니다.")
 
-        print(
-            "[Sprint193-20 Hook State]",
-            {
-                "ok": bool(trust_step.get("ok")),
-                "effective_trust_duration": round(float(content_pack.get("_effective_trust_duration") or 0.0), 3),
-            },
-            flush=True,
-        )
+            print(
+                "[Sprint193-20 Hook State]",
+                {
+                    "ok": bool(trust_step.get("ok")),
+                    "effective_trust_duration": round(float(content_pack.get("_effective_trust_duration") or 0.0), 3),
+                },
+                flush=True,
+            )
 
         # 1) 장면별 나레이션을 각 영상 시작점에 맞춰 삽입합니다.
         voice_audio = Path(str(content_pack.get("voice_audio_path") or ""))
@@ -359,8 +377,11 @@ class VideoPipeline:
         if current.resolve() != final.resolve():
             shutil.copy2(current, final)
 
-        required_steps = ["merge", "trust_card", "effects", "subtitle"]
+        required_steps = (["merge", "effects", "subtitle"] if is_history_mode else ["merge", "trust_card", "effects", "subtitle"])
         required_ok = all(bool((result["steps"].get(name) or {}).get("ok")) for name in required_steps)
+        if is_history_mode and apply_voice:
+            required_ok = required_ok and bool((result["steps"].get("voice") or {}).get("ok"))
+        print("[Sprint194-53 History Timeline] REQUIRED STEPS:", required_steps, "VOICE REQUIRED:", bool(is_history_mode and apply_voice), flush=True)
         result.update(
             ok=required_ok,
             status=("completed" if required_ok and not result["warnings"] else "completed_with_warnings" if required_ok else "required_step_failed"),
