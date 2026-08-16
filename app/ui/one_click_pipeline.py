@@ -73,7 +73,7 @@ except Exception:
     SearchKeywordEngine = None
 
 
-UI_VERSION = "sprint194-77-4-history-youtube-metadata-schedule"
+UI_VERSION = "sprint194-77-5-history-youtube-language-channel-lock"
 RESULT_DIR = Path("exports/one_click_results")
 OPENAI_LOCALIZATION_KEY_PATH = Path("secrets/openai_localization_api_key.txt")
 
@@ -4591,23 +4591,25 @@ def show_one_click_pipeline():
             if production_mode == "history_ko"
             else "🌍 History Cookie (English)"
         )
-        _youtube_default_account_194_77_1 = _sprint194_77_default_youtube_account(
-            production_mode
-        )
-        youtube_upload_account = st.selectbox(
+        # Sprint194-77-5:
+        # History mode channel is deterministic by language.
+        # Do not reuse a persistent Streamlit selectbox value across ko/en mode changes.
+        youtube_upload_account = _sprint194_77_default_youtube_account(production_mode)
+        st.text_input(
             "YouTube 업로드 채널",
-            options=list(YOUTUBE_UPLOAD_ACCOUNTS),
-            index=(
-                list(YOUTUBE_UPLOAD_ACCOUNTS).index(_youtube_default_account_194_77_1)
-                if _youtube_default_account_194_77_1 in list(YOUTUBE_UPLOAD_ACCOUNTS)
-                else 0
-            ),
-            key="sprint194_77_1_youtube_upload_account",
-            help="한국어 역사쿠키는 '역사쿠키', 영어 버전은 'History Cookie' 채널을 선택합니다.",
+            value=youtube_upload_account,
+            disabled=True,
+            key=f"sprint194_77_5_youtube_channel_{production_mode}",
+            help="한국어 역사쿠키는 '역사쿠키', 영어 버전은 'History Cookie' 채널로 자동 고정됩니다.",
         )
-        st.caption(
-            "현재 YouTube 업로드 대상: "
-            + str(youtube_upload_account or _youtube_default_account_194_77_1)
+        st.caption("현재 YouTube 업로드 대상: " + youtube_upload_account)
+        print(
+            "[Sprint194-77-5 History YouTube Channel Lock]",
+            {
+                "production_mode": production_mode,
+                "youtube_account": youtube_upload_account,
+            },
+            flush=True,
         )
     else:
         st.markdown("#### CTA 상단 상품명")
