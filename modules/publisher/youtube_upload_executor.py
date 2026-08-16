@@ -1,527 +1,342 @@
 from __future__ import annotations
 
+import json
+import os
+import random
+import re
+import time
 from datetime import datetime, timezone
 from pathlib import Path
-import json
-import mimetypes
-import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, Optional
 
 
 class YouTubeUploadExecutor:
-    """
-    Sprint83-2 YouTube Upload Executor
+    """YouTube Data API v3 uploader used by the reservation worker.
 
-    역할:
-    - Sprint83-1 UploadDispatcher의 youtube_shorts dispatch job을 입력으로 받음
-    - 영상 파일, 제목, 설명, 태그, 공개 상태, 예약 시간을 검증
-    - 기본 dry_run=True로 실제 업로드 없이 실행 준비 상태만 확인
-    - execute=True일 때만 YouTube Data API videos.insert 호출
-    - OAuth 토큰 파일을 재사용하고 필요 시 사용자 승인 흐름 실행
-    - 업로드 성공 시 video_id / watch_url / API 응답 반환
-    - 원본 dispatch job과 queue 파일은 직접 변경하지 않음
+    The reservation worker calls this class only when the queue item becomes due.
+    Therefore privacy_status='public' publishes immediately at the reserved time.
     """
 
-    VERSION = "youtube-upload-executor-83-2"
-    SOURCE_VERSION = "upload-dispatcher-83-1"
-    PLATFORM = "youtube_shorts"
-    EXECUTOR_NAME = "YouTubeUploadExecutor"
-    SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
+    VERSION = "youtube-upload-executor-194-77-4-metadata-schedule"
+    SCOPES = [
+        "https://www.googleapis.com/auth/youtube.upload",
+        "https://www.googleapis.com/auth/youtube.force-ssl",
+    ]
+
+    TOKEN_CANDIDATES = (
+        "config/youtube/token.json",
+        "credentials/youtube_token.json",
+        "data/youtube/token.json",
+        "token.json",
+    )
+    CLIENT_SECRET_CANDIDATES = (
+        "config/youtube/client_secret.json",
+        "credentials/client_secret.json",
+        "client_secret.json",
+        "client_secrets.json",
+    )
+
+    def __init__(self, project_root: Optional[str] = None) -> None:
+        self.project_root = Path(project_root or os.getcwd()).resolve()
+        self.manifest_dir = self.project_root / "data" / "publisher" / "youtube_manifests"
+        self.manifest_dir.mkdir(parents=True, exist_ok=True)
 
     def execute(
         self,
-        dispatch_job: Any = None,
-        *,
-        dry_run: bool = True,
-        credentials_file: Any = "",
-        token_file: Any = "",
-        authorize: bool = False,
-        notify_subscribers: bool = False,
-        chunk_size: int = 8 * 1024 * 1024,
+        video_path: str,
+        title: str = "",
+        description: str = "",
+        privacy_status: str = "private",
+        payload: Optional[Dict[str, Any]] = None,
+        **_: Any,
     ) -> Dict[str, Any]:
-        source = dispatch_job if isinstance(dispatch_job, dict) else {}
-        validation = self._validate_dispatch_job(source)
+        payload = dict(payload or {})
+        path = Path(video_path).resolve()
+        if not path.is_file() or path.stat().st_size < 1024:
+            raise FileNotFoundError(f"YouTube 업로드 영상이 없습니다: {path}")
 
-        if not validation["valid"]:
-            return self._result(
-                ok=False,
-                status="invalid_dispatch_job",
-                dry_run=dry_run,
-                upload_ready=False,
-                source=source,
-                errors=validation["errors"],
-                warnings=validation["warnings"],
-            )
+        resolved_title = self._clean_title(title or payload.get("title") or path.stem)
+        resolved_description = str(description or payload.get("description") or "").strip()
+        resolved_privacy = str(
+            payload.get("youtube_privacy_status") or privacy_status or "private"
+        ).lower().strip()
+        if resolved_privacy not in {"private", "unlisted", "public"}:
+            resolved_privacy = "private"
 
-        payload = source.get("payload")
-        payload = payload if isinstance(payload, dict) else {}
+        youtube = self._build_service(payload=payload)
+        publish_at = str(
+            payload.get("youtube_publish_at")
+            or payload.get("publish_at")
+            or payload.get("publishAt")
+            or ""
+        ).strip()
+        if publish_at:
+            # YouTube scheduled publishing requires the video to be private until publishAt.
+            resolved_privacy = "private"
 
-        normalized = self._normalize_upload_payload(
-            source=source,
-            payload=payload,
-        )
-        checks = self._build_checks(normalized)
-        errors = [key for key, passed in checks.items() if not passed]
-        warnings = list(validation["warnings"])
-
-        upload_ready = not errors
-        if not upload_ready:
-            return self._result(
-                ok=False,
-                status="incomplete",
-                dry_run=dry_run,
-                upload_ready=False,
-                source=source,
-                normalized=normalized,
-                checks=checks,
-                errors=errors,
-                warnings=warnings,
-            )
-
-        if dry_run:
-            result = self._result(
-                ok=True,
-                status="dry_run_ready",
-                dry_run=True,
-                upload_ready=True,
-                source=source,
-                normalized=normalized,
-                checks=checks,
-                errors=[],
-                warnings=warnings,
-            )
-            self._print_result(result)
-            return result
-
-        resolved_credentials_file = self._clean_text(credentials_file)
-        resolved_token_file = self._clean_text(token_file)
-
-        if not resolved_credentials_file:
-            errors.append("credentials_file이 없습니다")
-        if not resolved_token_file:
-            errors.append("token_file이 없습니다")
-
-        if errors:
-            result = self._result(
-                ok=False,
-                status="credentials_missing",
-                dry_run=False,
-                upload_ready=False,
-                source=source,
-                normalized=normalized,
-                checks=checks,
-                errors=errors,
-                warnings=warnings,
-            )
-            self._print_result(result)
-            return result
-
-        try:
-            youtube = self._build_youtube_service(
-                credentials_file=resolved_credentials_file,
-                token_file=resolved_token_file,
-                authorize=authorize,
-            )
-            response = self._upload_video(
-                youtube=youtube,
-                normalized=normalized,
-                notify_subscribers=notify_subscribers,
-                chunk_size=chunk_size,
-            )
-        except ModuleNotFoundError as exc:
-            result = self._result(
-                ok=False,
-                status="dependency_missing",
-                dry_run=False,
-                upload_ready=False,
-                source=source,
-                normalized=normalized,
-                checks=checks,
-                errors=[
-                    "Google API 라이브러리가 설치되지 않았습니다",
-                    str(exc),
-                ],
-                warnings=warnings,
-            )
-            self._print_result(result)
-            return result
-        except Exception as exc:
-            result = self._result(
-                ok=False,
-                status="upload_failed",
-                dry_run=False,
-                upload_ready=False,
-                source=source,
-                normalized=normalized,
-                checks=checks,
-                errors=[str(exc)],
-                warnings=warnings,
-            )
-            self._print_result(result)
-            return result
-
-        video_id = self._clean_text(response.get("id"))
-        result = self._result(
-            ok=bool(video_id),
-            status="uploaded" if video_id else "upload_response_missing_id",
-            dry_run=False,
-            upload_ready=bool(video_id),
-            source=source,
-            normalized=normalized,
-            checks=checks,
-            errors=[] if video_id else ["YouTube 응답에 video id가 없습니다"],
-            warnings=warnings,
-            extra={
-                "video_id": video_id,
-                "watch_url": (
-                    f"https://www.youtube.com/watch?v={video_id}"
-                    if video_id
-                    else ""
-                ),
-                "api_response": response,
-                "uploaded_at": self._utc_now(),
-                "actual_upload_performed": bool(video_id),
+        request_body = {
+            "snippet": {
+                "title": resolved_title,
+                "description": resolved_description,
+                "categoryId": str(payload.get("youtube_category_id") or "22"),
+                "tags": self._normalize_tags(payload.get("tags") or payload.get("hashtags")),
+                "defaultLanguage": str(payload.get("default_language") or "ko"),
+                "defaultAudioLanguage": str(payload.get("default_audio_language") or "ko"),
             },
-        )
-        self._print_result(result)
-        return result
-
-    def run(self, *args: Any, **kwargs: Any) -> Dict[str, Any]:
-        """Compatibility alias."""
-        return self.execute(*args, **kwargs)
-
-    def upload(self, *args: Any, **kwargs: Any) -> Dict[str, Any]:
-        """Compatibility alias."""
-        kwargs["dry_run"] = False
-        return self.execute(*args, **kwargs)
-
-    def _validate_dispatch_job(self, source: Dict[str, Any]) -> Dict[str, Any]:
-        errors: List[str] = []
-        warnings: List[str] = []
-
-        if not source:
-            return {
-                "valid": False,
-                "errors": ["dispatch job이 비어 있습니다"],
-                "warnings": warnings,
-            }
-
-        platform = self._clean_text(source.get("platform"))
-        if platform != self.PLATFORM:
-            errors.append(
-                f"플랫폼이 {self.PLATFORM}이 아닙니다: {platform or 'empty'}"
-            )
-
-        executor = self._clean_text(source.get("executor"))
-        if executor and executor != self.EXECUTOR_NAME:
-            warnings.append(
-                f"executor 값이 다릅니다: {executor}"
-            )
-
-        dispatch_status = self._clean_text(source.get("dispatch_status"))
-        if dispatch_status != "ready":
-            errors.append("dispatch_status가 ready가 아닙니다")
-
-        payload = source.get("payload")
-        if not isinstance(payload, dict):
-            errors.append("payload가 딕셔너리가 아닙니다")
-
-        source_version = self._clean_text(source.get("dispatcher_version"))
-        if source_version and source_version != self.SOURCE_VERSION:
-            warnings.append(
-                f"Dispatcher 버전이 다릅니다: {source_version}"
-            )
-
-        return {
-            "valid": not errors,
-            "errors": errors,
-            "warnings": warnings,
-        }
-
-    def _normalize_upload_payload(
-        self,
-        *,
-        source: Dict[str, Any],
-        payload: Dict[str, Any],
-    ) -> Dict[str, Any]:
-        snippet = payload.get("snippet")
-        snippet = snippet if isinstance(snippet, dict) else {}
-
-        status = payload.get("status")
-        status = status if isinstance(status, dict) else {}
-
-        video_path = (
-            self._clean_text(payload.get("video_path"))
-            or self._clean_text(source.get("video_path"))
-        )
-
-        tags = snippet.get("tags")
-        tags = tags if isinstance(tags, list) else []
-        normalized_tags = []
-        for tag in tags:
-            cleaned = self._clean_text(tag)
-            if cleaned and cleaned not in normalized_tags:
-                normalized_tags.append(cleaned)
-
-        privacy_status = self._clean_text(
-            status.get("privacy_status")
-            or status.get("privacyStatus")
-            or "private"
-        ).lower()
-        if privacy_status not in {"private", "unlisted", "public"}:
-            privacy_status = "private"
-
-        publish_at = self._clean_text(
-            status.get("publish_at")
-            or status.get("publishAt")
-        )
-
-        normalized_status = {
-            "privacyStatus": privacy_status,
-            "selfDeclaredMadeForKids": bool(
-                status.get("self_declared_made_for_kids")
-                if "self_declared_made_for_kids" in status
-                else status.get("selfDeclaredMadeForKids", False)
-            ),
-            "containsSyntheticMedia": bool(
-                status.get("contains_synthetic_media")
-                if "contains_synthetic_media" in status
-                else status.get("containsSyntheticMedia", False)
-            ),
+            "status": {
+                "privacyStatus": resolved_privacy,
+                "selfDeclaredMadeForKids": bool(payload.get("made_for_kids", False)),
+                "embeddable": True,
+                "publicStatsViewable": True,
+            },
         }
         if publish_at:
-            normalized_status["publishAt"] = publish_at
+            request_body["status"]["publishAt"] = publish_at
 
-        normalized_snippet = {
-            "title": self._shorten(snippet.get("title"), 100),
-            "description": self._shorten(
-                snippet.get("description"),
-                5000,
-            ),
-            "categoryId": self._clean_text(
-                snippet.get("category_id")
-                or snippet.get("categoryId")
-                or "22"
-            ),
-            "defaultLanguage": self._clean_text(
-                snippet.get("default_language")
-                or snippet.get("defaultLanguage")
-                or "ko"
-            ),
-        }
-        if normalized_tags:
-            normalized_snippet["tags"] = normalized_tags
-
-        return {
-            "platform": self.PLATFORM,
-            "queue_id": self._clean_text(source.get("queue_id")),
-            "job_id": self._clean_text(source.get("job_id")),
-            "job_path": self._clean_text(source.get("job_path")),
-            "video_path": video_path,
-            "snippet": normalized_snippet,
-            "status": normalized_status,
-            "mime_type": self._guess_mime_type(video_path),
-            "request_body": {
-                "snippet": normalized_snippet,
-                "status": normalized_status,
-            },
-        }
-
-    def _build_checks(self, normalized: Dict[str, Any]) -> Dict[str, bool]:
-        video_path = Path(normalized.get("video_path", ""))
-        snippet = normalized.get("snippet", {})
-        status = normalized.get("status", {})
-
-        publish_at = self._clean_text(status.get("publishAt"))
-        privacy_status = self._clean_text(status.get("privacyStatus"))
-
-        return {
-            "has_video_path": bool(normalized.get("video_path")),
-            "video_exists": video_path.is_file(),
-            "has_title": bool(self._clean_text(snippet.get("title"))),
-            "has_description": bool(
-                self._clean_text(snippet.get("description"))
-            ),
-            "title_within_limit": len(
-                self._clean_text(snippet.get("title"))
-            ) <= 100,
-            "description_within_limit": len(
-                self._clean_text(snippet.get("description"))
-            ) <= 5000,
-            "privacy_status_valid": privacy_status
-            in {"private", "unlisted", "public"},
-            "schedule_valid": (
-                not publish_at
-                or privacy_status == "private"
-            ),
-        }
-
-    def _build_youtube_service(
-        self,
-        *,
-        credentials_file: str,
-        token_file: str,
-        authorize: bool,
-    ) -> Any:
-        from google.auth.transport.requests import Request
-        from google.oauth2.credentials import Credentials
-        from google_auth_oauthlib.flow import InstalledAppFlow
-        from googleapiclient.discovery import build
-
-        credentials_path = Path(credentials_file).expanduser()
-        token_path = Path(token_file).expanduser()
-
-        if not credentials_path.is_file():
-            raise FileNotFoundError(
-                f"OAuth credentials 파일이 없습니다: {credentials_path}"
-            )
-
-        creds: Optional[Any] = None
-        if token_path.is_file():
-            creds = Credentials.from_authorized_user_file(
-                str(token_path),
-                self.SCOPES,
-            )
-
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-
-        if not creds or not creds.valid:
-            if not authorize:
-                raise RuntimeError(
-                    "유효한 OAuth 토큰이 없습니다. authorize=True로 승인 절차를 실행하세요"
-                )
-
-            flow = InstalledAppFlow.from_client_secrets_file(
-                str(credentials_path),
-                self.SCOPES,
-            )
-            creds = flow.run_local_server(
-                port=0,
-                access_type="offline",
-                prompt="consent",
-            )
-
-        token_path.parent.mkdir(parents=True, exist_ok=True)
-        token_path.write_text(
-            creds.to_json(),
-            encoding="utf-8",
-        )
-
-        return build(
-            "youtube",
-            "v3",
-            credentials=creds,
-            cache_discovery=False,
-        )
-
-    def _upload_video(
-        self,
-        *,
-        youtube: Any,
-        normalized: Dict[str, Any],
-        notify_subscribers: bool,
-        chunk_size: int,
-    ) -> Dict[str, Any]:
         from googleapiclient.http import MediaFileUpload
 
-        video_path = normalized["video_path"]
         media = MediaFileUpload(
-            video_path,
-            mimetype=normalized["mime_type"],
-            chunksize=max(256 * 1024, int(chunk_size)),
+            str(path),
+            chunksize=8 * 1024 * 1024,
             resumable=True,
+            mimetype="video/mp4",
         )
-
         request = youtube.videos().insert(
             part="snippet,status",
-            body=normalized["request_body"],
+            body=request_body,
             media_body=media,
-            notifySubscribers=bool(notify_subscribers),
+            notifySubscribers=bool(payload.get("notify_subscribers", False)),
         )
+        response = self._execute_resumable(request)
+        video_id = str(response.get("id") or "").strip()
+        if not video_id:
+            raise RuntimeError(f"YouTube 응답에 video id가 없습니다: {response}")
 
-        response = None
-        while response is None:
-            _status, response = request.next_chunk()
+        thumbnail_result: Dict[str, Any] = {"ok": False, "status": "not_requested"}
+        thumbnail_path = str(payload.get("thumbnail_path") or "").strip()
+        if thumbnail_path and Path(thumbnail_path).is_file():
+            thumbnail_result = self._upload_thumbnail(youtube, video_id, thumbnail_path)
 
-        return response if isinstance(response, dict) else {}
+        comment_result: Dict[str, Any] = {"ok": False, "status": "not_requested"}
+        comment_text = str(
+            payload.get("pinned_comment")
+            or payload.get("fixed_comment")
+            or payload.get("comment")
+            or ""
+        ).strip()
+        if comment_text:
+            comment_result = self._insert_top_level_comment(youtube, video_id, comment_text)
 
-    def _result(
-        self,
-        *,
-        ok: bool,
-        status: str,
-        dry_run: bool,
-        upload_ready: bool,
-        source: Dict[str, Any],
-        normalized: Optional[Dict[str, Any]] = None,
-        checks: Optional[Dict[str, bool]] = None,
-        errors: Optional[List[str]] = None,
-        warnings: Optional[List[str]] = None,
-        extra: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
+        uploaded_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
         result = {
-            "ok": ok,
+            "ok": True,
             "version": self.VERSION,
-            "status": status,
-            "platform": self.PLATFORM,
-            "source_version": self._clean_text(
-                source.get("dispatcher_version")
-            ),
-            "queue_id": self._clean_text(source.get("queue_id")),
-            "job_id": self._clean_text(source.get("job_id")),
-            "job_path": self._clean_text(source.get("job_path")),
-            "dry_run": bool(dry_run),
-            "upload_ready": bool(upload_ready),
-            "normalized_payload": normalized or {},
-            "checks": checks or {},
-            "errors": errors or [],
-            "warnings": warnings or [],
-            "actual_upload_performed": False,
+            "status": "uploaded",
+            "platform": "youtube",
+            "actual_upload_performed": True,
+            "video_id": video_id,
+            "watch_url": f"https://www.youtube.com/watch?v={video_id}",
+            "shorts_url": f"https://www.youtube.com/shorts/{video_id}",
+            "privacy_status": resolved_privacy,
+            "uploaded_at": uploaded_at,
+            "thumbnail": thumbnail_result,
+            "comment": comment_result,
+            "comment_pin_status": "manual_required",
+            "comment_pin_note": "YouTube Data API로 댓글 작성은 가능하지만 고정은 지원되지 않아 Studio에서 수동 고정해야 합니다.",
         }
-        if extra:
-            result.update(extra)
+        result["manifest_path"] = self._write_manifest(video_id, result, payload, path)
+        print(
+            f"[Sprint182-1 YouTube Reserved Upload] SUCCESS video_id={video_id} privacy={resolved_privacy}",
+            flush=True,
+        )
         return result
 
-    def _print_result(self, result: Dict[str, Any]) -> None:
-        print("[Sprint83-2 YouTube Upload] Version:", self.VERSION, flush=True)
-        print(
-            "[Sprint83-2 YouTube Upload] Status:",
-            result.get("status"),
-            flush=True,
-        )
-        print(
-            "[Sprint83-2 YouTube Upload] Ready:",
-            result.get("upload_ready"),
-            flush=True,
-        )
-        print(
-            "[Sprint83-2 YouTube Upload] Dry Run:",
-            result.get("dry_run"),
-            flush=True,
-        )
-        print(
-            "[Sprint83-2 YouTube Upload] Video ID:",
-            result.get("video_id", ""),
-            flush=True,
+    upload = execute
+    run = execute
+    publish = execute
+
+    @staticmethod
+    def _safe_account_key(value: str) -> str:
+        mapping = {
+            "실물로그": "silmullog",
+            "하센맘": "hasenmom",
+            "역사쿠키": "history_cookie_ko",
+            "History Cookie": "history_cookie_en",
+        }
+        raw = str(value or "").strip()
+        return mapping.get(raw, re.sub(r"[^0-9A-Za-z_-]+", "_", raw).strip("_").lower())
+
+    def _account_token_candidates(self, payload: Dict[str, Any]) -> tuple[str, ...]:
+        account = str(payload.get("youtube_account") or payload.get("channel") or "실물로그").strip()
+        key = self._safe_account_key(account)
+        if account == "실물로그":
+            return tuple(self.TOKEN_CANDIDATES)
+        return (
+            f"config/youtube/token_{key}.json",
+            f"credentials/youtube_token_{key}.json",
+            f"data/youtube/token_{key}.json",
         )
 
-    def _guess_mime_type(self, video_path: str) -> str:
-        guessed, _ = mimetypes.guess_type(video_path)
-        if guessed and guessed.startswith("video/"):
-            return guessed
-        return "video/mp4"
+    def _build_service(self, payload: Optional[Dict[str, Any]] = None):
+        try:
+            from google.auth.transport.requests import Request
+            from google.oauth2.credentials import Credentials
+            from google_auth_oauthlib.flow import InstalledAppFlow
+            from googleapiclient.discovery import build
+        except ImportError as exc:
+            raise RuntimeError(
+                "YouTube 업로드 패키지가 없습니다. 실행: "
+                "pip install google-api-python-client google-auth-oauthlib google-auth-httplib2"
+            ) from exc
 
-    def _shorten(self, value: Any, max_length: int) -> str:
-        cleaned = self._clean_text(value)
-        if len(cleaned) <= max_length:
-            return cleaned
-        return cleaned[: max(1, max_length - 1)].rstrip() + "…"
+        payload = dict(payload or {})
+        account = str(payload.get("youtube_account") or payload.get("channel") or "실물로그").strip()
+        token_candidates = self._account_token_candidates(payload)
+        token_path = self._first_existing(token_candidates)
+        client_secret_path = self._first_existing(self.CLIENT_SECRET_CANDIDATES)
+        credentials = None
+        if token_path:
+            try:
+                credentials = Credentials.from_authorized_user_file(str(token_path), self.SCOPES)
+            except Exception:
+                credentials = None
 
-    def _clean_text(self, value: Any) -> str:
-        if value is None:
-            return ""
-        return re.sub(r"\s+", " ", str(value)).strip()
+        if credentials and credentials.expired and credentials.refresh_token:
+            credentials.refresh(Request())
+            self._save_token(credentials, token_path or self._default_token_path())
 
-    def _utc_now(self) -> str:
-        return datetime.now(timezone.utc).isoformat()
+        if not credentials or not credentials.valid:
+            if not client_secret_path:
+                raise FileNotFoundError(
+                    "YouTube OAuth client secret이 없습니다. 다음 중 한 곳에 두세요: "
+                    + ", ".join(self.CLIENT_SECRET_CANDIDATES)
+                )
+            flow = InstalledAppFlow.from_client_secrets_file(str(client_secret_path), self.SCOPES)
+            credentials = flow.run_local_server(port=0, access_type="offline", prompt="consent")
+            if token_path is None:
+                token_path = (
+                    self._default_token_path()
+                    if account == "실물로그"
+                    else self.project_root / token_candidates[0]
+                )
+            self._save_token(credentials, token_path)
+            print(
+                "[Sprint194-77 YouTube OAuth] AUTHORIZED",
+                {"account": account, "token_path": str(token_path)},
+                flush=True,
+            )
+
+        return build("youtube", "v3", credentials=credentials, cache_discovery=False)
+
+    def _execute_resumable(self, request, max_retries: int = 8) -> Dict[str, Any]:
+        response = None
+        retry = 0
+        while response is None:
+            try:
+                status, response = request.next_chunk()
+                if status:
+                    percent = int(status.progress() * 100)
+                    print(f"[Sprint182-1 YouTube Upload] progress={percent}%", flush=True)
+            except Exception as exc:
+                retry += 1
+                if retry > max_retries or not self._is_retryable(exc):
+                    raise
+                delay = min(64, (2 ** retry) + random.random())
+                print(
+                    f"[Sprint182-1 YouTube Upload] retry={retry} delay={delay:.1f}s error={type(exc).__name__}: {exc}",
+                    flush=True,
+                )
+                time.sleep(delay)
+        return dict(response or {})
+
+    @staticmethod
+    def _is_retryable(exc: Exception) -> bool:
+        status = getattr(getattr(exc, "resp", None), "status", None)
+        return status in {500, 502, 503, 504} or isinstance(exc, (OSError, TimeoutError))
+
+    def _upload_thumbnail(self, youtube, video_id: str, thumbnail_path: str) -> Dict[str, Any]:
+        try:
+            from googleapiclient.http import MediaFileUpload
+
+            response = youtube.thumbnails().set(
+                videoId=video_id,
+                media_body=MediaFileUpload(thumbnail_path, resumable=False),
+            ).execute()
+            return {"ok": True, "status": "uploaded", "response": response}
+        except Exception as exc:
+            return {"ok": False, "status": "failed", "error": f"{type(exc).__name__}: {exc}"}
+
+    @staticmethod
+    def _insert_top_level_comment(youtube, video_id: str, text: str) -> Dict[str, Any]:
+        try:
+            response = youtube.commentThreads().insert(
+                part="snippet",
+                body={
+                    "snippet": {
+                        "videoId": video_id,
+                        "topLevelComment": {"snippet": {"textOriginal": text}},
+                    }
+                },
+            ).execute()
+            comment_id = (
+                response.get("snippet", {})
+                .get("topLevelComment", {})
+                .get("id", "")
+            )
+            return {"ok": True, "status": "created", "comment_id": comment_id}
+        except Exception as exc:
+            return {"ok": False, "status": "failed", "error": f"{type(exc).__name__}: {exc}"}
+
+    def _first_existing(self, candidates: Iterable[str]) -> Optional[Path]:
+        for candidate in candidates:
+            path = (self.project_root / candidate).resolve()
+            if path.is_file():
+                return path
+        return None
+
+    def _default_token_path(self) -> Path:
+        path = self.project_root / "config" / "youtube" / "token.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        return path
+
+    @staticmethod
+    def _save_token(credentials, path: Path) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(credentials.to_json(), encoding="utf-8")
+
+    @staticmethod
+    def _clean_title(value: str) -> str:
+        cleaned = " ".join(str(value).replace("\x00", " ").split()).strip()
+        return (cleaned or "쇼핑 쇼츠")[:100]
+
+    @staticmethod
+    def _normalize_tags(value: Any) -> list[str]:
+        if isinstance(value, str):
+            raw = value.replace("#", " ").replace(",", " ").split()
+        elif isinstance(value, (list, tuple, set)):
+            raw = list(value)
+        else:
+            raw = []
+        result: list[str] = []
+        for item in raw:
+            tag = " ".join(str(item).split()).strip().lstrip("#")
+            if tag and tag not in result:
+                result.append(tag[:30])
+        return result[:30]
+
+    def _write_manifest(
+        self,
+        video_id: str,
+        result: Dict[str, Any],
+        payload: Dict[str, Any],
+        source_path: Path,
+    ) -> str:
+        target = self.manifest_dir / f"{video_id}.json"
+        document = {
+            "version": self.VERSION,
+            "source_video": str(source_path),
+            "payload": payload,
+            "result": result,
+        }
+        target.write_text(json.dumps(document, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+        return str(target)

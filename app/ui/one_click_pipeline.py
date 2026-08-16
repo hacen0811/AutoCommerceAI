@@ -73,7 +73,7 @@ except Exception:
     SearchKeywordEngine = None
 
 
-UI_VERSION = "sprint194-76-history-final-common-contract"
+UI_VERSION = "sprint194-77-4-history-youtube-metadata-schedule"
 RESULT_DIR = Path("exports/one_click_results")
 OPENAI_LOCALIZATION_KEY_PATH = Path("secrets/openai_localization_api_key.txt")
 
@@ -540,6 +540,18 @@ PUBLISH_ACCOUNT_PROFILES = {
         "naver_clip": "secrets/naver_clip_playwright_profile_hasenmom",
     },
 }
+
+# Sprint194-77: YouTube 채널별 OAuth token 분리.
+YOUTUBE_UPLOAD_ACCOUNTS = ["실물로그", "하센맘", "역사쿠키", "History Cookie"]
+
+def _sprint194_77_default_youtube_account(production_mode):
+    mode = str(production_mode or "").strip()
+    if mode == "history_en":
+        return "History Cookie"
+    if mode == "history_ko":
+        return "역사쿠키"
+    return "실물로그"
+
 
 
 def _publisher_profile(account_name, platform):
@@ -4579,6 +4591,24 @@ def show_one_click_pipeline():
             if production_mode == "history_ko"
             else "🌍 History Cookie (English)"
         )
+        _youtube_default_account_194_77_1 = _sprint194_77_default_youtube_account(
+            production_mode
+        )
+        youtube_upload_account = st.selectbox(
+            "YouTube 업로드 채널",
+            options=list(YOUTUBE_UPLOAD_ACCOUNTS),
+            index=(
+                list(YOUTUBE_UPLOAD_ACCOUNTS).index(_youtube_default_account_194_77_1)
+                if _youtube_default_account_194_77_1 in list(YOUTUBE_UPLOAD_ACCOUNTS)
+                else 0
+            ),
+            key="sprint194_77_1_youtube_upload_account",
+            help="한국어 역사쿠키는 '역사쿠키', 영어 버전은 'History Cookie' 채널을 선택합니다.",
+        )
+        st.caption(
+            "현재 YouTube 업로드 대상: "
+            + str(youtube_upload_account or _youtube_default_account_194_77_1)
+        )
     else:
         st.markdown("#### CTA 상단 상품명")
         cta_product_logo_text = st.text_input(
@@ -4589,6 +4619,7 @@ def show_one_click_pipeline():
             help="마지막 수동 CTA 장면 상단에 로고형 상품명 자막으로 표시합니다. 비워두면 표시하지 않습니다.",
         )
         st.caption("마지막 CTA 장면에만 표시됩니다. 자동 CTA 문구를 생성하지는 않습니다.")
+        youtube_upload_account = "실물로그"
         channel_type = st.selectbox(
             "채널",
             options=["shopping", "standing"],
@@ -4620,6 +4651,56 @@ def show_one_click_pipeline():
             format_func=lambda value: {"unlisted": "비등록", "private": "비공개", "public": "공개"}[value],
             key="sprint172_privacy",
         )
+
+    history_youtube_schedule_enabled = False
+    history_youtube_schedule_date = None
+    history_youtube_schedule_time = None
+    history_youtube_title = ""
+    history_youtube_description = ""
+    history_youtube_hashtags_text = ""
+    if is_history_mode:
+        st.markdown("##### YouTube 업로드 정보")
+        history_youtube_title = st.text_input(
+            "YouTube 제목",
+            value=str(product_name or "").strip(),
+            key="sprint194_77_4_history_youtube_title",
+            placeholder="예: 왕이 신하에게 욕설 편지를 보냈다?! 정조의 비밀 어찰",
+        )
+        history_youtube_description = st.text_area(
+            "YouTube 설명",
+            value="",
+            height=130,
+            key="sprint194_77_4_history_youtube_description",
+            placeholder="영상 설명을 입력하세요.",
+        )
+        history_youtube_hashtags_text = st.text_input(
+            "YouTube 해시태그",
+            value="#역사쿠키 #조선역사 #Shorts",
+            key="sprint194_77_4_history_youtube_hashtags",
+            placeholder="#역사쿠키 #조선역사 #Shorts",
+        )
+
+        st.markdown("##### YouTube 예약 게시")
+        history_youtube_schedule_enabled = st.checkbox(
+            "예약 게시 사용",
+            value=False,
+            key="sprint194_77_3_history_youtube_schedule_enabled",
+            help="선택하면 완성 MP4를 비공개로 업로드한 뒤 지정한 한국 시간에 자동 공개합니다.",
+        )
+        if history_youtube_schedule_enabled:
+            schedule_col1, schedule_col2 = st.columns(2)
+            with schedule_col1:
+                history_youtube_schedule_date = st.date_input(
+                    "예약 날짜",
+                    key="sprint194_77_3_history_youtube_schedule_date",
+                )
+            with schedule_col2:
+                history_youtube_schedule_time = st.time_input(
+                    "예약 시간",
+                    key="sprint194_77_3_history_youtube_schedule_time",
+                    step=300,
+                )
+            st.caption("예약 시간 기준: 한국시간(KST)")
 
     st.markdown("---")
     st.subheader("🎬 쇼츠 제작")
@@ -4975,80 +5056,236 @@ def show_one_click_pipeline():
 
     # 제작 버튼을 누르기 전에는 아래 테스트/예약 UI를 계속 보여주되,
     # 실제 제작 실행부까지 내려갈 수 있도록 세션에 클릭 상태를 저장합니다.
-    st.subheader("YouTube 한 장면 업로드 테스트")
-    st.caption(
-        "업로드한 Gemini 영상 중 첫 번째 파일만 편집 없이 YouTube에 비공개로 올립니다. "
-        "전체 쇼츠 제작과 예약 큐는 실행하지 않습니다."
-    )
-    if st.button(
-        "첫 장면 YouTube 비공개 테스트 업로드",
-        use_container_width=True,
-        key="sprint183_single_scene_youtube_test",
-    ):
-        if not uploaded_gemini_clips:
-            st.error("Gemini 영상 파일을 한 개 이상 선택해 주세요.")
-        else:
-            first_clip = uploaded_gemini_clips[0]
-            test_root = Path("assets/youtube_test_uploads")
-            test_root.mkdir(parents=True, exist_ok=True)
-            original_name = str(getattr(first_clip, "name", "scene_01.mp4") or "scene_01.mp4")
-            suffix = Path(original_name).suffix.lower()
-            if suffix not in SUPPORTED_VIRAL_VIDEO_SUFFIXES:
-                suffix = ".mp4"
-            timestamp = datetime.now(ZoneInfo("Asia/Seoul")).strftime("%Y%m%d_%H%M%S")
-            test_path = test_root / f"single_scene_{timestamp}{suffix}"
-            try:
-                test_path.write_bytes(first_clip.getbuffer())
-                test_title = normalize_text(product_name, "쇼핑 쇼츠")
-                test_title = f"[업로드 테스트] {test_title}"[:100]
-                test_description = (
-                    "YouTube Shorts 자동업로드 연결 확인을 위한 비공개 테스트 영상입니다.\n"
-                    "첫 번째 Gemini 장면만 업로드했습니다.\n\n"
-                    "#쇼츠 #업로드테스트"
-                )
-                with st.spinner("첫 장면을 YouTube 비공개 영상으로 업로드 중입니다..."):
-                    test_result = YouTubeUploadExecutor().execute(
-                        video_path=str(test_path),
-                        title=test_title,
-                        description=test_description,
-                        privacy_status="private",
-                        payload={
-                            "youtube_privacy_status": "private",
-                            "tags": ["쇼츠", "업로드테스트"],
-                            "notify_subscribers": False,
-                            "made_for_kids": False,
-                        },
-                    )
-                st.session_state["sprint183_single_scene_upload_result"] = test_result
-                st.success("첫 장면 YouTube 비공개 업로드가 완료됐습니다.")
-                st.write("Video ID:", test_result.get("video_id", ""))
-                st.write("공개 상태:", test_result.get("privacy_status", "private"))
-                shorts_url = str(test_result.get("shorts_url") or test_result.get("watch_url") or "")
-                if shorts_url:
-                    st.link_button("YouTube에서 확인", shorts_url, use_container_width=True)
-                print(
-                    "[Sprint183-1 Single Scene Upload] SUCCESS",
-                    test_result.get("video_id", ""),
-                    test_result.get("privacy_status", ""),
-                    flush=True,
-                )
-            except Exception as exc:
-                Path("full_error.log").write_text(traceback.format_exc(), encoding="utf-8")
-                st.error(f"첫 장면 YouTube 업로드 실패: {type(exc).__name__}: {exc}")
-                print(
-                    "[Sprint183-1 Single Scene Upload] ERROR",
-                    type(exc).__name__,
-                    str(exc),
-                    flush=True,
-                )
-
-    previous_test_upload = st.session_state.get("sprint183_single_scene_upload_result", {})
-    if isinstance(previous_test_upload, dict) and previous_test_upload.get("video_id"):
-        st.caption(
-            "최근 테스트 업로드: "
-            f"{previous_test_upload.get('video_id')} / "
-            f"{previous_test_upload.get('privacy_status', 'private')}"
+    st.subheader("YouTube 비공개 업로드 테스트")
+    if is_history_mode:
+        st.info(
+            "역사쿠키는 Gemini 장면 테스트 대신 완성된 MP4를 직접 선택해 "
+            "현재 선택한 YouTube 채널로 비공개 업로드합니다."
         )
+        history_youtube_test_video = st.file_uploader(
+            "역사쿠키 테스트용 완성 MP4",
+            type=["mp4"],
+            accept_multiple_files=False,
+            key="sprint194_77_2_history_youtube_test_video",
+        )
+        st.caption(
+            "업로드 시 위 제목·설명·해시태그가 그대로 YouTube에 적용됩니다."
+        )
+        if st.button(
+            "역사쿠키 완성 MP4 → YouTube 비공개 테스트 업로드",
+            width="stretch",
+            key="sprint194_77_2_history_youtube_test_upload",
+        ):
+            if history_youtube_test_video is None:
+                st.error("테스트할 완성 MP4를 선택해 주세요.")
+            else:
+                try:
+                    test_root = Path("assets/youtube_test_uploads")
+                    test_root.mkdir(parents=True, exist_ok=True)
+                    original_name = str(
+                        getattr(history_youtube_test_video, "name", "history_test.mp4")
+                        or "history_test.mp4"
+                    )
+                    test_path = test_root / (
+                        f"history_{safe_file_name(Path(original_name).stem)}_"
+                        f"{datetime.now(ZoneInfo('Asia/Seoul')).strftime('%Y%m%d_%H%M%S')}.mp4"
+                    )
+                    test_path.write_bytes(history_youtube_test_video.getbuffer())
+
+                    test_title = (
+                        str(history_youtube_title or "").strip()
+                        or str(product_name or "역사쿠키").strip()
+                    )[:100]
+                    _hashtags_194_77_4 = [
+                        token.lstrip("#")
+                        for token in re.split(
+                            r"[\s,]+",
+                            str(history_youtube_hashtags_text or ""),
+                        )
+                        if token.strip().lstrip("#")
+                    ]
+                    _hashtags_text_194_77_4 = " ".join(
+                        f"#{tag}" for tag in _hashtags_194_77_4
+                    )
+                    _description_base_194_77_4 = str(
+                        history_youtube_description or ""
+                    ).strip()
+                    test_description = "\n\n".join(
+                        value
+                        for value in (
+                            _description_base_194_77_4,
+                            _hashtags_text_194_77_4,
+                        )
+                        if value
+                    )
+                    test_payload = {
+                        "youtube_privacy_status": "private",
+                        "youtube_account": str(
+                            youtube_upload_account
+                            or _sprint194_77_default_youtube_account(production_mode)
+                        ).strip(),
+                        "channel": str(
+                            youtube_upload_account
+                            or _sprint194_77_default_youtube_account(production_mode)
+                        ).strip(),
+                        "tags": _hashtags_194_77_4,
+                        "notify_subscribers": False,
+                        "made_for_kids": False,
+                        "default_language": "en" if production_mode == "history_en" else "ko",
+                        "default_audio_language": "en" if production_mode == "history_en" else "ko",
+                    }
+                    if history_youtube_schedule_enabled:
+                        if history_youtube_schedule_date is None or history_youtube_schedule_time is None:
+                            raise RuntimeError("YouTube 예약 날짜와 시간을 선택해 주세요.")
+                        scheduled_kst = datetime.combine(
+                            history_youtube_schedule_date,
+                            history_youtube_schedule_time,
+                            tzinfo=ZoneInfo("Asia/Seoul"),
+                        )
+                        now_kst = datetime.now(ZoneInfo("Asia/Seoul"))
+                        if scheduled_kst <= now_kst:
+                            raise RuntimeError("YouTube 예약 시간은 현재보다 이후여야 합니다.")
+                        scheduled_utc = scheduled_kst.astimezone(ZoneInfo("UTC"))
+                        test_payload["youtube_publish_at"] = (
+                            scheduled_utc.isoformat(timespec="seconds").replace("+00:00", "Z")
+                        )
+                        test_payload["youtube_privacy_status"] = "private"
+                    print(
+                        "[Sprint194-77-2 History YouTube Direct Test] START",
+                        {
+                            "account": test_payload["youtube_account"],
+                            "video_path": str(test_path),
+                            "production_mode": production_mode,
+                        },
+                        flush=True,
+                    )
+                    with st.spinner(
+                        f"{test_payload['youtube_account']} 채널로 비공개 테스트 업로드 중입니다..."
+                    ):
+                        test_result = YouTubeUploadExecutor().execute(
+                            video_path=str(test_path),
+                            title=test_title,
+                            description=test_description,
+                            privacy_status="private",
+                            payload=test_payload,
+                        )
+                    st.session_state["sprint194_77_2_history_youtube_test_result"] = test_result
+                    st.success("역사쿠키 YouTube 비공개 테스트 업로드가 완료됐습니다.")
+                    st.write("채널:", test_payload["youtube_account"])
+                    st.write("Video ID:", test_result.get("video_id", ""))
+                    st.write("공개 상태:", test_result.get("privacy_status", "private"))
+                    if history_youtube_schedule_enabled:
+                        st.write(
+                            "예약 게시:",
+                            scheduled_kst.strftime("%Y-%m-%d %H:%M KST"),
+                        )
+                    shorts_url = str(
+                        test_result.get("shorts_url")
+                        or test_result.get("watch_url")
+                        or ""
+                    )
+                    if shorts_url:
+                        st.link_button(
+                            "YouTube에서 확인",
+                            shorts_url,
+                            use_container_width=True,
+                        )
+                    print(
+                        "[Sprint194-77-2 History YouTube Direct Test] SUCCESS",
+                        {
+                            "account": test_payload["youtube_account"],
+                            "video_id": test_result.get("video_id", ""),
+                            "privacy": test_result.get("privacy_status", ""),
+                        },
+                        flush=True,
+                    )
+                except Exception as exc:
+                    Path("full_error.log").write_text(
+                        traceback.format_exc(),
+                        encoding="utf-8",
+                    )
+                    st.error(
+                        "역사쿠키 YouTube 비공개 테스트 업로드 실패: "
+                        f"{type(exc).__name__}: {exc}"
+                    )
+                    print(
+                        "[Sprint194-77-2 History YouTube Direct Test] ERROR",
+                        type(exc).__name__,
+                        str(exc),
+                        flush=True,
+                    )
+    else:
+        st.caption(
+            "쇼핑 쇼츠는 기존 첫 장면 Gemini MP4 비공개 테스트를 그대로 사용합니다."
+        )
+        if st.button(
+            "첫 장면 YouTube 비공개 테스트 업로드",
+            width="stretch",
+            key="sprint183_single_scene_upload",
+        ):
+            if not first_clip:
+                st.error("Gemini 영상 파일을 한 개 이상 선택해 주세요.")
+            else:
+                test_root = Path("assets/youtube_test_uploads")
+                test_root.mkdir(parents=True, exist_ok=True)
+                test_path = test_root / f"single_scene_{safe_file_name(product_name)}.mp4"
+                try:
+                    test_path.write_bytes(first_clip.getbuffer())
+                    test_title = normalize_text(product_name, "쇼핑 쇼츠")
+                    test_title = f"[업로드 테스트] {test_title}"[:100]
+                    test_description = (
+                        "YouTube Shorts 자동업로드 연결 확인을 위한 비공개 테스트 영상입니다.\n"
+                        "첫 번째 Gemini 장면만 업로드했습니다.\n\n"
+                        "#쇼츠 #업로드테스트"
+                    )
+                    with st.spinner("첫 장면을 YouTube 비공개 영상으로 업로드 중입니다..."):
+                        test_result = YouTubeUploadExecutor().execute(
+                            video_path=str(test_path),
+                            title=test_title,
+                            description=test_description,
+                            privacy_status="private",
+                            payload={
+                                "youtube_privacy_status": "private",
+                                "tags": ["쇼츠", "업로드테스트"],
+                                "notify_subscribers": False,
+                                "made_for_kids": False,
+                            },
+                        )
+                    st.session_state["sprint183_single_scene_upload_result"] = test_result
+                    st.success("첫 장면 YouTube 비공개 업로드가 완료됐습니다.")
+                    st.write("Video ID:", test_result.get("video_id", ""))
+                    st.write("공개 상태:", test_result.get("privacy_status", "private"))
+                    shorts_url = str(
+                        test_result.get("shorts_url")
+                        or test_result.get("watch_url")
+                        or ""
+                    )
+                    if shorts_url:
+                        st.link_button(
+                            "YouTube에서 확인",
+                            shorts_url,
+                            use_container_width=True,
+                        )
+                    print(
+                        "[Sprint183-1 Single Scene Upload] SUCCESS",
+                        test_result.get("video_id", ""),
+                        test_result.get("privacy_status", ""),
+                        flush=True,
+                    )
+                except Exception as exc:
+                    Path("full_error.log").write_text(
+                        traceback.format_exc(),
+                        encoding="utf-8",
+                    )
+                    st.error(
+                        f"첫 장면 YouTube 업로드 실패: {type(exc).__name__}: {exc}"
+                    )
+                    print(
+                        "[Sprint183-1 Single Scene Upload] ERROR",
+                        type(exc).__name__,
+                        str(exc),
+                        flush=True,
+                    )
 
     st.subheader("Meta Business Suite 릴스 예약 테스트")
     st.info(
@@ -6003,12 +6240,19 @@ def show_one_click_pipeline():
             st.markdown(f"**{platform_label}**")
 
         with row[1]:
-            platform_channel = st.selectbox(
-                "채널명",
-                options=list(PUBLISH_ACCOUNT_PROFILES.keys()),
-                key=f"sprint193_3_{platform_key}_channel",
-                label_visibility="collapsed",
-            )
+            if platform_key == "youtube":
+                platform_channel = str(
+                    youtube_upload_account
+                    or _sprint194_77_default_youtube_account(production_mode)
+                ).strip()
+                st.write(f"📺 {platform_channel}")
+            else:
+                platform_channel = st.selectbox(
+                    "채널명",
+                    options=list(PUBLISH_ACCOUNT_PROFILES.keys()),
+                    key=f"sprint193_3_{platform_key}_channel",
+                    label_visibility="collapsed",
+                )
 
         with row[2]:
             video_options = ["공통 영상"] + inline_video_candidates + ["PC 직접 선택"]
@@ -6880,6 +7124,21 @@ def show_one_click_pipeline():
                         platform_payload[f"{platform_key}_description"] = platform_description
 
                     platform_payload["platform"] = platform_key
+                    if platform_key == "youtube":
+                        platform_payload["youtube_account"] = str(
+                            platform_override.get("channel")
+                            or youtube_upload_account
+                            or _sprint194_77_default_youtube_account(production_mode)
+                        ).strip()
+                        print(
+                            "[Sprint194-77-1 YouTube Channel Route]",
+                            {
+                                "account": platform_payload["youtube_account"],
+                                "production_mode": production_mode,
+                                "video_path": selected_video_path,
+                            },
+                            flush=True,
+                        )
 
                     # Sprint192-31:
                     # 네이버 클립은 ReservationQueue에 넣지 않고 지금 바로
@@ -7135,6 +7394,10 @@ def show_one_click_pipeline():
         "reservation_platforms": list(selected_platforms or []),
         "infock_url": str(infock_url or "").strip(),
         "platform_metadata": dict(platform_metadata or {}),
+        "youtube_account": str(
+            youtube_upload_account
+            or _sprint194_77_default_youtube_account(production_mode)
+        ).strip(),
     }
     try:
         project = create_project_from_payload(payload, [product_name.strip()])
@@ -7227,13 +7490,28 @@ def show_one_click_pipeline():
                 minutes=int(platform_interval_minutes or 0) * naver_index
             )
 
+        _reservation_platform_metadata_194_77_1 = dict(platform_metadata or {})
+        if "youtube" in list(queue_platforms or []):
+            _youtube_meta_194_77_1 = dict(
+                _reservation_platform_metadata_194_77_1.get("youtube") or {}
+            )
+            _youtube_meta_194_77_1["channel"] = str(
+                youtube_upload_account
+                or _sprint194_77_default_youtube_account(production_mode)
+            ).strip()
+            _youtube_meta_194_77_1["youtube_account"] = str(
+                youtube_upload_account
+                or _sprint194_77_default_youtube_account(production_mode)
+            ).strip()
+            _reservation_platform_metadata_194_77_1["youtube"] = _youtube_meta_194_77_1
+
         reservation_payload = {
             "enabled": bool(queue_platforms),
             "platforms": queue_platforms,
             "scheduled_at_local": local_start.isoformat(),
             "interval_minutes": int(platform_interval_minutes or 0),
             "infock_url": str(infock_url or "").strip(),
-            "platform_metadata": dict(platform_metadata or {}),
+            "platform_metadata": _reservation_platform_metadata_194_77_1,
         }
 
     print(
