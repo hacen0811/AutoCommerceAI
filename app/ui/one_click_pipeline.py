@@ -73,7 +73,8 @@ except Exception:
     SearchKeywordEngine = None
 
 
-UI_VERSION = "sprint194-77-5-history-youtube-language-channel-lock"
+UI_VERSION = "sprint195-13-hasenmom-native-final-select"
+print("######## ONE_CLICK_PIPELINE SPRINT195-7 HASENMOM BLOCK ALIGN FIX LOADED ########", flush=True)
 RESULT_DIR = Path("exports/one_click_results")
 OPENAI_LOCALIZATION_KEY_PATH = Path("secrets/openai_localization_api_key.txt")
 
@@ -299,13 +300,8 @@ def _sprint194_28_localization_prompt(payload_items):
         "Each item must have scene, narration_en, subtitle_en. "
         "Preserve historical facts, names, dates, causal meaning, humor and emotional tone. "
         "Do not add facts. Do not merge or split scenes. Rewrite rather than literally translate: use natural, conversational American English for a fast, friendly history YouTube Short. "
-        "This is a 17-scene vertical Short targeting about 50-55 seconds total with Oliver TTS at 1.3x. "
-        "Keep narration aggressively concise: normally 5-7 spoken words per scene, usually one short sentence, and aim for about 108-116 English narration words TOTAL across all scenes. "
-        "Never expand a Korean sentence into extra explanation. Remove repetition, filler, setup phrases, and documentary/formal translationese while preserving the essential fact and causal meaning of each scene. "
-        "Use natural, idiomatic American English suitable for spoken YouTube Shorts. Avoid compressed headline-like phrases that sound unnatural when spoken. "
-        "Prefer clear subject-verb sentences over noun stacks or literal Korean-to-English phrasing. For example, prefer 'He loved meat, but still followed the mourning rules.' over unnatural constructions such as 'Meat love met ritual duty.' "
-        "For the final scene, keep the CTA very short. "
-        "Keep subtitle especially short and punchy: ideally 3-7 words and normally no more than 36 characters total, while preserving the scene meaning. "
+        "Keep narration concise: prefer one short spoken sentence per scene, remove Korean-style repetition, and avoid documentary/formal translationese. "
+        "Keep subtitle especially short and punchy: ideally 4-8 words and normally no more than 42 characters total, while preserving the scene meaning. "
         "Do not address the viewer unless the Korean source does. Narration must sound natural for TTS. No markdown.\nINPUT:\n"
         + json.dumps(payload_items, ensure_ascii=False)
     )
@@ -325,17 +321,6 @@ def _sprint194_28_validate_localized(parsed, expected_count):
         if not subtitle:
             subtitle = narration
         out.append({"scene": idx, "narration": narration, "subtitle": subtitle})
-    _total_words_194_75h = sum(
-        len(re.findall(r"[A-Za-z0-9']+", str(x.get("narration") or "")))
-        for x in out
-    )
-    print("[Sprint194-75H English Short Localization] VALIDATED", {
-        "scenes": len(out),
-        "narration_words": _total_words_194_75h,
-        "target_words": "108-116",
-        "target_seconds": "53-55",
-        "english_style": "natural-spoken-american-shorts",
-    }, flush=True)
     return out
 
 
@@ -465,27 +450,13 @@ def _sprint194_21_auto_localize_history_to_english(items, openai_api_key="", pro
 
     # 194-32 priority 1: never call a translation API again when this project already
     # has a valid 1:1 English localization from a previous successful render.
-    # Sprint194-75H: do not reuse pre-75H project localization because it may
-    # contain the old long-form English narration. The new versioned hash cache below
-    # is safe to reuse after the first successful 75H localization.
-    reused = None
-    print("[Sprint194-75H English Short Localization] PROJECT_OLD_REUSE_SKIPPED", {
-        "project_id": str(project_id or ""),
-        "profile": "history-en-short-53-55s-v3",
-    }, flush=True)
+    reused = _sprint194_32_try_project_reuse(project_id, payload_items)
+    if reused:
+        return reused
 
     cache_dir = RESULT_DIR / "history_localization_cache"
     cache_dir.mkdir(parents=True, exist_ok=True)
-    # Sprint194-75H: version the localization cache. Older cached English text
-    # was valid linguistically but too verbose for a ~50-55s Short, so do not reuse it.
-    _localization_profile_194_75h = "history-en-short-53-55s-v3"
-    cache_key = hashlib.sha256(
-        json.dumps(
-            {"profile": _localization_profile_194_75h, "items": payload_items},
-            ensure_ascii=False,
-            sort_keys=True,
-        ).encode("utf-8")
-    ).hexdigest()[:24]
+    cache_key = hashlib.sha256(json.dumps(payload_items, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()[:24]
     cache_path = cache_dir / f"{cache_key}_en.json"
     if cache_path.is_file():
         try:
@@ -540,18 +511,6 @@ PUBLISH_ACCOUNT_PROFILES = {
         "naver_clip": "secrets/naver_clip_playwright_profile_hasenmom",
     },
 }
-
-# Sprint194-77: YouTube 채널별 OAuth token 분리.
-YOUTUBE_UPLOAD_ACCOUNTS = ["실물로그", "하센맘", "역사쿠키", "History Cookie"]
-
-def _sprint194_77_default_youtube_account(production_mode):
-    mode = str(production_mode or "").strip()
-    if mode == "history_en":
-        return "History Cookie"
-    if mode == "history_ko":
-        return "역사쿠키"
-    return "실물로그"
-
 
 
 def _publisher_profile(account_name, platform):
@@ -874,10 +833,21 @@ def _sprint193_29_apply_preset_to_session(preset):
         "sprint193_1_tts_volume": int(preset.get("tts_volume_percent") or 100),
         "sprint193_1_tts_speed": float(preset.get("tts_speech_speed") or 1.0),
         "sprint193_1_bgm_volume": int(preset.get("bgm_volume_percent") or 10),
-        # Sprint194-25: top-level mode widget is now only shopping/history.
-        # Preserve old history_ko/history_en presets by splitting mode and language state.
+        "sprint195_2_hasenmom_intro_subtitle": str(preset.get("hasenmom_intro_subtitle") or ""),
+        "sprint195_2_hasenmom_intro_narration": str(preset.get("hasenmom_intro_narration") or ""),
+        "sprint195_2_hasenmom_outro_subtitle": str(preset.get("hasenmom_outro_subtitle") or ""),
+        "sprint195_2_hasenmom_outro_narration": str(preset.get("hasenmom_outro_narration") or ""),
+        # Sprint195-1: preserve shopping/history/hasenmom as independent top-level modes.
+        # Old history_ko/history_en presets are still split into history + language.
         "sprint194_25_content_mode": (
-            "history" if str(preset.get("production_mode") or preset.get("channel_type") or "").startswith("history_") else "shopping"
+            "history"
+            if str(preset.get("production_mode") or preset.get("channel_type") or "").startswith("history_")
+            else (
+                "hasenmom"
+                if str(preset.get("production_mode") or "").strip() == "hasenmom"
+                or str(preset.get("channel_type") or "").strip() == "standing"
+                else "shopping"
+            )
         ),
         "sprint194_25_history_language": (
             "en" if str(preset.get("production_mode") or preset.get("channel_type") or "") == "history_en" else "ko"
@@ -1009,6 +979,174 @@ def _sprint194_4_render_history_image_clip(image_path, output_path, seconds=5.0,
         raise RuntimeError("history_image_clip_failed: " + str((completed.stderr or completed.stdout or "")[-1200:]))
     return str(output)
 
+
+def _sprint195_2_render_black_bookend(output_path, seconds=3.0, fps=30):
+    """하센맘 첫/마지막 검정 장면용 9:16 무음 MP4를 생성합니다."""
+    output = Path(str(output_path))
+    output.parent.mkdir(parents=True, exist_ok=True)
+    duration = max(1.0, float(seconds or 3.0))
+    command = [
+        "ffmpeg", "-y",
+        "-f", "lavfi",
+        "-i", f"color=c=black:s=1080x1920:r={int(fps or 30)}:d={duration:.3f}",
+        "-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
+        "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(output),
+    ]
+    completed = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
+    ok = completed.returncode == 0 and output.is_file() and output.stat().st_size > 1024
+    print("[Sprint195-2 Hasenmom Black Bookend]", {"ok": ok, "path": str(output), "seconds": duration}, flush=True)
+    if not ok:
+        raise RuntimeError("hasenmom_black_bookend_failed: " + str((completed.stderr or completed.stdout or "")[-1200:]))
+    return str(output)
+
+
+
+def _sprint195_4_subtitle_blocks(text):
+    """하센맘: 빈 줄 1개(\n\n)를 같은 영상 안의 다음 자막으로 해석합니다."""
+    raw = str(text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not raw:
+        return [""]
+    blocks = [part.strip() for part in re.split(r"\n\s*\n+", raw) if part.strip()]
+    return blocks or [raw]
+
+
+def _sprint195_4_probe_duration(path):
+    command = ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", str(path)]
+    completed = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
+    try:
+        return max(0.0, float((completed.stdout or "0").strip()))
+    except Exception:
+        return 0.0
+
+
+def _sprint195_4_split_video_equal(source_path, block_count, output_dir, source_index):
+    """한 Gemini 영상을 자막 블록 수만큼 시간 균등 분할합니다. 합계 영상 길이는 변하지 않습니다."""
+    source = Path(str(source_path))
+    count = max(1, int(block_count or 1))
+    if count <= 1:
+        return [str(source)]
+    duration = _sprint195_4_probe_duration(source)
+    if duration <= 0.2:
+        return [str(source)] * count
+    each = duration / count
+    results = []
+    for part in range(count):
+        start = each * part
+        seg_duration = each if part < count - 1 else max(0.05, duration - start)
+        target = Path(output_dir) / f"hasenmom_scene_{int(source_index):02d}_part_{part+1:02d}.mp4"
+        command = [
+            "ffmpeg", "-y", "-ss", f"{start:.6f}", "-i", str(source), "-t", f"{seg_duration:.6f}",
+            "-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p",
+            "-movflags", "+faststart", str(target),
+        ]
+        completed = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
+        if completed.returncode != 0 or not target.is_file() or target.stat().st_size <= 1024:
+            raise RuntimeError("hasenmom_subtitle_split_video_failed: " + str((completed.stderr or completed.stdout or "")[-1200:]))
+        results.append(str(target))
+    return results
+
+
+def _sprint195_4_card_lines(text, expected_parts):
+    lines = [x.strip() for x in str(text or "").replace("\r", "").split("\n") if x.strip()]
+    if expected_parts == 3:
+        return (lines + ["", "", ""])[:3]
+    return (lines + ["", ""])[:2]
+
+
+def _sprint195_5_split_narration(text, part_count):
+    """하센맘 TTS 분할: 자막과 동일하게 빈 줄을 최우선 경계로 사용해 마지막 블록까지 1:1 보존합니다."""
+    raw = str(text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    count = max(1, int(part_count or 1))
+    if not raw:
+        return [""] * count
+    if count == 1:
+        return [raw]
+
+    # Sprint195-6: 사용자가 자막/나레이션에 넣은 빈 줄은 같은 장면 분할 의도입니다.
+    # 블록 수가 맞으면 절대로 줄 단위로 재분배하지 않습니다. 마지막 블록 유실 방지.
+    blank_blocks = [x.strip() for x in re.split(r"\n\s*\n+", raw) if x.strip()]
+    if len(blank_blocks) == count:
+        return blank_blocks
+
+    units = [x.strip() for x in re.split(r"\n+|(?<=[.!?。！？])\s+", raw) if x.strip()]
+    units = units or [raw]
+    groups = [[] for _ in range(count)]
+    for i, unit in enumerate(units):
+        slot = min(count - 1, int(i * count / max(1, len(units))))
+        groups[slot].append(unit)
+    result = [" ".join(g).strip() for g in groups]
+    # 어떤 경우에도 마지막 원문 조각이 사라지지 않았는지 추적 가능하게 남깁니다.
+    print("[Sprint195-6 Hasenmom Narration Split]", {"parts": count, "blocks": len(blank_blocks), "nonempty": sum(bool(x) for x in result), "last": result[-1][:80] if result else ""}, flush=True)
+    return result
+
+
+def _sprint195_7_aligned_blocks(subtitle_text, narration_text):
+    """하센맘: 자막/나레이션 중 더 많이 분할된 쪽을 기준으로 두 배열을 1:1 정렬합니다."""
+    subtitle_raw = str(subtitle_text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    narration_raw = str(narration_text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    subtitle_blocks = [x.strip() for x in re.split(r"\n\s*\n+", subtitle_raw) if x.strip()] if subtitle_raw else []
+    narration_blocks = [x.strip() for x in re.split(r"\n\s*\n+", narration_raw) if x.strip()] if narration_raw else []
+    count = max(1, len(subtitle_blocks), len(narration_blocks))
+    if len(subtitle_blocks) == count:
+        aligned_subtitles = subtitle_blocks
+    else:
+        aligned_subtitles = _sprint195_5_split_narration(subtitle_raw, count)
+    aligned_narrations = _sprint195_5_split_narration(narration_raw, count)
+    print("[Sprint195-7 Hasenmom Block Align] READY", {
+        "parts": count,
+        "subtitle_blank_blocks": len(subtitle_blocks),
+        "narration_blank_blocks": len(narration_blocks),
+        "subtitle_nonempty": sum(bool(x) for x in aligned_subtitles),
+        "narration_nonempty": sum(bool(x) for x in aligned_narrations),
+        "last_subtitle": aligned_subtitles[-1][:80] if aligned_subtitles else "",
+        "last_narration": aligned_narrations[-1][:80] if aligned_narrations else "",
+    }, flush=True)
+    return aligned_subtitles, aligned_narrations
+
+
+def _sprint195_4_render_title_card(output_path, text, card_type="intro", seconds=3.0, fps=30):
+    """하센맘 검정 카드: 넓은 간격 + 크기 차등 + 한 줄씩 순차 페이드인."""
+    from PIL import Image, ImageDraw, ImageFont
+    output = Path(str(output_path))
+    output.parent.mkdir(parents=True, exist_ok=True)
+    font_candidates = [Path("C:/Windows/Fonts/malgunbd.ttf"), Path("C:/Windows/Fonts/malgun.ttf"), Path("C:/Windows/Fonts/NotoSansKR-Bold.ttf")]
+    font_path = next((x for x in font_candidates if x.is_file()), None)
+    if font_path is None:
+        raise RuntimeError("hasenmom_title_card_font_not_found")
+    if card_type == "intro":
+        specs = list(zip(_sprint195_4_card_lines(text, 3), [620, 845, 1080], [78, 52, 40], [0.20, 0.85, 1.50]))
+    else:
+        specs = list(zip(_sprint195_4_card_lines(text, 2), [690, 1010], [78, 44], [0.25, 1.15]))
+    layer_paths = []
+    for idx, (txt, y, size, start) in enumerate(specs, start=1):
+        layer = output.with_name(output.stem + f"_line{idx}.png")
+        image = Image.new("RGBA", (1080, 1920), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(image)
+        if txt:
+            font = ImageFont.truetype(str(font_path), size=size)
+            box = draw.textbbox((0, 0), txt, font=font)
+            x = (1080 - (box[2] - box[0])) / 2
+            draw.text((x, y), txt, font=font, fill=(255, 255, 255, 255))
+        image.save(layer)
+        layer_paths.append((layer, start))
+    duration = max(1.0, float(seconds or 3.0))
+    command = ["ffmpeg", "-y", "-f", "lavfi", "-i", f"color=c=black:s=1080x1920:r={int(fps or 30)}:d={duration:.3f}"]
+    for layer, _ in layer_paths:
+        command += ["-loop", "1", "-i", str(layer)]
+    filters = []
+    previous = "[0:v]"
+    for i, (_, start) in enumerate(layer_paths, start=1):
+        filters.append(f"[{i}:v]format=rgba,fade=t=in:st={start:.3f}:d=0.45:alpha=1[line{i}]")
+        out = f"[v{i}]"
+        filters.append(f"{previous}[line{i}]overlay=0:0:shortest=1{out}")
+        previous = out
+    command += ["-filter_complex", ";".join(filters), "-map", previous, "-t", f"{duration:.3f}", "-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(output)]
+    completed = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
+    ok = completed.returncode == 0 and output.is_file() and output.stat().st_size > 1024
+    print("[Sprint195-5 Hasenmom Card Fade]", {"ok": ok, "type": card_type, "lines": len(specs)}, flush=True)
+    if not ok:
+        raise RuntimeError("hasenmom_title_card_failed: " + str((completed.stderr or completed.stdout or "")[-1200:]))
+    return str(output)
 
 def _sprint194_5_scene_sort_key(item):
     name = str(getattr(item, "name", item) or "")
@@ -1861,21 +1999,31 @@ def _run_project_pipeline_impl(
         for item in list(viral_video_sources or [])
         if str(item).strip()
     ]
-    _history_mode_194_12_ui = str(channel_type or "").strip().lower() in {
+    _channel_type_195_11 = str(channel_type or "").strip().lower()
+    _history_mode_194_12_ui = _channel_type_195_11 in {
         "history", "history_ko", "history_en"
     }
-    viral_video_sources = (
-        _raw_viral_video_sources_194_12[:25]
-        if _history_mode_194_12_ui
-        else _raw_viral_video_sources_194_12[:10]
-    )
+    _hasenmom_mode_195_11 = _channel_type_195_11 == "standing"
+    if _hasenmom_mode_195_11:
+        # Sprint195-11: 하센맘은 자막 분할 + INTRO/OUTRO 때문에 원본 업로드 수보다
+        # 실제 렌더 슬롯 수가 늘어납니다. 쇼핑용 10개 제한을 적용하면 뒤 슬롯이 잘립니다.
+        viral_video_sources = list(_raw_viral_video_sources_194_12)
+        _source_cap_195_11 = "unlimited"
+    elif _history_mode_194_12_ui:
+        viral_video_sources = _raw_viral_video_sources_194_12[:25]
+        _source_cap_195_11 = 25
+    else:
+        viral_video_sources = _raw_viral_video_sources_194_12[:10]
+        _source_cap_195_11 = 10
     print(
-        "[Sprint194-12 History Scene Pass Through]",
+        "[Sprint195-11 Hasenmom Source Cap] READY",
         {
+            "channel_type": _channel_type_195_11,
             "history_mode": _history_mode_194_12_ui,
+            "hasenmom_mode": _hasenmom_mode_195_11,
             "input_count": len(_raw_viral_video_sources_194_12),
             "passed_count": len(viral_video_sources),
-            "cap": 25 if _history_mode_194_12_ui else 10,
+            "cap": _source_cap_195_11,
         },
         flush=True,
     )
@@ -2379,6 +2527,37 @@ def render_project_pipeline(
             "원클릭 결과가 아직 없습니다. "
             "먼저 원클릭 실행을 완료해 주세요."
         )
+
+
+def _resolve_hasenmom_native_final_video_path(result):
+    """Sprint195-13: 하센맘은 방금 렌더된 Workflow native final을 최우선으로 사용합니다."""
+    outputs = result.get("outputs", {}) if isinstance(result, dict) else {}
+    final_video = outputs.get("final_video")
+    candidates = []
+    if isinstance(final_video, dict):
+        candidates.extend([
+            final_video.get("output_path"),
+            final_video.get("video_path"),
+            final_video.get("path"),
+        ])
+    else:
+        candidates.append(final_video)
+    candidates.extend([
+        outputs.get("final_video_path"),
+        outputs.get("produced_final_path"),
+    ])
+    for raw_path in candidates:
+        path_text = str(raw_path or "").strip()
+        if not path_text:
+            continue
+        path = Path(path_text)
+        if path.is_file() and path.suffix.lower() == ".mp4":
+            print("[Sprint195-13 Hasenmom Native Final Select] READY", {
+                "selected": str(path),
+                "product_named_ignored": str(outputs.get("product_named_final_video_path") or ""),
+            }, flush=True)
+            return str(path)
+    return ""
 
 
 def _resolve_final_video_path(result):
@@ -3354,7 +3533,7 @@ def show_one_click_pipeline():
         if isinstance(_restore_intent_194_45, dict):
             _intent_content_194_45 = str(_restore_intent_194_45.get("content_mode") or "").strip()
             _intent_lang_194_45 = str(_restore_intent_194_45.get("history_language") or "").strip()
-            if _intent_content_194_45 in {"shopping", "history"}:
+            if _intent_content_194_45 in {"shopping", "history", "hasenmom"}:
                 st.session_state["sprint194_25_content_mode"] = _intent_content_194_45
             if _intent_lang_194_45 in {"ko", "en"}:
                 st.session_state["sprint194_25_history_language"] = _intent_lang_194_45
@@ -3387,7 +3566,7 @@ def show_one_click_pipeline():
         }, flush=True)
 
     st.title("⚡ 쇼츠 원클릭")
-    st.caption("쇼핑 쇼츠는 Gemini 영상을, 역사 쇼츠는 장면 이미지를 사용해 TTS·자막·BGM·효과음을 적용합니다.")
+    st.caption("쇼핑 쇼츠·하센맘은 Gemini 영상을, 역사 쇼츠는 장면 이미지를 사용해 TTS·자막·BGM·효과음을 적용합니다.")
     st.caption(f"UI 버전: {UI_VERSION}")
 
     st.markdown("### 🎯 제작 모드")
@@ -3397,27 +3576,47 @@ def show_one_click_pipeline():
     # Separate content type and language into two widgets that are ALWAYS rendered.
     _content_mode = st.radio(
         "쇼츠 종류",
-        options=["shopping", "history"],
-        format_func=lambda value: {"shopping": "🛍️ 쇼핑 쇼츠", "history": "🍪 역사쿠키"}[value],
+        options=["shopping", "history", "hasenmom"],
+        format_func=lambda value: {
+            "shopping": "🛍️ 쇼핑 쇼츠",
+            "history": "🍪 역사쿠키",
+            "hasenmom": "👩 하센맘",
+        }[value],
         horizontal=True,
         key="sprint194_25_content_mode",
     )
-    _history_language = st.radio(
-        "역사쿠키 언어",
-        options=["ko", "en"],
-        format_func=lambda value: {"ko": "🇰🇷 한국어", "en": "🇺🇸 English"}[value],
-        horizontal=True,
-        key="sprint194_25_history_language",
-    )
     is_history_mode = _content_mode == "history"
-    production_mode = (f"history_{_history_language}" if is_history_mode else "shopping")
+    is_hasenmom_mode = _content_mode == "hasenmom"
+    # Sprint195-2: 역사쿠키 언어 선택은 역사쿠키 모드에서만 노출합니다.
+    # 다른 모드에서는 저장된 언어값만 유지해 기존 history_ko/history_en 복원 동작을 보호합니다.
+    if is_history_mode:
+        _history_language = st.radio(
+            "역사쿠키 언어",
+            options=["ko", "en"],
+            format_func=lambda value: {"ko": "🇰🇷 한국어", "en": "🇺🇸 English"}[value],
+            horizontal=True,
+            key="sprint194_25_history_language",
+        )
+    else:
+        _history_language = str(st.session_state.get("sprint194_25_history_language") or "ko")
+        if _history_language not in {"ko", "en"}:
+            _history_language = "ko"
+    production_mode = (
+        f"history_{_history_language}"
+        if is_history_mode
+        else ("hasenmom" if is_hasenmom_mode else "shopping")
+    )
     _history_mode_info = (
         "🌍 History Cookie English: 한국어 장면을 불러온 뒤 영어 자동 현지화로 영어 자막·나레이션을 생성하고 별도 MP4를 제작합니다."
         if production_mode == "history_en"
         else (
             "🍪 역사 쇼츠 모드: 장면 이미지 1~25장 + 장면별 나레이션/자막/SFX를 넣어 최종 9:16 MP4를 제작합니다."
             if is_history_mode
-            else "🛍️ 쇼핑 쇼츠 모드: 기존 쇼핑 원클릭 흐름을 그대로 사용합니다."
+            else (
+                "👩 하센맘 모드: 완성한 Gemini 장면 영상을 순서대로 넣고 나레이션·자막·BGM을 적용해 최종 9:16 MP4를 제작합니다."
+                if is_hasenmom_mode
+                else "🛍️ 쇼핑 쇼츠 모드: 기존 쇼핑 원클릭 흐름을 그대로 사용합니다."
+            )
         )
     )
     _history_mode_caption = (
@@ -3426,7 +3625,11 @@ def show_one_click_pipeline():
         else (
             "쇼핑용 리뷰·평점·상품 CTA는 사용하지 않습니다. 한국어 기본 성우는 기존 설정을 유지합니다."
             if is_history_mode
-            else "역사쿠키 언어 선택은 쇼핑 모드에서는 무시됩니다."
+            else (
+                "하센맘 모드에서는 쇼핑용 리뷰·평점·상품 CTA를 사용하지 않습니다. 성우는 지안으로 고정합니다."
+                if is_hasenmom_mode
+                else "역사쿠키 언어 선택은 쇼핑 모드에서는 무시됩니다."
+            )
         )
     )
     # Always render both slots so language changes update text only.
@@ -3438,139 +3641,23 @@ def show_one_click_pipeline():
         "production_mode": production_mode,
         "stable_dom": True,
     }, flush=True)
+    if is_hasenmom_mode:
+        print("[Sprint195-2 Hasenmom Mode] READY", {
+            "production_mode": production_mode,
+            "renderer_family": "standing/gemini-video",
+            "shopping_trust_ui": False,
+            "shopping_cta_ui": False,
+            "history_flow_untouched": True,
+            "voice_lock": "지안",
+            "black_bookends": True,
+        }, flush=True)
 
     st.markdown("### 📂 이전 작업 불러오기")
-
-    # Sprint194-75G: restore the History Cookie "latest final per video/topic" list.
-    # A regression had fallen back to the generic most-recent-30 list, which could hide
-    # older topics such as Sejong behind many rerenders of Taejong/elephant.
-    if is_history_mode:
-        _history_target_mode_194_75g = production_mode
-        _history_candidates_194_75g = []
-
-        _history_product_root_194_75g = Path("assets/products")
-        if _history_product_root_194_75g.exists():
-            for _preset_path_194_75g in _history_product_root_194_75g.glob("project_*/edit_preset.json"):
-                try:
-                    _payload_194_75g = read_json(_preset_path_194_75g, {})
-                    if not isinstance(_payload_194_75g, dict) or not _payload_194_75g:
-                        continue
-
-                    _mode_194_75g = str(
-                        _payload_194_75g.get("production_mode")
-                        or _payload_194_75g.get("channel_type")
-                        or ""
-                    ).strip().lower()
-                    if _mode_194_75g not in {"history_ko", "history_en"}:
-                        continue
-
-                    # Sprint194-75GC source-list policy:
-                    # - Korean production: show Korean latest finals only.
-                    # - English production: show BOTH English latest finals and
-                    #   Korean latest finals, because a Korean final is a valid
-                    #   source project for creating/localizing the English version.
-                    if _history_target_mode_194_75g == "history_ko":
-                        if _mode_194_75g != "history_ko":
-                            continue
-                    elif _history_target_mode_194_75g == "history_en":
-                        if _mode_194_75g not in {"history_en", "history_ko"}:
-                            continue
-                    else:
-                        continue
-
-                    _pid_194_75g = str(
-                        _payload_194_75g.get("project_id")
-                        or _preset_path_194_75g.parent.name.replace("project_", "")
-                    ).strip()
-                    _name_194_75g = str(
-                        _payload_194_75g.get("product_name")
-                        or _payload_194_75g.get("title")
-                        or f"프로젝트 {_pid_194_75g}"
-                    ).strip()
-
-                    _clips_194_75g = [
-                        str(x or "").strip()
-                        for x in list(_payload_194_75g.get("gemini_clip_paths") or [])
-                        if str(x or "").strip()
-                    ]
-                    if not _clips_194_75g:
-                        _clip_dir_194_75g = Path("assets/gemini_clips") / f"project_{_pid_194_75g}"
-                        if _clip_dir_194_75g.exists():
-                            _clips_194_75g = [
-                                str(p) for p in _clip_dir_194_75g.iterdir()
-                                if p.is_file() and p.suffix.lower() in SUPPORTED_VIRAL_VIDEO_SUFFIXES
-                            ]
-                    if not _clips_194_75g:
-                        continue
-
-                    _history_candidates_194_75g.append({
-                        "path": str(_preset_path_194_75g),
-                        "project_id": _pid_194_75g,
-                        "product_name": _name_194_75g,
-                        "saved_at": str(_payload_194_75g.get("saved_at") or ""),
-                        "mtime": float(_preset_path_194_75g.stat().st_mtime),
-                        "clip_count": len(_clips_194_75g),
-                        "recovered": False,
-                        "history_language": "en" if _mode_194_75g == "history_en" else "ko",
-                    })
-                except Exception as _history_index_exc_194_75g:
-                    print("[Sprint194-75G History Latest Index] SKIP", {
-                        "path": str(_preset_path_194_75g),
-                        "error": f"{type(_history_index_exc_194_75g).__name__}: {_history_index_exc_194_75g}",
-                    }, flush=True)
-
-        # One row per video/topic: normalize only UI/version prefixes and whitespace;
-        # the newest project for the same title wins.
-        def _history_topic_key_194_75g(_name):
-            _key = str(_name or "").strip().casefold()
-            _key = re.sub(r"^\[(?:역사쿠키|history\s*cookie)\s*/\s*(?:한글|한국어|영어|ko|en)\]\s*", "", _key)
-            _key = re.sub(r"^\[(?:한글|한국어|영어|ko|en)\]\s*", "", _key)
-            _key = re.sub(r"\s+", " ", _key).strip()
-            return _key
-
-        _history_candidates_194_75g.sort(
-            key=lambda x: (float(x.get("mtime") or 0.0), int(str(x.get("project_id") or "0")) if str(x.get("project_id") or "").isdigit() else 0),
-            reverse=True,
-        )
-        _latest_by_topic_194_75g = {}
-        for _item_194_75g in _history_candidates_194_75g:
-            _topic_key_194_75g = _history_topic_key_194_75g(_item_194_75g.get("product_name"))
-            # Sprint194-75GC: in English mode, preserve one latest KO row and
-            # one latest EN row independently for the same topic.
-            _language_key_194_75gc = str(_item_194_75g.get("history_language") or "").lower()
-            _dedup_key_194_75gc = (
-                f"{_language_key_194_75gc}::{_topic_key_194_75g}"
-                if _history_target_mode_194_75g == "history_en"
-                else _topic_key_194_75g
-            )
-            if _topic_key_194_75g and _dedup_key_194_75gc not in _latest_by_topic_194_75g:
-                _latest_by_topic_194_75g[_dedup_key_194_75gc] = _item_194_75g
-
-        recent_presets = list(_latest_by_topic_194_75g.values())
-        print("[Sprint194-75G History Previous Work Latest Final] READY", {
-            "production_mode": production_mode,
-            "source_language_policy": "ko-only" if production_mode == "history_ko" else "en+ko",
-            "candidate_count": len(_history_candidates_194_75g),
-            "visible_count": len(recent_presets),
-            "visible": [
-                {
-                    "project_id": str(x.get("project_id") or ""),
-                    "product_name": str(x.get("product_name") or ""),
-                }
-                for x in recent_presets
-            ],
-        }, flush=True)
-    else:
-        recent_presets = _sprint193_29_recent_edit_presets(limit=30)
-
+    recent_presets = _sprint193_29_recent_edit_presets(limit=30)
     if recent_presets:
         preset_options = ["선택 안 함"] + [
             (
-                (
-                    ("[영어] " if str(item.get("history_language") or "").lower() == "en" else "[한글] ")
-                    if is_history_mode else ""
-                )
-                + f"{item['product_name']} · 프로젝트 {item['project_id']} · 영상 {item['clip_count']}개"
+                f"{item['product_name']} · 프로젝트 {item['project_id']} · 영상 {item['clip_count']}개"
                 + (" · 기존작업 복구" if item.get("recovered") else "")
             )
             for item in recent_presets
@@ -3686,13 +3773,21 @@ def show_one_click_pipeline():
     st.markdown(
         ("""<div class="mini-grid">역사 주제 │ 캐릭터 기준이미지 │ 장면이미지 │ 오디오 │ BGM │ 자막 │ 나레이션 │ 자막효과 │ 사운드효과 │ 장면속도</div><div class="mini-grid">역사 장면 이미지 최대 25장 · 이미지 → 9:16 영상 자동 변환 · 장면별 자막/나레이션/SFX/속도 편집</div>"""
          if is_history_mode else
-         """<div class="mini-grid">상품명 │ 평점 │ 리뷰수 │ 대표이미지 │ 오디오 │ BGM │ 자막 │ 나레이션 │ 자막효과 │ 사운드효과 │ 장면속도</div><div class="mini-grid">Gemini 영상 수동 업로드 1~10 · 영상별 자막 / 나레이션 / 자막효과 / 사운드효과 한 줄 편집</div>"""),
+         ("""<div class="mini-grid">영상 제목 │ 하센맘 기준이미지 │ Gemini 영상 │ 오디오 │ BGM │ 자막 │ 나레이션 │ 자막효과 │ 사운드효과 │ 장면속도</div><div class="mini-grid">하센맘 Gemini 영상 수동 업로드 1~10 · 영상별 자막 / 나레이션 / 자막효과 / 사운드효과 한 줄 편집</div>"""
+          if is_hasenmom_mode else
+          """<div class="mini-grid">상품명 │ 평점 │ 리뷰수 │ 대표이미지 │ 오디오 │ BGM │ 자막 │ 나레이션 │ 자막효과 │ 사운드효과 │ 장면속도</div><div class="mini-grid">Gemini 영상 수동 업로드 1~10 · 영상별 자막 / 나레이션 / 자막효과 / 사운드효과 한 줄 편집</div>""")),
         unsafe_allow_html=True,
     )
 
+    _main_name_label = "역사 주제" if is_history_mode else ("영상 제목" if is_hasenmom_mode else "상품명")
+    _main_name_placeholder = (
+        "예: 조선 코끼리 유배 사건"
+        if is_history_mode
+        else ("예: 오늘 드디어 쇼츠 하나를 업로드했습니다" if is_hasenmom_mode else "예: 미끄럼 방지 EVA 욕실화")
+    )
     product_name = st.text_input(
-        "역사 주제" if is_history_mode else "상품명",
-        placeholder=("예: 조선 코끼리 유배 사건" if is_history_mode else "예: 미끄럼 방지 EVA 욕실화"),
+        _main_name_label,
+        placeholder=_main_name_placeholder,
         key="sprint172_product_name",
     )
     # Sprint191-4: 별도 후킹 입력란 제거.
@@ -3716,23 +3811,41 @@ def show_one_click_pipeline():
     video_cta_platform = "none"
     cta_text = ""
 
-    st.markdown("#### 기준 이미지 (선택)" if is_history_mode else "#### 제품 대표이미지")
+    st.markdown(
+        "#### 기준 이미지 (선택)"
+        if is_history_mode
+        else ("#### 하센맘 기준 이미지 (선택)" if is_hasenmom_mode else "#### 제품 대표이미지")
+    )
     hook_product_image = st.file_uploader(
-        "역사 캐릭터/대표 이미지 (선택)" if is_history_mode else "제품 대표 이미지 (선택)",
+        "역사 캐릭터/대표 이미지 (선택)"
+        if is_history_mode
+        else ("하센맘 인물 기준 이미지 (선택)" if is_hasenmom_mode else "제품 대표 이미지 (선택)"),
         type=["png", "jpg", "jpeg", "webp"],
         accept_multiple_files=False,
         key="sprint189_hook_product_image",
         help="첫 신뢰 후킹 장면의 제품 배경으로 사용합니다. 후킹 배경의 실제 표시 강도는 영상 파이프라인에서 적용됩니다.",
     )
-    st.caption("이 이미지는 캐릭터 일관성 기준용입니다. 실제 영상 장면은 아래 역사 장면 이미지에서 선택합니다." if is_history_mode else "대표 이미지를 올리지 않으면 첫 Gemini 영상 프레임을 자동으로 사용합니다.")
+    st.caption(
+        "이 이미지는 캐릭터 일관성 기준용입니다. 실제 영상 장면은 아래 역사 장면 이미지에서 선택합니다."
+        if is_history_mode
+        else (
+            "하센맘 인물 일관성 기준용입니다. 실제 최종 장면은 아래 Gemini 영상에서 선택합니다."
+            if is_hasenmom_mode
+            else "대표 이미지를 올리지 않으면 첫 Gemini 영상 프레임을 자동으로 사용합니다."
+        )
+    )
 
     # Sprint193-8: 최근 한 달 구매수 입력은 제거합니다.
     # 현재 쇼핑 후킹은 리뷰수 + 평점 기준으로 고정합니다.
     monthly_purchase_count = 0
-    if is_history_mode:
+    if is_history_mode or is_hasenmom_mode:
         declared_review_count = 0
         rating = 0.0
-        st.caption("역사 모드에서는 쇼핑용 평점·리뷰 신뢰 후킹을 사용하지 않습니다.")
+        st.caption(
+            "역사 모드에서는 쇼핑용 평점·리뷰 신뢰 후킹을 사용하지 않습니다."
+            if is_history_mode
+            else "하센맘 모드에서는 쇼핑용 평점·리뷰 신뢰 후킹을 사용하지 않습니다."
+        )
     else:
         st.markdown("#### 평점 · 리뷰수")
         trust_c1, trust_c2 = st.columns(2)
@@ -3768,18 +3881,26 @@ def show_one_click_pipeline():
         st.info(auto_hook_text)
 
     hook_text = st.text_area(
-        "역사 후킹멘트" if is_history_mode else "후킹멘트",
+        "역사 후킹멘트" if is_history_mode else ("첫 문장 (선택)" if is_hasenmom_mode else "후킹멘트"),
         height=78,
         placeholder=(
             "예: 조선시대에 코끼리가 유배를 갔다?!"
             if is_history_mode
-            else "예: 양치할 때 아직도 손으로 물 받아 쓰세요?"
+            else (
+                "비워두면 장면별 나레이션만 사용합니다."
+                if is_hasenmom_mode
+                else "예: 양치할 때 아직도 손으로 물 받아 쓰세요?"
+            )
         ),
         key="sprint193_9_hook_phrase",
         help=(
             "구독 요청이 아니라, 사건에서 가장 궁금한 사실을 첫 문장으로 넣습니다."
             if is_history_mode
-            else "신뢰 후킹 다음, 첫 Gemini 영상 시작 시 표시·나레이션될 후킹 문장입니다."
+            else (
+                "하센맘 영상은 장면별 나레이션만으로 제작하려면 비워두세요."
+                if is_hasenmom_mode
+                else "신뢰 후킹 다음, 첫 Gemini 영상 시작 시 표시·나레이션될 후킹 문장입니다."
+            )
         ),
     )
 
@@ -3866,28 +3987,6 @@ def show_one_click_pipeline():
     # language radio changed.  Oliver is applied only to the internal English TTS values
     # after the stable voice widget has been rendered.
     _saved_voice_name = str(_saved_typecast.get("last_voice_name") or "지안")
-
-    # Sprint194-75D: when a Korean History project was restored, its project voice
-    # must win over the global Typecast last_voice (which may still be Oliver from
-    # the immediately preceding English project).
-    _restored_ko_voice_name_194_75d = ""
-    if production_mode == "history_ko":
-        for _voice_state_key_194_75d in (
-            "sprint194_71_restored_voice_name",
-            "sprint194_6_restored_voice_name",
-            "sprint193_19_voice_select",
-        ):
-            _candidate_194_75d = str(st.session_state.get(_voice_state_key_194_75d) or "").strip()
-            if _candidate_194_75d and _candidate_194_75d.casefold() not in {"oliver", "올리버"}:
-                _restored_ko_voice_name_194_75d = _candidate_194_75d
-                break
-        # The lightweight restore already places the project voice into the stable
-        # widget/session path. Prefer that value when it is present in Typecast.
-        if _restored_ko_voice_name_194_75d in _voice_labels:
-            _saved_voice_name = _restored_ko_voice_name_194_75d
-        elif "Junho" in _voice_labels and str(st.session_state.get("sprint193_19_voice_select") or "").strip() == "Junho":
-            _saved_voice_name = "Junho"
-            _restored_ko_voice_name_194_75d = "Junho"
     if production_mode == "history_en" and _oliver_voice_name and _oliver_voice_id:
         print("[Sprint194-23 English Stable Voice] FOUND", {
             "voice_name": _oliver_voice_name,
@@ -3901,32 +4000,38 @@ def show_one_click_pipeline():
             "voice_count": len(_voice_choices),
             "widget_value_preserved": True,
         }, flush=True)
-    # Sprint194-75E: seed the stable voice widget BEFORE it is instantiated.
-    # This is the safe Streamlit pattern and avoids StreamlitAPIException.
-    if (
-        production_mode == "history_ko"
-        and _restored_ko_voice_name_194_75d
-        and _restored_ko_voice_name_194_75d in _voice_labels
-    ):
-        _current_widget_seed_194_75e = str(
-            st.session_state.get("sprint193_19_voice_select") or ""
-        ).strip()
-        if _current_widget_seed_194_75e != _restored_ko_voice_name_194_75d:
-            st.session_state["sprint193_19_voice_select"] = _restored_ko_voice_name_194_75d
-        _saved_voice_name = _restored_ko_voice_name_194_75d
-        print("[Sprint194-75E History KO Voice PreWidget Lock] READY", {
-            "production_mode": production_mode,
-            "voice_name": _restored_ko_voice_name_194_75d,
-            "widget_seeded_before_creation": True,
-        }, flush=True)
-
     _default_voice_index = (
         _voice_labels.index(_saved_voice_name)
         if _saved_voice_name in _voice_labels
         else next((i for i, name in enumerate(_voice_labels) if name == "지안"), 0)
     )
 
-    if _voice_labels:
+    def _sprint195_2_find_jian_voice(choices):
+        rows = []
+        for _name, _vid in list(choices or []):
+            _label = str(_name or "").strip()
+            if not _label or not str(_vid or "").strip():
+                continue
+            _low = _label.casefold()
+            if _label == "지안":
+                rows.append((0, _label, str(_vid).strip()))
+            elif "지안" in _label or "jian" in _low:
+                rows.append((1, _label, str(_vid).strip()))
+        rows.sort(key=lambda row: (row[0], len(row[1]), row[1]))
+        return (rows[0][1], rows[0][2]) if rows else ("", "")
+
+    if is_hasenmom_mode:
+        _jian_voice_name, _jian_voice_id = _sprint195_2_find_jian_voice(_voice_choices)
+        selected_voice_name = _jian_voice_name or "지안"
+        selected_voice_id = _jian_voice_id
+        st.success("👩 하센맘 성우: 지안 고정")
+        if not selected_voice_id:
+            st.warning("Typecast 보이스 목록에서 지안 voice_id를 찾지 못했습니다. API 연결/보이스 목록을 확인해 주세요.")
+        print("[Sprint195-2 Hasenmom Voice Lock]", {
+            "voice_name": selected_voice_name,
+            "voice_id_present": bool(selected_voice_id),
+        }, flush=True)
+    elif _voice_labels:
         voice_search_text = st.text_input(
             "🔎 Typecast 성우 검색",
             value="",
@@ -3956,31 +4061,7 @@ def show_one_click_pipeline():
         elif production_mode == "history_en" and typecast_api_key:
             _auto_voice_message = "🌍 올리버 자동 검색 실패 · 현재 선택 성우를 영어 TTS에 사용합니다."
         elif production_mode == "history_ko":
-            # Sprint194-75D: never allow stale English Oliver to become the Korean
-            # render voice after a Korean project restore.
-            _ko_effective_name_194_75d = str(
-                _restored_ko_voice_name_194_75d or _widget_voice_name or _saved_voice_name
-            ).strip()
-            if _ko_effective_name_194_75d.casefold() in {"oliver", "올리버"}:
-                if "Junho" in _voice_labels:
-                    _ko_effective_name_194_75d = "Junho"
-                else:
-                    _ko_effective_name_194_75d = next(
-                        (n for n in _voice_labels if str(n).casefold() not in {"oliver", "올리버"}),
-                        _widget_voice_name,
-                    )
-            selected_voice_name = _ko_effective_name_194_75d
-            selected_voice_id = dict(_voice_choices).get(selected_voice_name, _widget_voice_id)
-            _widget_voice_name = selected_voice_name
-            _widget_voice_id = selected_voice_id
-            _auto_voice_message = f"🍪 한국어 성우: {selected_voice_name}"
-            print("[Sprint194-75E History KO Voice Lock] READY", {
-                "production_mode": production_mode,
-                "restored_voice": _restored_ko_voice_name_194_75d,
-                "effective_voice": selected_voice_name,
-                "oliver_blocked": str(selected_voice_name or "").casefold() not in {"oliver", "올리버"},
-                "voice_id_present": bool(selected_voice_id),
-            }, flush=True)
+            _auto_voice_message = f"🍪 한국어 성우: {_widget_voice_name}"
         st.caption(_auto_voice_message)
 
         # Persist only what the user chose in the stable widget.  Do not overwrite the
@@ -3996,15 +4077,6 @@ def show_one_click_pipeline():
         selected_voice_id = str(_saved_typecast.get("last_voice_id") or "")
         if typecast_api_key:
             st.warning("Typecast 보이스 목록을 불러오지 못했습니다.")
-
-    if production_mode == "history_ko" and str(selected_voice_name or "").strip().casefold() in {"oliver", "올리버"}:
-        raise RuntimeError("history_ko_voice_guard_blocked_oliver")
-    if production_mode == "history_ko":
-        print("[Sprint194-75E History KO Render Voice Guard] READY", {
-            "voice_name": selected_voice_name,
-            "voice_id_present": bool(selected_voice_id),
-            "guard": "oliver-forbidden-in-history-ko",
-        }, flush=True)
 
     print("[Sprint193-19 Typecast]", {
         "api_key_present": bool(typecast_api_key),
@@ -4032,6 +4104,11 @@ def show_one_click_pipeline():
         accept_multiple_files=False,
         key="sprint173_bgm_audio",
     )
+
+    # Sprint195-3: 하센맘 제작 기본값 고정. 쇼핑/역사 모드는 기존 값을 그대로 유지합니다.
+    if is_hasenmom_mode:
+        st.session_state["sprint193_1_tts_speed"] = 1.0
+        st.session_state["sprint193_1_bgm_volume"] = 20
 
     audio_c1, audio_c2, audio_c3 = st.columns(3)
     with audio_c1:
@@ -4227,6 +4304,25 @@ def show_one_click_pipeline():
                 else "업로드 목록의 순서대로 연결합니다. Gemini 영상의 기존 BGM과 음향은 자동 제거됩니다."
             )
 
+    hasenmom_intro_subtitle = ""
+    hasenmom_intro_narration = ""
+    hasenmom_outro_subtitle = ""
+    hasenmom_outro_narration = ""
+    if is_hasenmom_mode:
+        st.markdown("#### ⬛ 하센맘 첫 장면 · 검정 화면")
+        st.caption("3줄 입력: 큰 제목 / 부제 / EP 번호. 각 줄은 서로 다른 크기와 위치로 렌더됩니다.")
+        _hm_i1, _hm_i2 = st.columns(2)
+        with _hm_i1:
+            hasenmom_intro_subtitle = st.text_area(
+                "첫 검정 장면 자막", height=72, key="sprint195_2_hasenmom_intro_subtitle",
+                placeholder="하센맘의 일어서기\n- 드디어 업로드했습니다.\nEP.10"
+            )
+        with _hm_i2:
+            hasenmom_intro_narration = st.text_area(
+                "첫 검정 장면 나레이션 (선택)", height=72, key="sprint195_2_hasenmom_intro_narration",
+                placeholder="비워두면 나레이션 없이 자막만 표시합니다."
+            )
+
     clip_subtitles = []
     clip_narrations = []
     clip_subtitle_effects = []
@@ -4247,8 +4343,9 @@ def show_one_click_pipeline():
             ("장면마다 한 줄에서 자막 · 나레이션 · 자막효과 · 사운드효과를 바로 입력합니다. "
              "입력한 나레이션을 장면 순서대로 합쳐 확정 대본으로 사용합니다.")
             if is_history_mode else
-            ("영상마다 한 줄에서 자막 · 나레이션 · 자막효과 · 사운드효과를 바로 입력합니다. "
-             "확정 대본이 비어 있으면 입력한 나레이션을 영상 순서대로 합쳐 사용합니다.")
+            ("영상마다 자막 · 나레이션 · 자막효과 · 사운드효과를 입력합니다. "
+             + ("하센맘은 자막 입력 중 빈 줄 1개를 넣으면 같은 영상 안에서 다음 자막으로 분할됩니다. " if is_hasenmom_mode else "")
+             + "확정 대본이 비어 있으면 입력한 나레이션을 영상 순서대로 합쳐 사용합니다.")
         )
 
         # Sprint194-23: render the same localization controls in both history languages.
@@ -4327,10 +4424,6 @@ def show_one_click_pipeline():
                         # must use the localization result, not whatever preset happens to be visible later.
                         st.session_state["sprint194_30_english_subtitles"] = list(_localized_subtitles_194_30)
                         st.session_state["sprint194_30_english_narrations"] = list(_localized_narrations_194_30)
-                        # Sprint194-75J: bind the in-session English snapshot to the
-                        # current short-localization profile. Old 75H/75I snapshots
-                        # must not silently drive a new render.
-                        st.session_state["sprint194_75j_english_profile"] = "history-en-short-53-55s-v3"
                         st.session_state["sprint194_21_localized_ready"]=True
                         st.session_state["sprint194_26_pending_history_language"] = "en"
                         st.session_state["sprint194_23_localized_notice"] = f"영어 {len(_localized)}개 장면 자동 현지화 완료"
@@ -4503,7 +4596,10 @@ def show_one_click_pipeline():
             clip_narrations.append(str(narration_value or "").strip())
             clip_subtitle_effects.append(str(subtitle_effect_value or "기본").strip())
             clip_sfx.append(str(sfx_value or "없음").strip())
-            clip_playback_speeds.append(0.0 if scene_speed_value == "자동" else float(scene_speed_value or 1.5))
+            clip_playback_speeds.append(
+                2.0 if is_hasenmom_mode
+                else (0.0 if scene_speed_value == "자동" else float(scene_speed_value or 1.5))
+            )
 
         # Sprint194-47B: a Scene 1 MP4 is visual-source replacement only.
         # Keep all 1..N editing arrays aligned so Scene 1 still receives subtitle/TTS/effects.
@@ -4538,10 +4634,8 @@ def show_one_click_pipeline():
             _en_subs_194_30 = [str(x or "").strip() for x in list(st.session_state.get("sprint194_30_english_subtitles") or [])]
             _en_nars_194_30 = [str(x or "").strip() for x in list(st.session_state.get("sprint194_30_english_narrations") or [])]
             _scene_count_194_30 = len(editor_clip_sources)
-            _profile_194_75j = str(st.session_state.get("sprint194_75j_english_profile") or "")
             _snapshot_ready_194_30 = (
-                _profile_194_75j == "history-en-short-53-55s-v3"
-                and len(_en_subs_194_30) == _scene_count_194_30
+                len(_en_subs_194_30) == _scene_count_194_30
                 and len(_en_nars_194_30) == _scene_count_194_30
                 and all(_en_nars_194_30)
             )
@@ -4561,8 +4655,6 @@ def show_one_click_pipeline():
             print("[Sprint194-30 English Render Input Lock]", {
                 "scene_count": _scene_count_194_30,
                 "snapshot_ready": bool(_snapshot_ready_194_30),
-                "localization_profile": _profile_194_75j,
-                "profile_required": "history-en-short-53-55s-v3",
                 "subtitle_count": len(list(clip_subtitles or [])),
                 "narration_count": len(list(clip_narrations or [])),
                 "hangul_subtitles": _ko_sub_count_194_30,
@@ -4581,6 +4673,29 @@ def show_one_click_pipeline():
         if narration_script:
             st.caption("영상별 나레이션을 순서대로 합쳐 내부 확정 대본으로 사용합니다.")
 
+    if is_hasenmom_mode:
+        st.markdown("#### ⬛ 하센맘 마지막 장면 · 검정 화면")
+        st.caption("2줄 입력: 큰 엔딩 문구 / 하단 시리즈+다음 EP. 서로 다른 크기와 위치로 렌더됩니다.")
+        _hm_o1, _hm_o2 = st.columns(2)
+        with _hm_o1:
+            hasenmom_outro_subtitle = st.text_area(
+                "마지막 검정 장면 자막", height=72, key="sprint195_2_hasenmom_outro_subtitle",
+                placeholder="기록은 계속됩니다.\n- 하센맘의 일어서기 EP.11"
+            )
+        with _hm_o2:
+            hasenmom_outro_narration = st.text_area(
+                "마지막 검정 장면 나레이션 (선택)", height=72, key="sprint195_2_hasenmom_outro_narration",
+                placeholder="비워두면 나레이션 없이 자막만 표시합니다."
+            )
+        _hm_full_narrations = [
+            str(hasenmom_intro_narration or "").strip(),
+            *[str(x or "").strip() for x in list(clip_narrations or [])],
+            str(hasenmom_outro_narration or "").strip(),
+        ]
+        narration_script = " ".join(x for x in _hm_full_narrations if x).strip()
+        locked_script = narration_script
+        st.caption("편집 순서: 검정 첫 장면 → Gemini 영상들 → 검정 마지막 장면")
+
     if is_history_mode:
         # Sprint194-3: 역사 모드에는 쇼핑 CTA 상품명 입력을 노출하지 않습니다.
         cta_product_logo_text = ""
@@ -4591,26 +4706,14 @@ def show_one_click_pipeline():
             if production_mode == "history_ko"
             else "🌍 History Cookie (English)"
         )
-        # Sprint194-77-5:
-        # History mode channel is deterministic by language.
-        # Do not reuse a persistent Streamlit selectbox value across ko/en mode changes.
-        youtube_upload_account = _sprint194_77_default_youtube_account(production_mode)
-        st.text_input(
-            "YouTube 업로드 채널",
-            value=youtube_upload_account,
-            disabled=True,
-            key=f"sprint194_77_5_youtube_channel_{production_mode}",
-            help="한국어 역사쿠키는 '역사쿠키', 영어 버전은 'History Cookie' 채널로 자동 고정됩니다.",
-        )
-        st.caption("현재 YouTube 업로드 대상: " + youtube_upload_account)
-        print(
-            "[Sprint194-77-5 History YouTube Channel Lock]",
-            {
-                "production_mode": production_mode,
-                "youtube_account": youtube_upload_account,
-            },
-            flush=True,
-        )
+    elif is_hasenmom_mode:
+        # Sprint195-1: 하센맘은 기존 '일어서기' 렌더 경로를 재사용하되
+        # 쇼핑용 상품 CTA 입력은 노출하지 않는다.
+        cta_product_logo_text = ""
+        channel_type = "standing"
+        st.markdown("#### 채널")
+        st.success("👩 하센맘 · 다시 일어서기")
+        st.caption("쇼핑용 상품 CTA 없이 하센맘 장면 영상·나레이션·자막·BGM만 사용합니다.")
     else:
         st.markdown("#### CTA 상단 상품명")
         cta_product_logo_text = st.text_input(
@@ -4621,7 +4724,6 @@ def show_one_click_pipeline():
             help="마지막 수동 CTA 장면 상단에 로고형 상품명 자막으로 표시합니다. 비워두면 표시하지 않습니다.",
         )
         st.caption("마지막 CTA 장면에만 표시됩니다. 자동 CTA 문구를 생성하지는 않습니다.")
-        youtube_upload_account = "실물로그"
         channel_type = st.selectbox(
             "채널",
             options=["shopping", "standing"],
@@ -4632,6 +4734,10 @@ def show_one_click_pipeline():
             index=0,
             key="sprint172_channel_type",
         )
+
+    # Sprint195-3: 하센맘 Gemini 본문 영상은 2.0배를 기본/고정값으로 사용합니다.
+    if is_hasenmom_mode:
+        st.session_state["sprint176_playback_speed"] = 2.0
 
     c2, c3 = st.columns(2)
     with c2:
@@ -4653,56 +4759,6 @@ def show_one_click_pipeline():
             format_func=lambda value: {"unlisted": "비등록", "private": "비공개", "public": "공개"}[value],
             key="sprint172_privacy",
         )
-
-    history_youtube_schedule_enabled = False
-    history_youtube_schedule_date = None
-    history_youtube_schedule_time = None
-    history_youtube_title = ""
-    history_youtube_description = ""
-    history_youtube_hashtags_text = ""
-    if is_history_mode:
-        st.markdown("##### YouTube 업로드 정보")
-        history_youtube_title = st.text_input(
-            "YouTube 제목",
-            value=str(product_name or "").strip(),
-            key="sprint194_77_4_history_youtube_title",
-            placeholder="예: 왕이 신하에게 욕설 편지를 보냈다?! 정조의 비밀 어찰",
-        )
-        history_youtube_description = st.text_area(
-            "YouTube 설명",
-            value="",
-            height=130,
-            key="sprint194_77_4_history_youtube_description",
-            placeholder="영상 설명을 입력하세요.",
-        )
-        history_youtube_hashtags_text = st.text_input(
-            "YouTube 해시태그",
-            value="#역사쿠키 #조선역사 #Shorts",
-            key="sprint194_77_4_history_youtube_hashtags",
-            placeholder="#역사쿠키 #조선역사 #Shorts",
-        )
-
-        st.markdown("##### YouTube 예약 게시")
-        history_youtube_schedule_enabled = st.checkbox(
-            "예약 게시 사용",
-            value=False,
-            key="sprint194_77_3_history_youtube_schedule_enabled",
-            help="선택하면 완성 MP4를 비공개로 업로드한 뒤 지정한 한국 시간에 자동 공개합니다.",
-        )
-        if history_youtube_schedule_enabled:
-            schedule_col1, schedule_col2 = st.columns(2)
-            with schedule_col1:
-                history_youtube_schedule_date = st.date_input(
-                    "예약 날짜",
-                    key="sprint194_77_3_history_youtube_schedule_date",
-                )
-            with schedule_col2:
-                history_youtube_schedule_time = st.time_input(
-                    "예약 시간",
-                    key="sprint194_77_3_history_youtube_schedule_time",
-                    step=300,
-                )
-            st.caption("예약 시간 기준: 한국시간(KST)")
 
     st.markdown("---")
     st.subheader("🎬 쇼츠 제작")
@@ -4759,7 +4815,7 @@ def show_one_click_pipeline():
 
         direct_errors = []
         if not str(product_name or "").strip():
-            direct_errors.append("역사 주제를 입력해 주세요." if is_history_mode else "상품명을 입력해 주세요.")
+            direct_errors.append("역사 주제를 입력해 주세요." if is_history_mode else ("영상 제목을 입력해 주세요." if is_hasenmom_mode else "상품명을 입력해 주세요."))
         if not str(locked_script or "").strip():
             direct_errors.append("확정 대본을 입력해 주세요.")
         if not editor_clip_sources:
@@ -4830,14 +4886,26 @@ def show_one_click_pipeline():
             st.error(f"프로젝트 생성 실패: {exc}")
             return
 
+        _render_clip_subtitles = list(clip_subtitles or [])
+        _render_clip_narrations = list(clip_narrations or [])
+        _render_clip_subtitle_effects = list(clip_subtitle_effects or [])
+        _render_clip_sfx = list(clip_sfx or [])
+        _render_clip_playback_speeds = list(clip_playback_speeds or [])
+        if is_hasenmom_mode:
+            _render_clip_subtitles = [str(hasenmom_intro_subtitle or "").strip()] + _render_clip_subtitles + [str(hasenmom_outro_subtitle or "").strip()]
+            _render_clip_narrations = [str(hasenmom_intro_narration or "").strip()] + _render_clip_narrations + [str(hasenmom_outro_narration or "").strip()]
+            _render_clip_subtitle_effects = ["기본"] + _render_clip_subtitle_effects + ["기본"]
+            _render_clip_sfx = ["없음"] + _render_clip_sfx + ["없음"]
+            _render_clip_playback_speeds = [0.0] + _render_clip_playback_speeds + [0.0]
+
         _save_clip_subtitle_sidecar(
             direct_project,
-            clip_subtitles,
+            _render_clip_subtitles,
             subtitle_style,
-            clip_narrations,
-            clip_subtitle_effects,
-            clip_sfx,
-            clip_playback_speeds,
+            _render_clip_narrations,
+            _render_clip_subtitle_effects,
+            _render_clip_sfx,
+            _render_clip_playback_speeds,
         )
 
         # 후킹 배경 제품 이미지 저장
@@ -4892,6 +4960,70 @@ def show_one_click_pipeline():
                 flush=True,
             )
 
+        _render_clip_paths = list(direct_clip_paths or [])
+        if is_hasenmom_mode:
+            try:
+                # Sprint195-4: 빈 줄 기준 자막 분할. 영상 자체를 같은 비율로 잘라
+                # 전체 시각 길이는 유지하면서 각 분할 자막을 독립 scene으로 전달합니다.
+                _split_paths, _split_subs, _split_nars, _split_fx, _split_sfx, _split_speeds = [], [], [], [], [], []
+                for _idx, _src in enumerate(list(direct_clip_paths or [])):
+                    _subtitle_raw = str((clip_subtitles + [""])[_idx] or "").strip()
+                    _original_narration = str((clip_narrations + [""])[_idx] or "").strip()
+                    _blocks, _narration_parts = _sprint195_7_aligned_blocks(_subtitle_raw, _original_narration)
+                    _parts = _sprint195_4_split_video_equal(_src, len(_blocks), direct_folder, _idx + 1)
+                    for _part_i, (_part_path, _block) in enumerate(zip(_parts, _blocks)):
+                        _split_paths.append(_part_path)
+                        _split_subs.append(_block)
+                        # Sprint195-5: 원 나레이션 전체를 분할 scene 수에 맞춰 보존합니다.
+                        # 3줄 이상이어도 첫 조각에 몰아넣지 않아 TTS가 잘리거나 사라지지 않습니다.
+                        _split_nars.append(str((_narration_parts + [""])[_part_i] or "").strip())
+                        _split_fx.append(str((clip_subtitle_effects + ["기본"])[_idx] or "기본"))
+                        _split_sfx.append(str((clip_sfx + ["없음"])[_idx] or "없음") if _part_i == 0 else "없음")
+                        _split_speeds.append(2.0)
+                _render_clip_paths = _split_paths
+                _render_clip_subtitles = _split_subs
+                _render_clip_narrations = _split_nars
+                _render_clip_subtitle_effects = _split_fx
+                _render_clip_sfx = _split_sfx
+                _render_clip_playback_speeds = _split_speeds
+
+                _hm_intro_black = _sprint195_4_render_title_card(direct_folder / "hasenmom_black_00_intro.mp4", hasenmom_intro_subtitle, "intro", seconds=3.0)
+                _hm_outro_black = _sprint195_4_render_title_card(direct_folder / "hasenmom_black_99_outro.mp4", hasenmom_outro_subtitle, "outro", seconds=3.0)
+                _render_clip_paths = [_hm_intro_black] + _render_clip_paths + [_hm_outro_black]
+                # 카드 텍스트는 영상 자체에 이미 렌더했으므로 일반 본문 자막 렌더러에는 빈 문자열 전달.
+                _render_clip_subtitles = [""] + _render_clip_subtitles + [""]
+                _render_clip_narrations = [str(hasenmom_intro_narration or "").strip()] + _render_clip_narrations + [str(hasenmom_outro_narration or "").strip()]
+                _render_clip_subtitle_effects = ["기본"] + _render_clip_subtitle_effects + ["기본"]
+                _render_clip_sfx = ["없음"] + _render_clip_sfx + ["없음"]
+                _render_clip_playback_speeds = [1.0] + _render_clip_playback_speeds + [1.0]
+            except Exception as exc:
+                st.error(f"하센맘 자막 분할/타이틀 카드 생성 실패: {type(exc).__name__}: {exc}")
+                return
+            # Sprint195-4A: split/card scene count is finalized only here.
+            # Overwrite the earlier sidecar with the EXACT render arrays so WorkflowEngine
+            # does not reload stale unsplit metadata (which caused silent TTS/subtitle loss).
+            _save_clip_subtitle_sidecar(
+                direct_project,
+                _render_clip_subtitles,
+                subtitle_style,
+                _render_clip_narrations,
+                _render_clip_subtitle_effects,
+                _render_clip_sfx,
+                _render_clip_playback_speeds,
+            )
+            print("[Sprint195-4A Hasenmom Render Sidecar Realign] READY", {
+                "scene_count": len(_render_clip_paths),
+                "subtitle_count": len(_render_clip_subtitles),
+                "narration_count": len(_render_clip_narrations),
+                "speed_count": len(_render_clip_playback_speeds),
+            }, flush=True)
+            print("[Sprint195-4 Hasenmom Subtitle Split + Cards] READY", {
+                "source_clip_count": len(direct_clip_paths),
+                "render_scene_count": len(_render_clip_paths),
+                "subtitle_blocks": len(_render_clip_subtitles) - 2,
+                "order": [Path(x).name for x in _render_clip_paths],
+            }, flush=True)
+
         # 수동 오디오 저장
         direct_audio_folder = (
             Path("assets/manual_audio")
@@ -4930,6 +5062,11 @@ def show_one_click_pipeline():
             "clip_subtitle_effects": list(clip_subtitle_effects or []),
             "clip_sfx": list(clip_sfx or []),
             "clip_playback_speeds": list(clip_playback_speeds or []),
+            "hasenmom_intro_subtitle": str(hasenmom_intro_subtitle or "").strip(),
+            "hasenmom_intro_narration": str(hasenmom_intro_narration or "").strip(),
+            "hasenmom_outro_subtitle": str(hasenmom_outro_subtitle or "").strip(),
+            "hasenmom_outro_narration": str(hasenmom_outro_narration or "").strip(),
+            "hasenmom_black_bookends": bool(is_hasenmom_mode),
             "gemini_clip_paths": list(direct_clip_paths or []),
             "subtitle_style": dict(subtitle_style or {}),
             "cta_product_logo_text": str(cta_product_logo_text or "").strip(),
@@ -4977,7 +5114,7 @@ def show_one_click_pipeline():
                 "declared_review_count": int(declared_review_count or 0),
                 "rating": float(rating or 0.0),
                 "hook_product_image_path": direct_hook_product_image_path,
-                "clip_count": len(direct_clip_paths),
+                "clip_count": len(_render_clip_paths),
                 "force_run_id": direct_force_run_id,
             },
             flush=True,
@@ -4989,14 +5126,14 @@ def show_one_click_pipeline():
             try:
                 direct_result = run_project_pipeline(
                     project=direct_project,
-                    sample_count=len(direct_clip_paths),
+                    sample_count=len(_render_clip_paths),
                     review_text=hook_text.strip(),
                     locked_script=locked_script.strip(),
                     review_image_paths=[],
                     product_image_paths=[],
                     product_image_path="",
                     youtube_privacy_status=youtube_privacy_status,
-                    viral_video_sources=direct_clip_paths,
+                    viral_video_sources=_render_clip_paths,
                     input_product_name=product_name.strip(),
                     stop_after_image_generation=False,
                     gemini_video_mode=True,
@@ -5011,12 +5148,12 @@ def show_one_click_pipeline():
                     typecast_api_key=str(typecast_api_key or ""),
                     tts_volume_percent=int(tts_volume_percent or 100),
                     tts_speech_speed=float(_effective_tts_speech_speed_194_41),
-                    clip_subtitles=list(clip_subtitles or []),
-                    clip_subtitle_effects=list(clip_subtitle_effects or []),
-                    clip_sfx=list(clip_sfx or []),
-                    clip_playback_speeds=list(clip_playback_speeds or []),
-                    clip_narrations=list(clip_narrations or []),
-                    gemini_clip_count=len(direct_clip_paths),
+                    clip_subtitles=list(_render_clip_subtitles or []),
+                    clip_subtitle_effects=list(_render_clip_subtitle_effects or []),
+                    clip_sfx=list(_render_clip_sfx or []),
+                    clip_playback_speeds=list(_render_clip_playback_speeds or []),
+                    clip_narrations=list(_render_clip_narrations or []),
+                    gemini_clip_count=len(_render_clip_paths),
                     upload_enabled=False,
                     playback_speed=float(playback_speed),
                     channel_type=channel_type,
@@ -5036,7 +5173,16 @@ def show_one_click_pipeline():
                 )
                 return
 
-        direct_final_path = _resolve_final_video_path(direct_result)
+        # Sprint195-13: 하센맘 DIRECT CREATE 화면은 product-named 복사본보다
+        # 이번 실행에서 Workflow가 실제로 만든 native final MP4를 우선 표시합니다.
+        # 쇼핑/역사쿠키의 기존 최종 경로 선택 순서는 그대로 유지합니다.
+        direct_final_path = (
+            _resolve_hasenmom_native_final_video_path(direct_result)
+            if is_hasenmom_mode
+            else _resolve_final_video_path(direct_result)
+        )
+        if is_hasenmom_mode and not direct_final_path:
+            direct_final_path = _resolve_final_video_path(direct_result)
         if direct_final_path and Path(direct_final_path).is_file():
             st.success("🎬 영상 제작이 완료됐습니다. 업로드는 실행하지 않았습니다.")
             st.video(direct_final_path)
@@ -5058,236 +5204,80 @@ def show_one_click_pipeline():
 
     # 제작 버튼을 누르기 전에는 아래 테스트/예약 UI를 계속 보여주되,
     # 실제 제작 실행부까지 내려갈 수 있도록 세션에 클릭 상태를 저장합니다.
-    st.subheader("YouTube 비공개 업로드 테스트")
-    if is_history_mode:
-        st.info(
-            "역사쿠키는 Gemini 장면 테스트 대신 완성된 MP4를 직접 선택해 "
-            "현재 선택한 YouTube 채널로 비공개 업로드합니다."
-        )
-        history_youtube_test_video = st.file_uploader(
-            "역사쿠키 테스트용 완성 MP4",
-            type=["mp4"],
-            accept_multiple_files=False,
-            key="sprint194_77_2_history_youtube_test_video",
-        )
-        st.caption(
-            "업로드 시 위 제목·설명·해시태그가 그대로 YouTube에 적용됩니다."
-        )
-        if st.button(
-            "역사쿠키 완성 MP4 → YouTube 비공개 테스트 업로드",
-            width="stretch",
-            key="sprint194_77_2_history_youtube_test_upload",
-        ):
-            if history_youtube_test_video is None:
-                st.error("테스트할 완성 MP4를 선택해 주세요.")
-            else:
-                try:
-                    test_root = Path("assets/youtube_test_uploads")
-                    test_root.mkdir(parents=True, exist_ok=True)
-                    original_name = str(
-                        getattr(history_youtube_test_video, "name", "history_test.mp4")
-                        or "history_test.mp4"
+    st.subheader("YouTube 한 장면 업로드 테스트")
+    st.caption(
+        "업로드한 Gemini 영상 중 첫 번째 파일만 편집 없이 YouTube에 비공개로 올립니다. "
+        "전체 쇼츠 제작과 예약 큐는 실행하지 않습니다."
+    )
+    if st.button(
+        "첫 장면 YouTube 비공개 테스트 업로드",
+        use_container_width=True,
+        key="sprint183_single_scene_youtube_test",
+    ):
+        if not uploaded_gemini_clips:
+            st.error("Gemini 영상 파일을 한 개 이상 선택해 주세요.")
+        else:
+            first_clip = uploaded_gemini_clips[0]
+            test_root = Path("assets/youtube_test_uploads")
+            test_root.mkdir(parents=True, exist_ok=True)
+            original_name = str(getattr(first_clip, "name", "scene_01.mp4") or "scene_01.mp4")
+            suffix = Path(original_name).suffix.lower()
+            if suffix not in SUPPORTED_VIRAL_VIDEO_SUFFIXES:
+                suffix = ".mp4"
+            timestamp = datetime.now(ZoneInfo("Asia/Seoul")).strftime("%Y%m%d_%H%M%S")
+            test_path = test_root / f"single_scene_{timestamp}{suffix}"
+            try:
+                test_path.write_bytes(first_clip.getbuffer())
+                test_title = normalize_text(product_name, "쇼핑 쇼츠")
+                test_title = f"[업로드 테스트] {test_title}"[:100]
+                test_description = (
+                    "YouTube Shorts 자동업로드 연결 확인을 위한 비공개 테스트 영상입니다.\n"
+                    "첫 번째 Gemini 장면만 업로드했습니다.\n\n"
+                    "#쇼츠 #업로드테스트"
+                )
+                with st.spinner("첫 장면을 YouTube 비공개 영상으로 업로드 중입니다..."):
+                    test_result = YouTubeUploadExecutor().execute(
+                        video_path=str(test_path),
+                        title=test_title,
+                        description=test_description,
+                        privacy_status="private",
+                        payload={
+                            "youtube_privacy_status": "private",
+                            "tags": ["쇼츠", "업로드테스트"],
+                            "notify_subscribers": False,
+                            "made_for_kids": False,
+                        },
                     )
-                    test_path = test_root / (
-                        f"history_{safe_file_name(Path(original_name).stem)}_"
-                        f"{datetime.now(ZoneInfo('Asia/Seoul')).strftime('%Y%m%d_%H%M%S')}.mp4"
-                    )
-                    test_path.write_bytes(history_youtube_test_video.getbuffer())
+                st.session_state["sprint183_single_scene_upload_result"] = test_result
+                st.success("첫 장면 YouTube 비공개 업로드가 완료됐습니다.")
+                st.write("Video ID:", test_result.get("video_id", ""))
+                st.write("공개 상태:", test_result.get("privacy_status", "private"))
+                shorts_url = str(test_result.get("shorts_url") or test_result.get("watch_url") or "")
+                if shorts_url:
+                    st.link_button("YouTube에서 확인", shorts_url, use_container_width=True)
+                print(
+                    "[Sprint183-1 Single Scene Upload] SUCCESS",
+                    test_result.get("video_id", ""),
+                    test_result.get("privacy_status", ""),
+                    flush=True,
+                )
+            except Exception as exc:
+                Path("full_error.log").write_text(traceback.format_exc(), encoding="utf-8")
+                st.error(f"첫 장면 YouTube 업로드 실패: {type(exc).__name__}: {exc}")
+                print(
+                    "[Sprint183-1 Single Scene Upload] ERROR",
+                    type(exc).__name__,
+                    str(exc),
+                    flush=True,
+                )
 
-                    test_title = (
-                        str(history_youtube_title or "").strip()
-                        or str(product_name or "역사쿠키").strip()
-                    )[:100]
-                    _hashtags_194_77_4 = [
-                        token.lstrip("#")
-                        for token in re.split(
-                            r"[\s,]+",
-                            str(history_youtube_hashtags_text or ""),
-                        )
-                        if token.strip().lstrip("#")
-                    ]
-                    _hashtags_text_194_77_4 = " ".join(
-                        f"#{tag}" for tag in _hashtags_194_77_4
-                    )
-                    _description_base_194_77_4 = str(
-                        history_youtube_description or ""
-                    ).strip()
-                    test_description = "\n\n".join(
-                        value
-                        for value in (
-                            _description_base_194_77_4,
-                            _hashtags_text_194_77_4,
-                        )
-                        if value
-                    )
-                    test_payload = {
-                        "youtube_privacy_status": "private",
-                        "youtube_account": str(
-                            youtube_upload_account
-                            or _sprint194_77_default_youtube_account(production_mode)
-                        ).strip(),
-                        "channel": str(
-                            youtube_upload_account
-                            or _sprint194_77_default_youtube_account(production_mode)
-                        ).strip(),
-                        "tags": _hashtags_194_77_4,
-                        "notify_subscribers": False,
-                        "made_for_kids": False,
-                        "default_language": "en" if production_mode == "history_en" else "ko",
-                        "default_audio_language": "en" if production_mode == "history_en" else "ko",
-                    }
-                    if history_youtube_schedule_enabled:
-                        if history_youtube_schedule_date is None or history_youtube_schedule_time is None:
-                            raise RuntimeError("YouTube 예약 날짜와 시간을 선택해 주세요.")
-                        scheduled_kst = datetime.combine(
-                            history_youtube_schedule_date,
-                            history_youtube_schedule_time,
-                            tzinfo=ZoneInfo("Asia/Seoul"),
-                        )
-                        now_kst = datetime.now(ZoneInfo("Asia/Seoul"))
-                        if scheduled_kst <= now_kst:
-                            raise RuntimeError("YouTube 예약 시간은 현재보다 이후여야 합니다.")
-                        scheduled_utc = scheduled_kst.astimezone(ZoneInfo("UTC"))
-                        test_payload["youtube_publish_at"] = (
-                            scheduled_utc.isoformat(timespec="seconds").replace("+00:00", "Z")
-                        )
-                        test_payload["youtube_privacy_status"] = "private"
-                    print(
-                        "[Sprint194-77-2 History YouTube Direct Test] START",
-                        {
-                            "account": test_payload["youtube_account"],
-                            "video_path": str(test_path),
-                            "production_mode": production_mode,
-                        },
-                        flush=True,
-                    )
-                    with st.spinner(
-                        f"{test_payload['youtube_account']} 채널로 비공개 테스트 업로드 중입니다..."
-                    ):
-                        test_result = YouTubeUploadExecutor().execute(
-                            video_path=str(test_path),
-                            title=test_title,
-                            description=test_description,
-                            privacy_status="private",
-                            payload=test_payload,
-                        )
-                    st.session_state["sprint194_77_2_history_youtube_test_result"] = test_result
-                    st.success("역사쿠키 YouTube 비공개 테스트 업로드가 완료됐습니다.")
-                    st.write("채널:", test_payload["youtube_account"])
-                    st.write("Video ID:", test_result.get("video_id", ""))
-                    st.write("공개 상태:", test_result.get("privacy_status", "private"))
-                    if history_youtube_schedule_enabled:
-                        st.write(
-                            "예약 게시:",
-                            scheduled_kst.strftime("%Y-%m-%d %H:%M KST"),
-                        )
-                    shorts_url = str(
-                        test_result.get("shorts_url")
-                        or test_result.get("watch_url")
-                        or ""
-                    )
-                    if shorts_url:
-                        st.link_button(
-                            "YouTube에서 확인",
-                            shorts_url,
-                            use_container_width=True,
-                        )
-                    print(
-                        "[Sprint194-77-2 History YouTube Direct Test] SUCCESS",
-                        {
-                            "account": test_payload["youtube_account"],
-                            "video_id": test_result.get("video_id", ""),
-                            "privacy": test_result.get("privacy_status", ""),
-                        },
-                        flush=True,
-                    )
-                except Exception as exc:
-                    Path("full_error.log").write_text(
-                        traceback.format_exc(),
-                        encoding="utf-8",
-                    )
-                    st.error(
-                        "역사쿠키 YouTube 비공개 테스트 업로드 실패: "
-                        f"{type(exc).__name__}: {exc}"
-                    )
-                    print(
-                        "[Sprint194-77-2 History YouTube Direct Test] ERROR",
-                        type(exc).__name__,
-                        str(exc),
-                        flush=True,
-                    )
-    else:
+    previous_test_upload = st.session_state.get("sprint183_single_scene_upload_result", {})
+    if isinstance(previous_test_upload, dict) and previous_test_upload.get("video_id"):
         st.caption(
-            "쇼핑 쇼츠는 기존 첫 장면 Gemini MP4 비공개 테스트를 그대로 사용합니다."
+            "최근 테스트 업로드: "
+            f"{previous_test_upload.get('video_id')} / "
+            f"{previous_test_upload.get('privacy_status', 'private')}"
         )
-        if st.button(
-            "첫 장면 YouTube 비공개 테스트 업로드",
-            width="stretch",
-            key="sprint183_single_scene_upload",
-        ):
-            if not first_clip:
-                st.error("Gemini 영상 파일을 한 개 이상 선택해 주세요.")
-            else:
-                test_root = Path("assets/youtube_test_uploads")
-                test_root.mkdir(parents=True, exist_ok=True)
-                test_path = test_root / f"single_scene_{safe_file_name(product_name)}.mp4"
-                try:
-                    test_path.write_bytes(first_clip.getbuffer())
-                    test_title = normalize_text(product_name, "쇼핑 쇼츠")
-                    test_title = f"[업로드 테스트] {test_title}"[:100]
-                    test_description = (
-                        "YouTube Shorts 자동업로드 연결 확인을 위한 비공개 테스트 영상입니다.\n"
-                        "첫 번째 Gemini 장면만 업로드했습니다.\n\n"
-                        "#쇼츠 #업로드테스트"
-                    )
-                    with st.spinner("첫 장면을 YouTube 비공개 영상으로 업로드 중입니다..."):
-                        test_result = YouTubeUploadExecutor().execute(
-                            video_path=str(test_path),
-                            title=test_title,
-                            description=test_description,
-                            privacy_status="private",
-                            payload={
-                                "youtube_privacy_status": "private",
-                                "tags": ["쇼츠", "업로드테스트"],
-                                "notify_subscribers": False,
-                                "made_for_kids": False,
-                            },
-                        )
-                    st.session_state["sprint183_single_scene_upload_result"] = test_result
-                    st.success("첫 장면 YouTube 비공개 업로드가 완료됐습니다.")
-                    st.write("Video ID:", test_result.get("video_id", ""))
-                    st.write("공개 상태:", test_result.get("privacy_status", "private"))
-                    shorts_url = str(
-                        test_result.get("shorts_url")
-                        or test_result.get("watch_url")
-                        or ""
-                    )
-                    if shorts_url:
-                        st.link_button(
-                            "YouTube에서 확인",
-                            shorts_url,
-                            use_container_width=True,
-                        )
-                    print(
-                        "[Sprint183-1 Single Scene Upload] SUCCESS",
-                        test_result.get("video_id", ""),
-                        test_result.get("privacy_status", ""),
-                        flush=True,
-                    )
-                except Exception as exc:
-                    Path("full_error.log").write_text(
-                        traceback.format_exc(),
-                        encoding="utf-8",
-                    )
-                    st.error(
-                        f"첫 장면 YouTube 업로드 실패: {type(exc).__name__}: {exc}"
-                    )
-                    print(
-                        "[Sprint183-1 Single Scene Upload] ERROR",
-                        type(exc).__name__,
-                        str(exc),
-                        flush=True,
-                    )
 
     st.subheader("Meta Business Suite 릴스 예약 테스트")
     st.info(
@@ -6242,19 +6232,12 @@ def show_one_click_pipeline():
             st.markdown(f"**{platform_label}**")
 
         with row[1]:
-            if platform_key == "youtube":
-                platform_channel = str(
-                    youtube_upload_account
-                    or _sprint194_77_default_youtube_account(production_mode)
-                ).strip()
-                st.write(f"📺 {platform_channel}")
-            else:
-                platform_channel = st.selectbox(
-                    "채널명",
-                    options=list(PUBLISH_ACCOUNT_PROFILES.keys()),
-                    key=f"sprint193_3_{platform_key}_channel",
-                    label_visibility="collapsed",
-                )
+            platform_channel = st.selectbox(
+                "채널명",
+                options=list(PUBLISH_ACCOUNT_PROFILES.keys()),
+                key=f"sprint193_3_{platform_key}_channel",
+                label_visibility="collapsed",
+            )
 
         with row[2]:
             video_options = ["공통 영상"] + inline_video_candidates + ["PC 직접 선택"]
@@ -7126,21 +7109,6 @@ def show_one_click_pipeline():
                         platform_payload[f"{platform_key}_description"] = platform_description
 
                     platform_payload["platform"] = platform_key
-                    if platform_key == "youtube":
-                        platform_payload["youtube_account"] = str(
-                            platform_override.get("channel")
-                            or youtube_upload_account
-                            or _sprint194_77_default_youtube_account(production_mode)
-                        ).strip()
-                        print(
-                            "[Sprint194-77-1 YouTube Channel Route]",
-                            {
-                                "account": platform_payload["youtube_account"],
-                                "production_mode": production_mode,
-                                "video_path": selected_video_path,
-                            },
-                            flush=True,
-                        )
 
                     # Sprint192-31:
                     # 네이버 클립은 ReservationQueue에 넣지 않고 지금 바로
@@ -7344,7 +7312,7 @@ def show_one_click_pipeline():
 
     errors = []
     if not str(product_name or "").strip():
-        errors.append("역사 주제를 입력해 주세요." if is_history_mode else "상품명을 입력해 주세요.")
+        errors.append("역사 주제를 입력해 주세요." if is_history_mode else ("영상 제목을 입력해 주세요." if is_hasenmom_mode else "상품명을 입력해 주세요."))
     if not str(locked_script or "").strip():
         errors.append("확정 대본을 입력해 주세요.")
     if not editor_clip_sources:
@@ -7396,10 +7364,6 @@ def show_one_click_pipeline():
         "reservation_platforms": list(selected_platforms or []),
         "infock_url": str(infock_url or "").strip(),
         "platform_metadata": dict(platform_metadata or {}),
-        "youtube_account": str(
-            youtube_upload_account
-            or _sprint194_77_default_youtube_account(production_mode)
-        ).strip(),
     }
     try:
         project = create_project_from_payload(payload, [product_name.strip()])
@@ -7410,14 +7374,26 @@ def show_one_click_pipeline():
         st.error(f"프로젝트 생성 실패: {exc}")
         return
 
+    _main_render_clip_subtitles = list(clip_subtitles or [])
+    _main_render_clip_narrations = list(clip_narrations or [])
+    _main_render_clip_subtitle_effects = list(clip_subtitle_effects or [])
+    _main_render_clip_sfx = list(clip_sfx or [])
+    _main_render_clip_playback_speeds = list(clip_playback_speeds or [])
+    if is_hasenmom_mode:
+        _main_render_clip_subtitles = [str(hasenmom_intro_subtitle or "").strip()] + _main_render_clip_subtitles + [str(hasenmom_outro_subtitle or "").strip()]
+        _main_render_clip_narrations = [str(hasenmom_intro_narration or "").strip()] + _main_render_clip_narrations + [str(hasenmom_outro_narration or "").strip()]
+        _main_render_clip_subtitle_effects = ["기본"] + _main_render_clip_subtitle_effects + ["기본"]
+        _main_render_clip_sfx = ["없음"] + _main_render_clip_sfx + ["없음"]
+        _main_render_clip_playback_speeds = [0.0] + _main_render_clip_playback_speeds + [0.0]
+
     _save_clip_subtitle_sidecar(
         project,
-        clip_subtitles,
+        _main_render_clip_subtitles,
         subtitle_style,
-        clip_narrations,
-        clip_subtitle_effects,
-        clip_sfx,
-        clip_playback_speeds,
+        _main_render_clip_narrations,
+        _main_render_clip_subtitle_effects,
+        _main_render_clip_sfx,
+        _main_render_clip_playback_speeds,
     )
 
     hook_product_image_path = ""
@@ -7456,6 +7432,50 @@ def show_one_click_pipeline():
     else:
         clip_paths = [str(path) for path in loaded_gemini_clip_paths if Path(str(path)).is_file()]
 
+    _main_render_clip_paths = list(clip_paths or [])
+    if is_hasenmom_mode:
+        try:
+            # Sprint195-6: 일반 제작 경로도 '영상만 제작'과 완전히 같은 빈 줄 분할 배열을 사용합니다.
+            _split_paths, _split_subs, _split_nars, _split_fx, _split_sfx, _split_speeds = [], [], [], [], [], []
+            for _idx, _src in enumerate(list(clip_paths or [])):
+                _subtitle_raw = str((clip_subtitles + [""])[_idx] or "").strip()
+                _original_narration = str((clip_narrations + [""])[_idx] or "").strip()
+                _blocks, _narration_parts = _sprint195_7_aligned_blocks(_subtitle_raw, _original_narration)
+                _parts = _sprint195_4_split_video_equal(_src, len(_blocks), folder, _idx + 1)
+                for _part_i, (_part_path, _block) in enumerate(zip(_parts, _blocks)):
+                    _split_paths.append(_part_path)
+                    _split_subs.append(_block)
+                    _split_nars.append(str((_narration_parts + [""])[_part_i] or "").strip())
+                    _split_fx.append(str((clip_subtitle_effects + ["기본"])[_idx] or "기본"))
+                    _split_sfx.append(str((clip_sfx + ["없음"])[_idx] or "없음") if _part_i == 0 else "없음")
+                    _split_speeds.append(2.0)
+            _main_render_clip_paths = _split_paths
+            _main_render_clip_subtitles = _split_subs
+            _main_render_clip_narrations = _split_nars
+            _main_render_clip_subtitle_effects = _split_fx
+            _main_render_clip_sfx = _split_sfx
+            _main_render_clip_playback_speeds = _split_speeds
+
+            _hm_intro_black = _sprint195_4_render_title_card(folder / "hasenmom_black_00_intro.mp4", hasenmom_intro_subtitle, "intro", seconds=3.0)
+            _hm_outro_black = _sprint195_4_render_title_card(folder / "hasenmom_black_99_outro.mp4", hasenmom_outro_subtitle, "outro", seconds=3.0)
+            _main_render_clip_paths = [_hm_intro_black] + _main_render_clip_paths + [_hm_outro_black]
+            _main_render_clip_subtitles = [""] + _main_render_clip_subtitles + [""]
+            _main_render_clip_narrations = [str(hasenmom_intro_narration or "").strip()] + _main_render_clip_narrations + [str(hasenmom_outro_narration or "").strip()]
+            _main_render_clip_subtitle_effects = ["기본"] + _main_render_clip_subtitle_effects + ["기본"]
+            _main_render_clip_sfx = ["없음"] + _main_render_clip_sfx + ["없음"]
+            _main_render_clip_playback_speeds = [1.0] + _main_render_clip_playback_speeds + [1.0]
+            _save_clip_subtitle_sidecar(project, _main_render_clip_subtitles, subtitle_style, _main_render_clip_narrations, _main_render_clip_subtitle_effects, _main_render_clip_sfx, _main_render_clip_playback_speeds)
+        except Exception as exc:
+            st.error(f"하센맘 자막 분할/타이틀 카드 생성 실패: {type(exc).__name__}: {exc}")
+            return
+        print("[Sprint195-6 Hasenmom Main Render Realign] READY", {
+            "scene_count": len(_main_render_clip_paths),
+            "subtitle_count": len(_main_render_clip_subtitles),
+            "narration_count": len(_main_render_clip_narrations),
+            "highlight_marked": sum("[" in str(x) and "]" in str(x) for x in _main_render_clip_subtitles),
+            "order": [Path(x).name for x in _main_render_clip_paths],
+        }, flush=True)
+
     audio_folder = Path("assets/manual_audio") / f"project_{safe_project_id(project)}"
     audio_folder.mkdir(parents=True, exist_ok=True)
     voice_audio_path = ""
@@ -7492,28 +7512,13 @@ def show_one_click_pipeline():
                 minutes=int(platform_interval_minutes or 0) * naver_index
             )
 
-        _reservation_platform_metadata_194_77_1 = dict(platform_metadata or {})
-        if "youtube" in list(queue_platforms or []):
-            _youtube_meta_194_77_1 = dict(
-                _reservation_platform_metadata_194_77_1.get("youtube") or {}
-            )
-            _youtube_meta_194_77_1["channel"] = str(
-                youtube_upload_account
-                or _sprint194_77_default_youtube_account(production_mode)
-            ).strip()
-            _youtube_meta_194_77_1["youtube_account"] = str(
-                youtube_upload_account
-                or _sprint194_77_default_youtube_account(production_mode)
-            ).strip()
-            _reservation_platform_metadata_194_77_1["youtube"] = _youtube_meta_194_77_1
-
         reservation_payload = {
             "enabled": bool(queue_platforms),
             "platforms": queue_platforms,
             "scheduled_at_local": local_start.isoformat(),
             "interval_minutes": int(platform_interval_minutes or 0),
             "infock_url": str(infock_url or "").strip(),
-            "platform_metadata": _reservation_platform_metadata_194_77_1,
+            "platform_metadata": dict(platform_metadata or {}),
         }
 
     print(
@@ -7529,14 +7534,14 @@ def show_one_click_pipeline():
         try:
             result = run_project_pipeline(
                 project=project,
-                sample_count=len(clip_paths),
+                sample_count=len(_main_render_clip_paths),
                 review_text=hook_text.strip(),
                 locked_script=locked_script.strip(),
                 review_image_paths=[],
                 product_image_paths=[],
                 product_image_path="",
                 youtube_privacy_status=youtube_privacy_status,
-                viral_video_sources=clip_paths,
+                viral_video_sources=_main_render_clip_paths,
                 input_product_name=product_name.strip(),
                 stop_after_image_generation=False,
                 gemini_video_mode=True,
@@ -7549,12 +7554,12 @@ def show_one_click_pipeline():
                 typecast_api_key=str(typecast_api_key or ""),
                 tts_volume_percent=int(tts_volume_percent or 100),
                 tts_speech_speed=float(_effective_tts_speech_speed_194_41),
-                clip_subtitles=list(clip_subtitles or []),
-                clip_subtitle_effects=list(clip_subtitle_effects or []),
-                clip_sfx=list(clip_sfx or []),
-                clip_playback_speeds=list(clip_playback_speeds or []),
-                clip_narrations=list(clip_narrations or []),
-                gemini_clip_count=len(clip_paths),
+                clip_subtitles=list(_main_render_clip_subtitles or []),
+                clip_subtitle_effects=list(_main_render_clip_subtitle_effects or []),
+                clip_sfx=list(_main_render_clip_sfx or []),
+                clip_playback_speeds=list(_main_render_clip_playback_speeds or []),
+                clip_narrations=list(_main_render_clip_narrations or []),
+                gemini_clip_count=len(_main_render_clip_paths),
                 upload_enabled=bool(upload_enabled),
                 playback_speed=float(playback_speed),
                 channel_type=channel_type,
@@ -7570,7 +7575,7 @@ def show_one_click_pipeline():
 
     final_path = _resolve_final_video_path(result)
     if final_path and Path(final_path).is_file():
-        st.success("역사쿠키 쇼츠 제작이 완료됐습니다." if is_history_mode else "Gemini 쇼츠 자동 편집이 완료됐습니다.")
+        st.success("역사쿠키 쇼츠 제작이 완료됐습니다." if is_history_mode else ("하센맘 쇼츠 제작이 완료됐습니다." if is_hasenmom_mode else "Gemini 쇼츠 자동 편집이 완료됐습니다."))
         st.video(final_path)
         st.caption(f"최종 영상: {final_path}")
         st.caption(f"적용 속도: {float(playback_speed):.2f}배 / 음성 파일: {'적용' if voice_audio_path else '자동 모듈 탐색'} / 공개 설정: {youtube_privacy_status}")

@@ -16,11 +16,11 @@ except ImportError:
 from modules.audio.bgm_manager import BGMManager
 from modules.audio.sfx_manager import SFXManager
 
-print("######## VIDEO_PIPELINE SPRINT194-58 HISTORY REGRESSION RESTORE LOADED ########", flush=True)
+print("######## VIDEO_PIPELINE SPRINT195-9 HASENMOM TIMELINE LOCK LOADED ########", flush=True)
 
 
 class VideoPipeline:
-    PIPELINE_VERSION = "video-pipeline-194-58-history-regression-restore"
+    PIPELINE_VERSION = "video-pipeline-195-9-hasenmom-timeline-lock"
 
     def __init__(
         self,
@@ -148,7 +148,22 @@ class VideoPipeline:
             flush=True,
         )
 
-        clips = self._existing_files(clip_paths or content_pack.get("gemini_clip_paths") or [])
+        # Sprint195-8: 하센맘(standing)은 같은 원본 클립 경로를 여러 자막/TTS 슬롯에서
+        # 의도적으로 재사용할 수 있으므로 경로 중복 제거를 하면 안 됩니다.
+        # 쇼핑/역사쿠키는 기존 _existing_files() 중복 제거 동작을 그대로 유지합니다.
+        if channel_type == "standing":
+            clips = [
+                str(Path(str(value)).expanduser())
+                for value in list(clip_paths or content_pack.get("gemini_clip_paths") or [])
+                if Path(str(value)).expanduser().is_file()
+            ]
+            print(
+                "[Sprint195-8 Hasenmom Preserve Duplicate Clips] READY",
+                {"clip_count": len(clips)},
+                flush=True,
+            )
+        else:
+            clips = self._existing_files(clip_paths or content_pack.get("gemini_clip_paths") or [])
         merged = self.merged_dir / f"{project_id}_gemini_merged.mp4"
         final = self.merged_dir / f"{project_id}_final.mp4"
         result: Dict[str, Any] = {
@@ -245,17 +260,27 @@ class VideoPipeline:
             result["errors"].append("병합 영상 길이를 확인하지 못했습니다.")
             return result
 
-        # Sprint194-53: 역사쿠키는 쇼핑용 Trust 카드 없이 Scene 1부터 즉시 시작합니다.
-        if is_history_mode:
+        # Sprint195-9: 하센맘(standing)은 첫 검정 타이틀 카드 자체가 Scene 1입니다.
+        # 쇼핑용 Trust 카드를 앞에 추가하면 검정 공백이 생기고 전체 장면/TTS 오프셋이
+        # 뒤로 밀리므로 standing에서는 Trust 카드를 절대 추가하지 않습니다.
+        # 역사쿠키의 기존 Trust skip 동작도 그대로 보존합니다.
+        if is_history_mode or channel_type == "standing":
             content_pack["_effective_trust_duration"] = 0.0
+            skip_status = (
+                "hasenmom_trust_card_skipped"
+                if channel_type == "standing"
+                else "history_trust_card_skipped"
+            )
             result["steps"]["trust_card"] = {
                 "ok": True,
-                "status": "history_trust_card_skipped",
+                "status": skip_status,
                 "output_path": str(current),
                 "card_duration": 0.0,
             }
             print(
-                "[Sprint194-53 History Timeline] TRUST SKIPPED",
+                "[Sprint195-9 Hasenmom Timeline Lock] TRUST SKIPPED"
+                if channel_type == "standing"
+                else "[Sprint194-53 History Timeline] TRUST SKIPPED",
                 {"project_id": project_id, "clip_count": len(clips)},
                 flush=True,
             )

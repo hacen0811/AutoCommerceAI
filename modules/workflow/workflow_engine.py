@@ -134,7 +134,7 @@ class WorkflowEngine:
     → CapCutExport
     """
 
-    WORKFLOW_VERSION = "workflow-engine-194-76-history-final-common-contract"
+    WORKFLOW_VERSION = "workflow-engine-195-10-hasenmom-full-scene-contract"
     
 
     # Sprint153-2: 비용 없는 자막/음성/병합 재시험 모드입니다.
@@ -4654,11 +4654,36 @@ class WorkflowEngine:
             value for value in (trust_narration, hook, script) if value
         ]
         narration_text = "\n\n".join(narration_parts)
-        clip_count = max(1, min(8, int(gemini_clip_count or 4)))
         supplied = [
             str(Path(value)) for value in list(supplied_clip_paths or [])
             if str(value).strip() and Path(str(value)).is_file()
         ]
+        # Sprint195-10: 하센맘은 빈 줄 자막 분할 + INTRO/OUTRO 때문에
+        # 실제 렌더 scene 수가 8개를 넘을 수 있습니다. 기존 Gemini 8 scene cap을
+        # standing에 적용하면 뒤쪽 마지막 분할 scene/OUTRO 계약이 끊길 수 있으므로
+        # UI에서 확정한 supplied scene 배열 전체를 그대로 사용합니다.
+        if str(channel_type or "").strip().lower() == "standing":
+            clip_count = max(1, len(supplied), len(normalized_clip_narrations), len(list(clip_subtitles or [])))
+            print(
+                "[Sprint195-10 Hasenmom Full Scene Contract] READY",
+                {
+                    "gemini_clip_count": int(gemini_clip_count or 0),
+                    "supplied_clips": len(supplied),
+                    "subtitle_slots": len(list(clip_subtitles or [])),
+                    "narration_slots": len(normalized_clip_narrations),
+                    "effective_clip_count": clip_count,
+                    "tail_files": [Path(x).name for x in supplied[-3:]],
+                },
+                flush=True,
+            )
+            if supplied and len(supplied) != clip_count:
+                raise RuntimeError(
+                    "hasenmom_scene_contract_mismatch: "
+                    f"clips={len(supplied)} subtitles={len(list(clip_subtitles or []))} "
+                    f"narrations={len(normalized_clip_narrations)}"
+                )
+        else:
+            clip_count = max(1, min(8, int(gemini_clip_count or 4)))
         print("[Sprint174-1 ROUTE] GEMINI_VIDEO_ONLY", flush=True)
         print("[Sprint174-1 INPUT]", {"project_id": project_id, "product_name": product_name, "hook_chars": len(hook), "script_chars": len(script), "cta_chars": len(cta), "narration_chars": len(narration_text), "clip_count": clip_count, "supplied_clips": len(supplied)}, flush=True)
         if not script:
