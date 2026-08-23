@@ -61,6 +61,11 @@ from modules.publisher.tiktok_upload_executor import TikTokUploadExecutor
 from modules.publisher.threads_upload_executor import ThreadsUploadExecutor
 from modules.publisher.naver_clip_upload_executor import NaverClipUploadExecutor
 from modules.utils.product_output_naming import create_product_named_video_copy
+from modules.product.shopping_product_discovery import ShoppingProductDiscovery
+import importlib
+import modules.source.shopping_video_source_finder as _shopping_video_source_finder_module
+_shopping_video_source_finder_module = importlib.reload(_shopping_video_source_finder_module)
+ShoppingVideoSourceFinder = _shopping_video_source_finder_module.ShoppingVideoSourceFinder
 
 try:
     from modules.product.product_engine import ProductEngine
@@ -73,10 +78,35 @@ except Exception:
     SearchKeywordEngine = None
 
 
-UI_VERSION = "sprint195-13-hasenmom-native-final-select"
-print("######## ONE_CLICK_PIPELINE SPRINT195-7 HASENMOM BLOCK ALIGN FIX LOADED ########", flush=True)
+UI_VERSION = "sprint196-3cl-reference-title-product-query"
 RESULT_DIR = Path("exports/one_click_results")
 OPENAI_LOCALIZATION_KEY_PATH = Path("secrets/openai_localization_api_key.txt")
+
+
+def _sprint195_45_write_source_name_manifest(folder, uploaded_items, saved_paths):
+    """렌더 파일명(gemini_XX)은 유지하면서 자동 배치용 원본 업로드 이름만 sidecar에 저장합니다."""
+    try:
+        root = Path(str(folder))
+        root.mkdir(parents=True, exist_ok=True)
+        rows = []
+        for uploaded, saved in zip(list(uploaded_items or []), list(saved_paths or [])):
+            original_name = str(getattr(uploaded, "name", "") or "").strip()
+            saved_name = Path(str(saved or "")).name
+            if original_name and saved_name:
+                rows.append({"saved_name": saved_name, "original_name": original_name})
+        payload = {
+            "version": "shopping-source-name-manifest-195-45",
+            "items": rows,
+        }
+        target = root / "source_names_195_45.json"
+        target.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        print("[Sprint195-45 Shopping Source Name Manifest] SAVED", {
+            "path": str(target), "count": len(rows)
+        }, flush=True)
+        return str(target)
+    except Exception as exc:
+        print("[Sprint195-45 Shopping Source Name Manifest] ERROR", repr(exc), flush=True)
+        return ""
 
 
 def _sprint194_28_load_openai_localization_key():
@@ -833,24 +863,16 @@ def _sprint193_29_apply_preset_to_session(preset):
         "sprint193_1_tts_volume": int(preset.get("tts_volume_percent") or 100),
         "sprint193_1_tts_speed": float(preset.get("tts_speech_speed") or 1.0),
         "sprint193_1_bgm_volume": int(preset.get("bgm_volume_percent") or 10),
-        "sprint195_2_hasenmom_intro_subtitle": str(preset.get("hasenmom_intro_subtitle") or ""),
-        "sprint195_2_hasenmom_intro_narration": str(preset.get("hasenmom_intro_narration") or ""),
-        "sprint195_2_hasenmom_outro_subtitle": str(preset.get("hasenmom_outro_subtitle") or ""),
-        "sprint195_2_hasenmom_outro_narration": str(preset.get("hasenmom_outro_narration") or ""),
-        # Sprint195-1: preserve shopping/history/hasenmom as independent top-level modes.
-        # Old history_ko/history_en presets are still split into history + language.
+        # Sprint194-25: top-level mode widget is now only shopping/history.
+        # Preserve old history_ko/history_en presets by splitting mode and language state.
         "sprint194_25_content_mode": (
-            "history"
-            if str(preset.get("production_mode") or preset.get("channel_type") or "").startswith("history_")
-            else (
-                "hasenmom"
-                if str(preset.get("production_mode") or "").strip() == "hasenmom"
-                or str(preset.get("channel_type") or "").strip() == "standing"
-                else "shopping"
-            )
+            "history" if str(preset.get("production_mode") or preset.get("channel_type") or "").startswith("history_") else "shopping"
         ),
         "sprint194_25_history_language": (
             "en" if str(preset.get("production_mode") or preset.get("channel_type") or "") == "history_en" else "ko"
+        ),
+        "sprint195_43_shopping_video_source_mode": str(
+            preset.get("shopping_video_source_mode") or "혼합형"
         ),
     }
 
@@ -979,174 +1001,6 @@ def _sprint194_4_render_history_image_clip(image_path, output_path, seconds=5.0,
         raise RuntimeError("history_image_clip_failed: " + str((completed.stderr or completed.stdout or "")[-1200:]))
     return str(output)
 
-
-def _sprint195_2_render_black_bookend(output_path, seconds=3.0, fps=30):
-    """하센맘 첫/마지막 검정 장면용 9:16 무음 MP4를 생성합니다."""
-    output = Path(str(output_path))
-    output.parent.mkdir(parents=True, exist_ok=True)
-    duration = max(1.0, float(seconds or 3.0))
-    command = [
-        "ffmpeg", "-y",
-        "-f", "lavfi",
-        "-i", f"color=c=black:s=1080x1920:r={int(fps or 30)}:d={duration:.3f}",
-        "-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
-        "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(output),
-    ]
-    completed = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
-    ok = completed.returncode == 0 and output.is_file() and output.stat().st_size > 1024
-    print("[Sprint195-2 Hasenmom Black Bookend]", {"ok": ok, "path": str(output), "seconds": duration}, flush=True)
-    if not ok:
-        raise RuntimeError("hasenmom_black_bookend_failed: " + str((completed.stderr or completed.stdout or "")[-1200:]))
-    return str(output)
-
-
-
-def _sprint195_4_subtitle_blocks(text):
-    """하센맘: 빈 줄 1개(\n\n)를 같은 영상 안의 다음 자막으로 해석합니다."""
-    raw = str(text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
-    if not raw:
-        return [""]
-    blocks = [part.strip() for part in re.split(r"\n\s*\n+", raw) if part.strip()]
-    return blocks or [raw]
-
-
-def _sprint195_4_probe_duration(path):
-    command = ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", str(path)]
-    completed = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
-    try:
-        return max(0.0, float((completed.stdout or "0").strip()))
-    except Exception:
-        return 0.0
-
-
-def _sprint195_4_split_video_equal(source_path, block_count, output_dir, source_index):
-    """한 Gemini 영상을 자막 블록 수만큼 시간 균등 분할합니다. 합계 영상 길이는 변하지 않습니다."""
-    source = Path(str(source_path))
-    count = max(1, int(block_count or 1))
-    if count <= 1:
-        return [str(source)]
-    duration = _sprint195_4_probe_duration(source)
-    if duration <= 0.2:
-        return [str(source)] * count
-    each = duration / count
-    results = []
-    for part in range(count):
-        start = each * part
-        seg_duration = each if part < count - 1 else max(0.05, duration - start)
-        target = Path(output_dir) / f"hasenmom_scene_{int(source_index):02d}_part_{part+1:02d}.mp4"
-        command = [
-            "ffmpeg", "-y", "-ss", f"{start:.6f}", "-i", str(source), "-t", f"{seg_duration:.6f}",
-            "-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p",
-            "-movflags", "+faststart", str(target),
-        ]
-        completed = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
-        if completed.returncode != 0 or not target.is_file() or target.stat().st_size <= 1024:
-            raise RuntimeError("hasenmom_subtitle_split_video_failed: " + str((completed.stderr or completed.stdout or "")[-1200:]))
-        results.append(str(target))
-    return results
-
-
-def _sprint195_4_card_lines(text, expected_parts):
-    lines = [x.strip() for x in str(text or "").replace("\r", "").split("\n") if x.strip()]
-    if expected_parts == 3:
-        return (lines + ["", "", ""])[:3]
-    return (lines + ["", ""])[:2]
-
-
-def _sprint195_5_split_narration(text, part_count):
-    """하센맘 TTS 분할: 자막과 동일하게 빈 줄을 최우선 경계로 사용해 마지막 블록까지 1:1 보존합니다."""
-    raw = str(text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
-    count = max(1, int(part_count or 1))
-    if not raw:
-        return [""] * count
-    if count == 1:
-        return [raw]
-
-    # Sprint195-6: 사용자가 자막/나레이션에 넣은 빈 줄은 같은 장면 분할 의도입니다.
-    # 블록 수가 맞으면 절대로 줄 단위로 재분배하지 않습니다. 마지막 블록 유실 방지.
-    blank_blocks = [x.strip() for x in re.split(r"\n\s*\n+", raw) if x.strip()]
-    if len(blank_blocks) == count:
-        return blank_blocks
-
-    units = [x.strip() for x in re.split(r"\n+|(?<=[.!?。！？])\s+", raw) if x.strip()]
-    units = units or [raw]
-    groups = [[] for _ in range(count)]
-    for i, unit in enumerate(units):
-        slot = min(count - 1, int(i * count / max(1, len(units))))
-        groups[slot].append(unit)
-    result = [" ".join(g).strip() for g in groups]
-    # 어떤 경우에도 마지막 원문 조각이 사라지지 않았는지 추적 가능하게 남깁니다.
-    print("[Sprint195-6 Hasenmom Narration Split]", {"parts": count, "blocks": len(blank_blocks), "nonempty": sum(bool(x) for x in result), "last": result[-1][:80] if result else ""}, flush=True)
-    return result
-
-
-def _sprint195_7_aligned_blocks(subtitle_text, narration_text):
-    """하센맘: 자막/나레이션 중 더 많이 분할된 쪽을 기준으로 두 배열을 1:1 정렬합니다."""
-    subtitle_raw = str(subtitle_text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
-    narration_raw = str(narration_text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
-    subtitle_blocks = [x.strip() for x in re.split(r"\n\s*\n+", subtitle_raw) if x.strip()] if subtitle_raw else []
-    narration_blocks = [x.strip() for x in re.split(r"\n\s*\n+", narration_raw) if x.strip()] if narration_raw else []
-    count = max(1, len(subtitle_blocks), len(narration_blocks))
-    if len(subtitle_blocks) == count:
-        aligned_subtitles = subtitle_blocks
-    else:
-        aligned_subtitles = _sprint195_5_split_narration(subtitle_raw, count)
-    aligned_narrations = _sprint195_5_split_narration(narration_raw, count)
-    print("[Sprint195-7 Hasenmom Block Align] READY", {
-        "parts": count,
-        "subtitle_blank_blocks": len(subtitle_blocks),
-        "narration_blank_blocks": len(narration_blocks),
-        "subtitle_nonempty": sum(bool(x) for x in aligned_subtitles),
-        "narration_nonempty": sum(bool(x) for x in aligned_narrations),
-        "last_subtitle": aligned_subtitles[-1][:80] if aligned_subtitles else "",
-        "last_narration": aligned_narrations[-1][:80] if aligned_narrations else "",
-    }, flush=True)
-    return aligned_subtitles, aligned_narrations
-
-
-def _sprint195_4_render_title_card(output_path, text, card_type="intro", seconds=3.0, fps=30):
-    """하센맘 검정 카드: 넓은 간격 + 크기 차등 + 한 줄씩 순차 페이드인."""
-    from PIL import Image, ImageDraw, ImageFont
-    output = Path(str(output_path))
-    output.parent.mkdir(parents=True, exist_ok=True)
-    font_candidates = [Path("C:/Windows/Fonts/malgunbd.ttf"), Path("C:/Windows/Fonts/malgun.ttf"), Path("C:/Windows/Fonts/NotoSansKR-Bold.ttf")]
-    font_path = next((x for x in font_candidates if x.is_file()), None)
-    if font_path is None:
-        raise RuntimeError("hasenmom_title_card_font_not_found")
-    if card_type == "intro":
-        specs = list(zip(_sprint195_4_card_lines(text, 3), [620, 845, 1080], [78, 52, 40], [0.20, 0.85, 1.50]))
-    else:
-        specs = list(zip(_sprint195_4_card_lines(text, 2), [690, 1010], [78, 44], [0.25, 1.15]))
-    layer_paths = []
-    for idx, (txt, y, size, start) in enumerate(specs, start=1):
-        layer = output.with_name(output.stem + f"_line{idx}.png")
-        image = Image.new("RGBA", (1080, 1920), (0, 0, 0, 0))
-        draw = ImageDraw.Draw(image)
-        if txt:
-            font = ImageFont.truetype(str(font_path), size=size)
-            box = draw.textbbox((0, 0), txt, font=font)
-            x = (1080 - (box[2] - box[0])) / 2
-            draw.text((x, y), txt, font=font, fill=(255, 255, 255, 255))
-        image.save(layer)
-        layer_paths.append((layer, start))
-    duration = max(1.0, float(seconds or 3.0))
-    command = ["ffmpeg", "-y", "-f", "lavfi", "-i", f"color=c=black:s=1080x1920:r={int(fps or 30)}:d={duration:.3f}"]
-    for layer, _ in layer_paths:
-        command += ["-loop", "1", "-i", str(layer)]
-    filters = []
-    previous = "[0:v]"
-    for i, (_, start) in enumerate(layer_paths, start=1):
-        filters.append(f"[{i}:v]format=rgba,fade=t=in:st={start:.3f}:d=0.45:alpha=1[line{i}]")
-        out = f"[v{i}]"
-        filters.append(f"{previous}[line{i}]overlay=0:0:shortest=1{out}")
-        previous = out
-    command += ["-filter_complex", ";".join(filters), "-map", previous, "-t", f"{duration:.3f}", "-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(output)]
-    completed = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
-    ok = completed.returncode == 0 and output.is_file() and output.stat().st_size > 1024
-    print("[Sprint195-5 Hasenmom Card Fade]", {"ok": ok, "type": card_type, "lines": len(specs)}, flush=True)
-    if not ok:
-        raise RuntimeError("hasenmom_title_card_failed: " + str((completed.stderr or completed.stdout or "")[-1200:]))
-    return str(output)
 
 def _sprint194_5_scene_sort_key(item):
     name = str(getattr(item, "name", item) or "")
@@ -1835,6 +1689,7 @@ def run_project_pipeline(
     playback_speed=1.5,
     channel_type="shopping",
     reservation_payload=None,
+    shopping_video_source_mode="",
     force_run_id="",
 ):
     """Sprint193-27: 동일 입력도 영상만 제작 버튼을 누를 때마다 새로 실행합니다."""
@@ -1930,6 +1785,7 @@ def run_project_pipeline(
             playback_speed=playback_speed,
             channel_type=channel_type,
             reservation_payload=reservation_payload,
+            shopping_video_source_mode=shopping_video_source_mode,
         )
     finally:
         with _PIPELINE_RUN_GUARD:
@@ -1979,6 +1835,7 @@ def _run_project_pipeline_impl(
     playback_speed=1.5,
     channel_type="shopping",
     reservation_payload=None,
+    shopping_video_source_mode="",
 ):
     print(
         "[Sprint172-1] run_project_pipeline entered",
@@ -1992,6 +1849,16 @@ def _run_project_pipeline_impl(
     if product_image_path and product_image_path not in product_image_paths:
         product_image_paths.insert(0, product_image_path)
     product_image_path = product_image_paths[0] if product_image_paths else ""
+    _shopping_source_mode_195_44 = str(shopping_video_source_mode or "").strip()
+    if _shopping_source_mode_195_44 not in {"혼합형", "외부소스형", "기존 AI형"}:
+        _shopping_source_mode_195_44 = "혼합형"
+    if str(channel_type or "").strip().lower() in {"history", "history_ko", "history_en"}:
+        _shopping_source_mode_195_44 = ""
+    print("[Sprint195-44 Shopping Source Contract]", {
+        "mode": _shopping_source_mode_195_44 or "not-shopping",
+        "shopping_only": True,
+        "renderer_unchanged": True,
+    }, flush=True)
     # Sprint194-12: 쇼핑 모드는 기존 최대 10개 소스 제한을 유지하지만,
     # 역사쿠키는 장면 이미지/MP4가 최대 25장까지 필요하므로 10개로 자르지 않습니다.
     _raw_viral_video_sources_194_12 = [
@@ -1999,31 +1866,21 @@ def _run_project_pipeline_impl(
         for item in list(viral_video_sources or [])
         if str(item).strip()
     ]
-    _channel_type_195_11 = str(channel_type or "").strip().lower()
-    _history_mode_194_12_ui = _channel_type_195_11 in {
+    _history_mode_194_12_ui = str(channel_type or "").strip().lower() in {
         "history", "history_ko", "history_en"
     }
-    _hasenmom_mode_195_11 = _channel_type_195_11 == "standing"
-    if _hasenmom_mode_195_11:
-        # Sprint195-11: 하센맘은 자막 분할 + INTRO/OUTRO 때문에 원본 업로드 수보다
-        # 실제 렌더 슬롯 수가 늘어납니다. 쇼핑용 10개 제한을 적용하면 뒤 슬롯이 잘립니다.
-        viral_video_sources = list(_raw_viral_video_sources_194_12)
-        _source_cap_195_11 = "unlimited"
-    elif _history_mode_194_12_ui:
-        viral_video_sources = _raw_viral_video_sources_194_12[:25]
-        _source_cap_195_11 = 25
-    else:
-        viral_video_sources = _raw_viral_video_sources_194_12[:10]
-        _source_cap_195_11 = 10
+    viral_video_sources = (
+        _raw_viral_video_sources_194_12[:25]
+        if _history_mode_194_12_ui
+        else _raw_viral_video_sources_194_12[:10]
+    )
     print(
-        "[Sprint195-11 Hasenmom Source Cap] READY",
+        "[Sprint194-12 History Scene Pass Through]",
         {
-            "channel_type": _channel_type_195_11,
             "history_mode": _history_mode_194_12_ui,
-            "hasenmom_mode": _hasenmom_mode_195_11,
             "input_count": len(_raw_viral_video_sources_194_12),
             "passed_count": len(viral_video_sources),
-            "cap": _source_cap_195_11,
+            "cap": 25 if _history_mode_194_12_ui else 10,
         },
         flush=True,
     )
@@ -2118,6 +1975,7 @@ def _run_project_pipeline_impl(
         playback_speed=playback_speed,
         channel_type=channel_type,
         reservation_payload=reservation_payload,
+        shopping_video_source_mode=_shopping_source_mode_195_44,
     )
 
     try:
@@ -2527,37 +2385,6 @@ def render_project_pipeline(
             "원클릭 결과가 아직 없습니다. "
             "먼저 원클릭 실행을 완료해 주세요."
         )
-
-
-def _resolve_hasenmom_native_final_video_path(result):
-    """Sprint195-13: 하센맘은 방금 렌더된 Workflow native final을 최우선으로 사용합니다."""
-    outputs = result.get("outputs", {}) if isinstance(result, dict) else {}
-    final_video = outputs.get("final_video")
-    candidates = []
-    if isinstance(final_video, dict):
-        candidates.extend([
-            final_video.get("output_path"),
-            final_video.get("video_path"),
-            final_video.get("path"),
-        ])
-    else:
-        candidates.append(final_video)
-    candidates.extend([
-        outputs.get("final_video_path"),
-        outputs.get("produced_final_path"),
-    ])
-    for raw_path in candidates:
-        path_text = str(raw_path or "").strip()
-        if not path_text:
-            continue
-        path = Path(path_text)
-        if path.is_file() and path.suffix.lower() == ".mp4":
-            print("[Sprint195-13 Hasenmom Native Final Select] READY", {
-                "selected": str(path),
-                "product_named_ignored": str(outputs.get("product_named_final_video_path") or ""),
-            }, flush=True)
-            return str(path)
-    return ""
 
 
 def _resolve_final_video_path(result):
@@ -3533,7 +3360,7 @@ def show_one_click_pipeline():
         if isinstance(_restore_intent_194_45, dict):
             _intent_content_194_45 = str(_restore_intent_194_45.get("content_mode") or "").strip()
             _intent_lang_194_45 = str(_restore_intent_194_45.get("history_language") or "").strip()
-            if _intent_content_194_45 in {"shopping", "history", "hasenmom"}:
+            if _intent_content_194_45 in {"shopping", "history"}:
                 st.session_state["sprint194_25_content_mode"] = _intent_content_194_45
             if _intent_lang_194_45 in {"ko", "en"}:
                 st.session_state["sprint194_25_history_language"] = _intent_lang_194_45
@@ -3566,8 +3393,1325 @@ def show_one_click_pipeline():
         }, flush=True)
 
     st.title("⚡ 쇼츠 원클릭")
-    st.caption("쇼핑 쇼츠·하센맘은 Gemini 영상을, 역사 쇼츠는 장면 이미지를 사용해 TTS·자막·BGM·효과음을 적용합니다.")
+    st.caption("쇼핑 쇼츠는 Gemini 영상을, 역사 쇼츠는 장면 이미지를 사용해 TTS·자막·BGM·효과음을 적용합니다.")
     st.caption(f"UI 버전: {UI_VERSION}")
+    st.caption(
+        f"TikTok 수집기 런타임 버전: {getattr(ShoppingVideoSourceFinder, 'VERSION', 'unknown')}"
+    )
+
+    if st.session_state.get("sprint194_25_content_mode", "shopping") == "shopping":
+        with st.expander("🔎 팔리는 제품 자동 발굴 · Sprint196-1", expanded=False):
+            st.caption("국내 NAVER 쇼핑인사이트의 실제 쇼핑 클릭 추이를 비교해 수요가 높고 최근 상승하는 쇼츠형 상품 후보를 찾습니다. TikTok·샤오홍슈는 다음 단계에서 영상 소스 탐색용으로 연결합니다.")
+            _limit196 = st.selectbox("추천 상품 수", [5,10,15,20], index=1, key="sprint196_1_discovery_limit")
+
+            # Sprint196-3H: NAVER 검색 결과는 메모리 캐시가 아니라 JSON 파일로 영구 저장/복원합니다.
+            _discovery_store_196_3h = Path("exports") / "shopping_discovery" / "latest_products.json"
+            if (
+                not st.session_state.get("sprint196_1_discovery_result")
+                and _discovery_store_196_3h.is_file()
+            ):
+                try:
+                    _saved_r196_3h = __import__("json").loads(
+                        _discovery_store_196_3h.read_text(encoding="utf-8")
+                    )
+                    if isinstance(_saved_r196_3h, dict) and list(_saved_r196_3h.get("items") or []):
+                        st.session_state["sprint196_1_discovery_result"] = _saved_r196_3h
+                        print("[Sprint196-3H Product Discovery Restore] READY", {
+                            "path": str(_discovery_store_196_3h),
+                            "count": len(list(_saved_r196_3h.get("items") or [])),
+                        }, flush=True)
+                except Exception as _restore_exc196_3h:
+                    print("[Sprint196-3H Product Discovery Restore] ERROR", repr(_restore_exc196_3h), flush=True)
+
+            _existing_r196_3h = st.session_state.get("sprint196_1_discovery_result") or {}
+            _has_saved_products_196_3h = bool(list(_existing_r196_3h.get("items") or []))
+            _search_label_196_3h = "상품 새로 검색" if _has_saved_products_196_3h else "팔리는 제품 자동 검색"
+
+            if _has_saved_products_196_3h:
+                st.info("이전에 저장한 상품 검색 결과를 불러왔습니다. 새 검색이 필요할 때만 아래 버튼을 누르세요.")
+
+            if st.button(_search_label_196_3h, type="primary", use_container_width=True, key="sprint196_1_discover_products"):
+                with st.spinner("팔리는 제품 후보와 대표 상품사진을 찾고 있습니다..."):
+                    _r196 = ShoppingProductDiscovery.discover(limit=int(_limit196))
+                    if list(_r196.get("items") or []):
+                        _r196 = ShoppingVideoSourceFinder.enrich_product_images_from_naver_shopping(_r196)
+                st.session_state["sprint196_1_discovery_result"] = _r196
+                if list(_r196.get("items") or []):
+                    try:
+                        _discovery_store_196_3h.parent.mkdir(parents=True, exist_ok=True)
+                        _discovery_store_196_3h.write_text(
+                            __import__("json").dumps(
+                                _r196,
+                                ensure_ascii=False,
+                                indent=2,
+                                default=str,
+                            ),
+                            encoding="utf-8",
+                        )
+                        print("[Sprint196-3H Product Discovery Save] READY", {
+                            "path": str(_discovery_store_196_3h),
+                            "count": len(list(_r196.get("items") or [])),
+                        }, flush=True)
+                    except Exception as _save_exc196_3h:
+                        print("[Sprint196-3H Product Discovery Save] ERROR", repr(_save_exc196_3h), flush=True)
+                print("[Sprint196-2 Naver Shopping Insight Discovery] READY", {"ok":bool(_r196.get("ok")), "count":len(list(_r196.get("items") or [])), "naver":bool(_r196.get("naver_datalab_enabled"))}, flush=True)
+            _r196 = st.session_state.get("sprint196_1_discovery_result") or {}
+            _items196 = list(_r196.get("items") or [])
+
+            _missing_images_196_3ah = [
+                x for x in _items196
+                if not str(
+                    x.get("image_url")
+                    or x.get("thumbnail")
+                    or x.get("product_image")
+                    or ""
+                ).startswith("http")
+            ]
+            if _items196 and _missing_images_196_3ah:
+                if st.button(
+                    "NAVER 쇼핑에서 후보 제품사진 가져오기",
+                    use_container_width=True,
+                    key="sprint196_3al_fetch_naver_shopping_images",
+                ):
+                    with st.spinner(
+                        "NAVER 쇼핑 검색 결과에서 후보별 실제 상품카드 사진을 가져오고 있습니다..."
+                    ):
+                        _r196 = ShoppingVideoSourceFinder.enrich_product_images_from_naver_shopping(
+                            _r196
+                        )
+                    st.session_state["sprint196_1_discovery_result"] = _r196
+                    _items196 = list(_r196.get("items") or [])
+                    try:
+                        _discovery_store_196_3h.parent.mkdir(parents=True, exist_ok=True)
+                        _discovery_store_196_3h.write_text(
+                            __import__("json").dumps(
+                                _r196,
+                                ensure_ascii=False,
+                                indent=2,
+                                default=str,
+                            ),
+                            encoding="utf-8",
+                        )
+                    except Exception:
+                        pass
+                    print("[Sprint196-3AL Product Images] READY", {
+                        "count": len([
+                            x for x in _items196
+                            if str(x.get("image_url") or "").startswith("http")
+                        ]),
+                        "total": len(_items196),
+                    }, flush=True)
+                    st.rerun()
+
+            if _items196:
+                st.success(str(_r196.get("summary") or "상품 후보를 찾았습니다."))
+
+                st.caption("NAVER는 팔릴 제품/검색어 확인용입니다. 대표이미지는 참고용이며 TikTok 검색에는 사용하지 않습니다.")
+                _image_cols_196_3ah = st.columns(min(5, max(1, len(_items196))))
+                for _idx_img196_3ah, _item_img196_3ah in enumerate(_items196):
+                    with _image_cols_196_3ah[_idx_img196_3ah % len(_image_cols_196_3ah)]:
+                        _img_url196_3ah = str(
+                            _item_img196_3ah.get("image_url")
+                            or _item_img196_3ah.get("thumbnail")
+                            or _item_img196_3ah.get("product_image")
+                            or ""
+                        )
+                        if _img_url196_3ah.startswith("http"):
+                            try:
+                                st.image(_img_url196_3ah, width=150)
+                            except Exception:
+                                st.caption("이미지 표시 실패")
+                        else:
+                            st.caption("대표사진 없음")
+                        st.caption(
+                            f"{_idx_img196_3ah + 1}. "
+                            f"{str(_item_img196_3ah.get('product') or '')}"
+                        )
+
+                st.dataframe([{"순위":i,"상품":x.get("product"),"분류":x.get("group"),"종합점수":x.get("discovery_score"),"국내수요":x.get("domestic_demand_score"),"최근 클릭지수":x.get("recent_click_ratio"),"증감률(%)":x.get("growth_percent"),"쇼츠적합":x.get("shorts_visual_score"),"대표사진":("있음" if str(x.get("image_url") or "").startswith("http") else "없음")} for i,x in enumerate(_items196,1)], use_container_width=True, hide_index=True)
+                _product_names196_3h = [str(x.get("product") or "") for x in _items196]
+                _selection_store196_3h = Path("exports") / "shopping_discovery" / "selected_product.txt"
+                if "sprint196_1_selected_product" not in st.session_state and _selection_store196_3h.is_file():
+                    try:
+                        _saved_sel196_3h = _selection_store196_3h.read_text(encoding="utf-8").strip()
+                        if _saved_sel196_3h in _product_names196_3h:
+                            st.session_state["sprint196_1_selected_product"] = _saved_sel196_3h
+                    except Exception:
+                        pass
+                _sel196 = st.selectbox("영상 소스를 찾을 상품", _product_names196_3h, key="sprint196_1_selected_product")
+                st.session_state["sprint196_1_selected_product_name"] = _sel196
+
+                _selected_item196_3ah = next(
+                    (
+                        x for x in _items196
+                        if str(x.get("product") or "") == str(_sel196)
+                    ),
+                    {},
+                )
+                _selected_image196_3ah = str(
+                    _selected_item196_3ah.get("image_url")
+                    or _selected_item196_3ah.get("thumbnail")
+                    or _selected_item196_3ah.get("product_image")
+                    or ""
+                )
+                st.session_state["sprint196_3ah_selected_product_image_url"] = _selected_image196_3ah
+                if _selected_image196_3ah.startswith("http"):
+                    _sel_img_col196_3ah, _sel_txt_col196_3ah = st.columns([1, 4])
+                    with _sel_img_col196_3ah:
+                        try:
+                            st.image(_selected_image196_3ah, width=140)
+                        except Exception:
+                            pass
+                    with _sel_txt_col196_3ah:
+                        st.info(
+                            "이 사진을 기준 이미지로 저장했습니다. "
+                            "다음 단계에서 TikTok 영상 프레임과 비교해 동일상품 여부를 판별합니다."
+                        )
+
+                    try:
+                        _reference_store196_3ah = (
+                            Path("exports")
+                            / "shopping_discovery"
+                            / "selected_product_reference.json"
+                        )
+                        _reference_store196_3ah.parent.mkdir(parents=True, exist_ok=True)
+                        _reference_store196_3ah.write_text(
+                            __import__("json").dumps(
+                                {
+                                    "product": _sel196,
+                                    "image_url": _selected_image196_3ah,
+                                    "image_source": _selected_item196_3ah.get("image_source"),
+                                },
+                                ensure_ascii=False,
+                                indent=2,
+                            ),
+                            encoding="utf-8",
+                        )
+                    except Exception:
+                        pass
+
+                try:
+                    _selection_store196_3h.parent.mkdir(parents=True, exist_ok=True)
+                    _selection_store196_3h.write_text(str(_sel196), encoding="utf-8")
+                except Exception:
+                    pass
+                st.caption(
+                    "NAVER에서는 제품만 선택하고, TikTok은 해외 검색용 영문 + 중국어 키워드로 검색합니다. "
+                    "대표이미지와 로그인된 내 TikTok 계정은 사용하지 않습니다. 전용 해외 검색 프로필에서 영문 + 중국어 키워드로 검색합니다."
+                )
+
+                if st.button(
+                    "TikTok 로그인/세션 열기",
+                    use_container_width=True,
+                    key="sprint196_3ab_open_source_login",
+                ):
+                    _login_196_3ab = ShoppingVideoSourceFinder.open_tiktok_xhs_login_browser(
+                        product_name=_sel196,
+                    )
+                    st.session_state["sprint196_3ab_login_result"] = _login_196_3ab
+                    if _login_196_3ab.get("ok"):
+                        st.info(
+                            "TikTok이 열렸습니다. 로그인 상태를 확인한 뒤 창을 닫지 말고 아래 수집 버튼을 누르세요."
+                        )
+                    else:
+                        st.error(str(_login_196_3ab.get("error") or _login_196_3ab.get("message") or "로그인 브라우저 열기 실패"))
+
+                # Sprint196-3BC: TikTok 후보/선택 결과를 디스크에 저장해
+                # 앱 재실행 후에도 다시 검색하지 않고 이어서 사용합니다.
+                _tiktok_saved_dir_3bc = Path("exports") / "shopping_discovery"
+                _tiktok_saved_dir_3bc.mkdir(parents=True, exist_ok=True)
+                _tiktok_search_store_3bc = _tiktok_saved_dir_3bc / "latest_tiktok_search_result.json"
+                _tiktok_pool_store_3bc = _tiktok_saved_dir_3bc / "selected_tiktok_source_pool.json"
+
+                if (
+                    not st.session_state.get("sprint196_3_video_source_result")
+                    and _tiktok_search_store_3bc.is_file()
+                ):
+                    try:
+                        _saved_search_3bc = __import__("json").loads(
+                            _tiktok_search_store_3bc.read_text(encoding="utf-8")
+                        )
+                        if isinstance(_saved_search_3bc, dict) and list(_saved_search_3bc.get("items") or []):
+                            st.session_state["sprint196_3_video_source_result"] = _saved_search_3bc
+                            st.session_state["sprint196_3bc_restored_search"] = True
+                    except Exception:
+                        pass
+
+                if st.session_state.get("sprint196_3bc_restored_search"):
+                    _restored_result_3bc = st.session_state.get("sprint196_3_video_source_result") or {}
+                    st.info(
+                        f"저장된 TikTok 후보 {len(list(_restored_result_3bc.get('items') or []))}개를 불러왔습니다. "
+                        "다시 검색하지 않고 바로 확인·선택·자동편집 준비를 진행할 수 있습니다."
+                    )
+
+                if _tiktok_search_store_3bc.is_file():
+                    if st.button(
+                        "저장된 TikTok 후보 다시 불러오기",
+                        use_container_width=True,
+                        key="sprint196_3bc_reload_saved_candidates",
+                    ):
+                        try:
+                            _saved_search_reload_3bc = __import__("json").loads(
+                                _tiktok_search_store_3bc.read_text(encoding="utf-8")
+                            )
+                            st.session_state["sprint196_3_video_source_result"] = _saved_search_reload_3bc
+                            st.session_state["sprint196_3bc_restored_search"] = True
+                            st.rerun()
+                        except Exception as _reload_exc_3bc:
+                            st.error(f"저장 후보 불러오기 실패: {_reload_exc_3bc}")
+
+                try:
+                    _runtime_queries_3bu = ShoppingVideoSourceFinder._tiktok_query_variants_3bn(_sel196)
+                except Exception:
+                    _runtime_queries_3bu = []
+                if _runtime_queries_3bu:
+                    st.caption(
+                        "🌎 실제 해외 검색어: " + " / ".join(str(x) for x in _runtime_queries_3bu)
+                    )
+
+                st.markdown("#### 🖼️ 동일제품 기준 이미지")
+                st.caption(
+                    "쿠팡 상품 상세에서 제품이 크게 보이는 대표 이미지를 1장 캡처해 넣어주세요. "
+                    "이 이미지는 2차 검색 후 동일제품 판정의 제품 외형 기준으로 사용합니다."
+                )
+                _product_ref_upload_3cd = st.file_uploader(
+                    "쿠팡 제품 기준 이미지 1장",
+                    type=["png", "jpg", "jpeg", "webp"],
+                    accept_multiple_files=False,
+                    key="sprint196_3cd_product_reference_image",
+                )
+                _product_ref_path_3cd = Path(
+                    st.session_state.get("sprint196_3cd_product_reference_path") or ""
+                )
+                if _product_ref_upload_3cd is not None:
+                    try:
+                        _ref_dir_3cd = Path("exports") / "shopping_discovery" / "product_reference_3cd"
+                        _ref_dir_3cd.mkdir(parents=True, exist_ok=True)
+                        _suffix_3cd = Path(
+                            getattr(_product_ref_upload_3cd, "name", "") or ""
+                        ).suffix.lower()
+                        if _suffix_3cd not in {".png", ".jpg", ".jpeg", ".webp"}:
+                            _suffix_3cd = ".jpg"
+                        _product_ref_path_3cd = _ref_dir_3cd / f"latest_product_reference{_suffix_3cd}"
+                        _product_ref_path_3cd.write_bytes(_product_ref_upload_3cd.getbuffer())
+                        st.session_state["sprint196_3cd_product_reference_path"] = str(
+                            _product_ref_path_3cd
+                        )
+                    except Exception as _ref_save_exc_3cd:
+                        st.warning(f"기준 이미지 저장 실패: {_ref_save_exc_3cd}")
+                if _product_ref_path_3cd.is_file():
+                    st.image(str(_product_ref_path_3cd), width=220)
+                    st.success("쿠팡 제품 기준 이미지가 준비됐습니다.")
+
+                if st.button(
+                    "① TikTok에서 제품 영상 찾기",
+                    use_container_width=True,
+                    key="sprint196_3_find_video_sources",
+                ):
+                    with st.spinner(f"{_sel196} 제품의 1차 기준 영상 후보를 최대 15개 찾고 있습니다..."):
+                        _video_sources_196_3 = ShoppingVideoSourceFinder.collect_direct(
+                            product_name=_sel196,
+                            per_platform=15,
+                        )
+                    st.session_state["sprint196_3_video_source_result"] = _video_sources_196_3
+                    try:
+                        _tiktok_search_store_3bc.write_text(
+                            __import__("json").dumps(
+                                _video_sources_196_3,
+                                ensure_ascii=False,
+                                indent=2,
+                                default=str,
+                            ),
+                            encoding="utf-8",
+                        )
+                    except Exception as _save_exc_3bc:
+                        print("[Sprint196-3BC Search Save] WARN", type(_save_exc_3bc).__name__, str(_save_exc_3bc), flush=True)
+                    st.session_state["sprint196_3bc_restored_search"] = False
+
+                st.markdown("#### ✍️ TikTok 수동 검색")
+                st.caption(
+                    "NAVER 후보와 관계없이 직접 검색어를 입력해 TikTok 영상 최대 40개를 찾을 수 있습니다. "
+                    "예: 변기솔, 욕실청소솔, 전동청소브러시"
+                )
+                _manual_keyword_3az = st.text_input(
+                    "TikTok 수동 검색어",
+                    value=st.session_state.get("sprint196_3az_manual_keyword", ""),
+                    placeholder="예: 변기솔",
+                    key="sprint196_3az_manual_keyword_input",
+                )
+                st.session_state["sprint196_3az_manual_keyword"] = str(_manual_keyword_3az or "").strip()
+
+                if st.button(
+                    "입력한 검색어로 TikTok 영상 40개 찾기",
+                    use_container_width=True,
+                    key="sprint196_3az_manual_tiktok_search",
+                    disabled=not bool(str(_manual_keyword_3az or "").strip()),
+                ):
+                    _manual_keyword_clean_3az = str(_manual_keyword_3az or "").strip()
+                    with st.spinner(
+                        f"{_manual_keyword_clean_3az} 검색어로 TikTok 영상 최대 40개를 찾고 있습니다..."
+                    ):
+                        _video_sources_196_3 = ShoppingVideoSourceFinder.collect_direct(
+                            product_name=_manual_keyword_clean_3az,
+                            per_platform=40,
+                        )
+                    _video_sources_196_3 = dict(_video_sources_196_3 or {})
+                    _video_sources_196_3["manual_keyword"] = _manual_keyword_clean_3az
+                    _video_sources_196_3["search_origin"] = "manual_keyword"
+                    st.session_state["sprint196_3_video_source_result"] = _video_sources_196_3
+                    st.session_state["sprint196_3az_active_search_keyword"] = _manual_keyword_clean_3az
+                    try:
+                        _tiktok_search_store_3bc.write_text(
+                            __import__("json").dumps(
+                                _video_sources_196_3,
+                                ensure_ascii=False,
+                                indent=2,
+                                default=str,
+                            ),
+                            encoding="utf-8",
+                        )
+                    except Exception as _save_exc_3bc:
+                        print("[Sprint196-3BC Manual Search Save] WARN", type(_save_exc_3bc).__name__, str(_save_exc_3bc), flush=True)
+                    st.session_state["sprint196_3bc_restored_search"] = False
+                    print("[Sprint196-3AZ Manual TikTok Search] READY", {
+                        "keyword": _manual_keyword_clean_3az,
+                        "count": len(list(_video_sources_196_3.get("items") or [])),
+                        "ok": bool(_video_sources_196_3.get("ok")),
+                    }, flush=True)
+
+                    print("[Sprint196-3 Shopping Video Source Finder] READY", {
+                        "product": _sel196,
+                        "ok": bool(_video_sources_196_3.get("ok")),
+                        "counts": dict(_video_sources_196_3.get("counts") or {}),
+                    }, flush=True)
+
+                _video_sources_196_3 = st.session_state.get("sprint196_3_video_source_result") or {}
+
+                # Sprint196-3BY: 1차 제품 발견 -> 기준 영상 1개 -> 2차 동일제품 검색
+                _items_for_reference_3by = list(
+                    _video_sources_196_3.get("items") or []
+                )
+                if _items_for_reference_3by:
+                    _stage_3by = str(
+                        _video_sources_196_3.get("search_stage")
+                        or "product_discovery_1st"
+                    )
+                    st.caption(
+                        "검색 단계: "
+                        + (
+                            "② 같은 제품 영상 검색 결과"
+                            if _stage_3by == "same_product_2nd"
+                            else "① 제품 발견 검색 결과"
+                        )
+                    )
+
+                    if _stage_3by != "same_product_2nd":
+                        st.markdown("#### 🎯 1차 후보 영상 확인 → 기준 제품 1개 선택")
+                        st.caption(
+                            "각 후보의 `열기`로 실제 TikTok 영상을 확인한 뒤, "
+                            "아래 선택창에서 기준 제품 영상 1개를 지정하세요."
+                        )
+
+                        _ref_labels_3by = []
+                        _ref_map_3by = {}
+
+                        # Sprint196-3CC:
+                        # st.dataframe / st.radio의 큰 동적 DOM을 사용하지 않습니다.
+                        # 고정된 Streamlit columns + link_button + selectbox만 사용해
+                        # 검색 단계 전환 시 React removeChild 충돌 가능성을 줄입니다.
+                        _header_3cc = st.columns([0.6, 1.0, 1.5, 4.8, 0.9])
+                        for _c3cc, _txt3cc in zip(
+                            _header_3cc,
+                            ["순위", "조회수", "계정", "제목", "열기"],
+                        ):
+                            with _c3cc:
+                                st.markdown(f"**{_txt3cc}**")
+
+                        for _idx3by, _it3by in enumerate(_items_for_reference_3by, 1):
+                            _vid3by = str(_it3by.get("video_id") or "")
+                            _creator3by = str(_it3by.get("creator") or "")
+                            _title3by = re.sub(
+                                r"\s+",
+                                " ",
+                                str(_it3by.get("title") or ""),
+                            ).strip()
+                            _url3by = str(_it3by.get("url") or "")
+                            _views3by = int(
+                                _it3by.get("view_count")
+                                or _it3by.get("views")
+                                or _it3by.get("play_count")
+                                or 0
+                            )
+
+                            _label3by = (
+                                f"{_idx3by}. @{_creator3by or '-'} · "
+                                f"{_title3by[:70] or _vid3by}"
+                            )
+                            _ref_labels_3by.append(_label3by)
+                            _ref_map_3by[_label3by] = _it3by
+
+                            _cols_3cc = st.columns([0.6, 1.0, 1.5, 4.8, 0.9])
+                            with _cols_3cc[0]:
+                                st.write(_idx3by)
+                            with _cols_3cc[1]:
+                                st.write(f"{_views3by:,}" if _views3by else "-")
+                            with _cols_3cc[2]:
+                                st.write(f"@{_creator3by}" if _creator3by else "-")
+                            with _cols_3cc[3]:
+                                st.write(_title3by[:120])
+                            with _cols_3cc[4]:
+                                if _url3by:
+                                    st.link_button(
+                                        "열기",
+                                        _url3by,
+                                        use_container_width=True,
+                                    )
+
+                        _selected_ref_label_3by = st.selectbox(
+                            "기준 제품 영상 1개 선택",
+                            _ref_labels_3by,
+                            key="sprint196_3cc_reference_video",
+                        )
+
+                        if st.button(
+                            "② 선택한 제품으로 같은 제품 영상 다시 찾기",
+                            use_container_width=True,
+                            key="sprint196_3cc_same_product_search",
+                        ):
+                            _reference_item_3by = dict(
+                                _ref_map_3by.get(_selected_ref_label_3by) or {}
+                            )
+                            with st.spinner(
+                                "선택한 제품으로 2차 TikTok 검색 후 실제 프레임을 비교하고 있습니다..."
+                            ):
+                                _same_product_result_3by = (
+                                    ShoppingVideoSourceFinder.collect_direct(
+                                        product_name=_sel196,
+                                        per_platform=40,
+                                        reference_item=_reference_item_3by,
+                                    )
+                                )
+
+                                # Sprint196-3CE:
+                                # 2차 검색은 '새로운 같은 제품 영상'을 확보하는 단계입니다.
+                                # 1차 검색에서 이미 본 모든 video_id는 2차 후보에서 제거합니다.
+                                _first_stage_ids_3ce = {
+                                    str(_x3ce.get("video_id") or "").strip()
+                                    for _x3ce in list(_items_for_reference_3by or [])
+                                    if str(_x3ce.get("video_id") or "").strip()
+                                }
+
+                                _second_raw_items_3ce = list(
+                                    _same_product_result_3by.get("items") or []
+                                )
+                                _second_new_items_3ce = [
+                                    dict(_x3ce)
+                                    for _x3ce in _second_raw_items_3ce
+                                    if str(_x3ce.get("video_id") or "").strip()
+                                    not in _first_stage_ids_3ce
+                                ]
+                                _removed_first_stage_3ce = (
+                                    len(_second_raw_items_3ce)
+                                    - len(_second_new_items_3ce)
+                                )
+
+                                _same_product_result_3by = dict(
+                                    _same_product_result_3by or {}
+                                )
+                                _same_product_result_3by["items"] = (
+                                    _second_new_items_3ce
+                                )
+                                _same_product_result_3by[
+                                    "second_stage_raw_count"
+                                ] = len(_second_raw_items_3ce)
+                                _same_product_result_3by[
+                                    "first_stage_duplicate_removed"
+                                ] = _removed_first_stage_3ce
+                                _same_product_result_3by[
+                                    "first_stage_video_ids"
+                                ] = sorted(_first_stage_ids_3ce)
+
+                                # Sprint196-3CJ diagnostics only:
+                                # 콘솔 로그가 파일에 남지 않는 환경에서도 화면에서 직접 확인할 수 있게
+                                # 1차/2차 ID와 2차 검색 자체의 DOM 진단값을 결과 payload에 저장합니다.
+                                _same_product_result_3by[
+                                    "second_stage_diagnostics_3cj"
+                                ] = {
+                                    "first_stage_count": len(_first_stage_ids_3ce),
+                                    "first_stage_ids": sorted(_first_stage_ids_3ce),
+                                    "second_raw_count": len(_second_raw_items_3ce),
+                                    "second_raw_ids": [
+                                        str((x or {}).get("video_id") or "")
+                                        for x in _second_raw_items_3ce
+                                    ],
+                                    "duplicate_removed_count": _removed_first_stage_3ce,
+                                    "second_new_count": len(_second_new_items_3ce),
+                                    "second_new_ids": [
+                                        str((x or {}).get("video_id") or "")
+                                        for x in _second_new_items_3ce
+                                    ],
+                                    "second_search_stage": str(
+                                        _same_product_result_3by.get("search_stage") or ""
+                                    ),
+                                    "second_query_variants": list(
+                                        _same_product_result_3by.get("query_variants") or []
+                                    ),
+                                    "second_current_url": str(
+                                        _same_product_result_3by.get("current_url") or ""
+                                    ),
+                                    "second_dom_diagnostics": dict(
+                                        _same_product_result_3by.get("dom_diagnostics_3ci")
+                                        or {}
+                                    ),
+                                    "second_found_ids_before_filter": list(
+                                        _same_product_result_3by.get(
+                                            "found_video_ids_before_filter_3ci"
+                                        ) or []
+                                    ),
+                                    "second_verified_ids_after_filter": list(
+                                        _same_product_result_3by.get(
+                                            "verified_video_ids_after_filter_3ci"
+                                        ) or []
+                                    ),
+                                }
+
+                                _same_product_result_3by["counts"] = {
+                                    "tiktok": len(_second_new_items_3ce),
+                                    "xiaohongshu": 0,
+                                }
+
+                                print("[Sprint196-3CE Second Stage Dedup]", {
+                                    "first_stage_ids": len(_first_stage_ids_3ce),
+                                    "second_raw": len(_second_raw_items_3ce),
+                                    "removed": _removed_first_stage_3ce,
+                                    "second_new": len(_second_new_items_3ce),
+                                }, flush=True)
+                                print("[Sprint196-3CI 1ST VS 2ND IDS]", {
+                                    "first_stage_ids": sorted(_first_stage_ids_3ce),
+                                    "second_raw_ids": [
+                                        str((x or {}).get("video_id") or "")
+                                        for x in _second_raw_items_3ce
+                                    ],
+                                    "second_new_ids": [
+                                        str((x or {}).get("video_id") or "")
+                                        for x in _second_new_items_3ce
+                                    ],
+                                }, flush=True)
+
+                                if _same_product_result_3by.get("ok"):
+                                    _visual_same_3cb = (
+                                        ShoppingVideoSourceFinder
+                                        .filter_same_product_candidates_by_reference_video_3cb(
+                                            _reference_item_3by,
+                                            list(_same_product_result_3by.get("items") or []),
+                                            max_candidates=40,
+                                            product_reference_image_path=str(
+                                                st.session_state.get(
+                                                    "sprint196_3cd_product_reference_path"
+                                                ) or ""
+                                            ),
+                                        )
+                                    )
+                                    if _visual_same_3cb.get("ok"):
+                                        _same_product_result_3by = dict(
+                                            _same_product_result_3by
+                                        )
+                                        _same_product_result_3by["same_product_visual_filter"] = (
+                                            _visual_same_3cb
+                                        )
+                                        _same_product_result_3by["items"] = list(
+                                            _visual_same_3cb.get("kept_items") or []
+                                        )
+                                        _same_product_result_3by["counts"] = {
+                                            "tiktok": len(
+                                                list(
+                                                    _visual_same_3cb.get("kept_items")
+                                                    or []
+                                                )
+                                            ),
+                                            "xiaohongshu": 0,
+                                        }
+                                        _same_product_result_3by["summary"] = str(
+                                            _visual_same_3cb.get("summary") or ""
+                                        )
+
+                            st.session_state["sprint196_3_video_source_result"] = (
+                                _same_product_result_3by
+                            )
+                            st.session_state["sprint196_3by_reference_item"] = (
+                                _reference_item_3by
+                            )
+                            st.session_state["sprint196_3ay_selected_video_ids"] = []
+                            try:
+                                _tiktok_search_store_3bc.write_text(
+                                    __import__("json").dumps(
+                                        _same_product_result_3by,
+                                        ensure_ascii=False,
+                                        indent=2,
+                                        default=str,
+                                    ),
+                                    encoding="utf-8",
+                                )
+                            except Exception:
+                                pass
+
+                            # 3CC: 즉시 대규모 UI 교체를 강제하지 않습니다.
+                            # 다음 자연스러운 Streamlit rerun에서 2차 결과 화면을 렌더링합니다.
+                            st.success(
+                                str(
+                                    _same_product_result_3by.get("summary")
+                                    or "2차 검색 및 동일제품 판정을 완료했습니다."
+                                )
+                            )
+                            st.session_state["sprint196_3cc_stage_ready"] = True
+                    else:
+                        _ref_vid_3by = str(
+                            _video_sources_196_3.get("reference_video_id") or ""
+                        )
+                        st.success(
+                            "② 같은 제품 2차 검색 결과입니다."
+                            + (f" · 기준 영상ID: {_ref_vid_3by}" if _ref_vid_3by else "")
+                        )
+
+                _second_diag_3cj = dict(
+                    _video_sources_196_3.get("second_stage_diagnostics_3cj") or {}
+                )
+                if _second_diag_3cj:
+                    with st.expander(
+                        "🔎 2차 검색 진단 · 3CJ",
+                        expanded=True,
+                    ):
+                        st.json(_second_diag_3cj)
+
+                _removed_first_stage_3ce = int(
+                    _video_sources_196_3.get("first_stage_duplicate_removed")
+                    or 0
+                )
+                _second_raw_3ce = int(
+                    _video_sources_196_3.get("second_stage_raw_count")
+                    or 0
+                )
+                if _second_raw_3ce:
+                    st.caption(
+                        f"♻️ 2차 검색 중 1차에서 이미 본 영상 "
+                        f"{_removed_first_stage_3ce}개 제외 "
+                        f"({_second_raw_3ce}개 → "
+                        f"{max(0, _second_raw_3ce - _removed_first_stage_3ce)}개)"
+                    )
+
+                _same_visual_state_3cb = dict(
+                    _video_sources_196_3.get("same_product_visual_filter") or {}
+                )
+                if _same_visual_state_3cb:
+                    _input_3cb = int(
+                        _same_visual_state_3cb.get("input_count") or 0
+                    )
+                    _kept_3cb = int(
+                        _same_visual_state_3cb.get("kept_count") or 0
+                    )
+                    st.info(
+                        f"🎯 2차 동일제품 시각 판정: {_input_3cb}개 → {_kept_3cb}개"
+                    )
+
+                _dom_diag_3ci = dict(
+                    _video_sources_196_3.get("dom_diagnostics_3ci") or {}
+                )
+                _found_ids_3ci = list(
+                    _video_sources_196_3.get("found_video_ids_before_filter_3ci")
+                    or []
+                )
+                _verified_ids_3ci = list(
+                    _video_sources_196_3.get("verified_video_ids_after_filter_3ci")
+                    or []
+                )
+                if _dom_diag_3ci:
+                    with st.expander(
+                        "🔎 TikTok 수집 진단 · 3CI",
+                        expanded=True,
+                    ):
+                        st.json({
+                            "현재 URL": _dom_diag_3ci.get("url"),
+                            "DOM 전체 video 링크 수": _dom_diag_3ci.get(
+                                "all_video_anchor_count"
+                            ),
+                            "DOM 고유 video_id 수": _dom_diag_3ci.get(
+                                "unique_video_id_count"
+                            ),
+                            "DOM 화면표시 고유 video_id 수": _dom_diag_3ci.get(
+                                "visible_unique_video_id_count"
+                            ),
+                            "검색 카드 셀렉터 수": _dom_diag_3ci.get(
+                                "selector_counts"
+                            ),
+                            "DOM 고유 video_id": _dom_diag_3ci.get(
+                                "unique_video_ids"
+                            ),
+                            "수집 found 전 필터 ID": _found_ids_3ci,
+                            "최종 검증 후 ID": _verified_ids_3ci,
+                        })
+
+                _strict_sources_3bx = dict(
+                    _video_sources_196_3.get("strict_source_counts") or {}
+                )
+                if _strict_sources_3bx:
+                    st.caption(
+                        "검색 카드 소스: "
+                        + " · ".join(
+                            f"{k} {v}개" for k, v in _strict_sources_3bx.items()
+                        )
+                    )
+
+                _filter_diag_3bt = dict(
+                    _video_sources_196_3.get("candidate_filter_diagnostics") or {}
+                )
+                if _filter_diag_3bt:
+                    st.caption(
+                        "후보 검증: "
+                        f"입력 {_filter_diag_3bt.get('input_found', 0)}개 → "
+                        f"ID누락 {_filter_diag_3bt.get('missing_video_id', 0)}개 제외 → "
+                        f"중복 {_filter_diag_3bt.get('duplicate_video_id', 0)}개 제외 → "
+                        f"최종 {_filter_diag_3bt.get('accepted', 0)}개"
+                    )
+
+                _english_keyword_3br = str(
+                    _video_sources_196_3.get("english_search_keyword") or ""
+                ).strip()
+                if _english_keyword_3br:
+                    st.caption("🌎 해외 TikTok 검색: 영문 + 중국어 키워드 사용")
+
+                _same_added_3bp = int(
+                    _video_sources_196_3.get("same_product_added") or 0
+                )
+                _ko_excluded_3bp = int(
+                    _video_sources_196_3.get("korean_excluded") or 0
+                )
+                if _video_sources_196_3:
+                    st.caption(
+                        f"동일제품 확장검색 추가 {_same_added_3bp}개 · "
+                        "검색 제목으로는 한국 영상 여부를 판단하지 않습니다."
+                    )
+
+                _indexed_added_3bo = int(
+                    _video_sources_196_3.get("indexed_fill_added") or 0
+                )
+                if _video_sources_196_3 and _indexed_added_3bo:
+                    st.info(
+                        f"TikTok 웹 검색 후보에 검색엔진 인덱스 후보 {_indexed_added_3bo}개를 추가해 "
+                        "40개 후보 풀을 확장했습니다."
+                    )
+
+                _scroll_diag_3bm = list(
+                    _video_sources_196_3.get("scroll_diagnostics") or []
+                )
+                if _scroll_diag_3bm:
+                    with st.expander("TikTok 40개 수집 진단", expanded=True):
+                        st.caption(
+                            "각 스크롤 회차에서 TikTok 검색 카드가 실제로 몇 개 보였고, "
+                            "고유 영상이 몇 개까지 누적됐는지 표시합니다."
+                        )
+                        st.dataframe(
+                            [
+                                {
+                                    "회차": row.get("round"),
+                                    "현재카드수": row.get("cards_now"),
+                                    "누적고유영상": row.get("unique_total"),
+                                    "목표": row.get("target"),
+                                    "검색어": row.get("query", ""),
+                                    "정체회차": row.get("stagnant_rounds_before"),
+                                }
+                                for row in _scroll_diag_3bm
+                            ],
+                            use_container_width=True,
+                            hide_index=True,
+                        )
+                        st.info(
+                            f"최종 누적: {int(_video_sources_196_3.get('scroll_final_unique') or 0)}개 / "
+                            f"목표 {int(_video_sources_196_3.get('scroll_target') or 0)}개"
+                        )
+
+                if False and _video_sources_196_3 and list(_video_sources_196_3.get("items") or []):
+                    if st.button(
+                        "대표이미지 ↔ TikTok 영상 프레임 비교",
+                        use_container_width=True,
+                        key="sprint196_3am_visual_match",
+                    ):
+                        with st.spinner(
+                            "NAVER 대표이미지와 TikTok 후보 영상의 실제 프레임을 비교하고 있습니다..."
+                        ):
+                            _visual_items196_3am = (
+                                ShoppingVideoSourceFinder.compare_tiktok_candidates_with_reference(
+                                    product_name=_sel196,
+                                    items=list(_video_sources_196_3.get("items") or []),
+                                    max_candidates=10,
+                                    frames_per_video=4,
+                                )
+                            )
+                        _video_sources_196_3 = dict(_video_sources_196_3)
+                        _video_sources_196_3["items"] = _visual_items196_3am
+                        _video_sources_196_3["visual_match_applied"] = True
+                        st.session_state["sprint196_3_video_source_result"] = _video_sources_196_3
+                        st.success(
+                            "상품 영역 중심 비교를 완료했습니다. "
+                            "흰 배경을 제거한 NAVER 상품영역과 TikTok 프레임의 여러 crop 중 "
+                            "가장 유사한 영역을 기준으로 순위를 다시 계산했습니다."
+                        )
+
+                _statuses_force_196_3i = dict(_video_sources_196_3.get("statuses") or {})
+                if _statuses_force_196_3i:
+                    with st.expander("플랫폼 수집 상태 · 3I 진단", expanded=True):
+                        st.json({
+                            "TikTok": _statuses_force_196_3i.get("tiktok"),
+                            "샤오홍슈": _statuses_force_196_3i.get("xiaohongshu"),
+                            "오류": list(_video_sources_196_3.get("errors") or []),
+                        })
+                if (
+                    _video_sources_196_3
+                    and (
+                        str(_video_sources_196_3.get("product") or "") == str(_sel196)
+                        or str(_video_sources_196_3.get("search_origin") or "") == "manual_keyword"
+                    )
+                ):
+                    _source_items_196_3 = list(_video_sources_196_3.get("items") or [])
+                    if _source_items_196_3:
+                        st.success(str(_video_sources_196_3.get("summary") or "영상 후보를 찾았습니다."))
+                        st.caption("3AX: 개인 TikTok 계정/피드를 사용하지 않고, 공개 검색 결과 카드의 고유 /video/ URL만 후보로 사용합니다. 서버 오류 페이지에서는 후보를 0개로 처리합니다.")
+
+                        # Sprint196-3AS: dataframe 링크 동작에 의존하지 않는 확실한 영상 열기 UI.
+                        _saved_ids_3ay = st.session_state.get(
+                            "sprint196_3ay_selected_video_ids"
+                        )
+                        if not isinstance(_saved_ids_3ay, list):
+                            _saved_ids_3ay = []
+
+                        # 앱 재실행 시 이전 확정 소스 풀의 체크 상태도 복원.
+                        if not _saved_ids_3ay and _tiktok_pool_store_3bc.is_file():
+                            try:
+                                _saved_pool_for_ids_3bc = __import__("json").loads(
+                                    _tiktok_pool_store_3bc.read_text(encoding="utf-8")
+                                )
+                                _saved_ids_3ay = [
+                                    str(x.get("video_id") or "")
+                                    for x in list(_saved_pool_for_ids_3bc.get("items") or [])
+                                    if str(x.get("video_id") or "")
+                                ]
+                                st.session_state["sprint196_3ay_selected_video_ids"] = _saved_ids_3ay
+                            except Exception:
+                                pass
+
+                        _inline_rows_3ay = [
+                            {
+                                "순위": x.get("screen_rank"),
+                                "조회수": (
+                                    f"{int(x.get('view_count') or 0):,}"
+                                    if int(x.get("view_count") or 0) > 0
+                                    else "-"
+                                ),
+                                "계정": x.get("creator"),
+                                "제목": x.get("title"),
+                                "영상 열기": x.get("url"),
+                                "선택": str(x.get("video_id") or "") in _saved_ids_3ay,
+                                "영상ID": x.get("video_id"),
+                            }
+                            for x in _source_items_196_3
+                        ]
+
+                        _display_stage_3ca = str(
+                            _video_sources_196_3.get("search_stage") or ""
+                        )
+                        if _display_stage_3ca == "same_product_2nd":
+                            st.markdown("#### 🎬 ② 같은 제품 후보 · 영상 확인하고 선택")
+                            if _video_sources_196_3.get("same_product_visual_filter"):
+                                st.caption(
+                                    "기준 영상과 실제 프레임 비교를 통과한 동일제품 후보만 표시합니다. "
+                                    "`열기`로 확인한 뒤 쇼츠에 사용할 영상만 체크하세요."
+                                )
+                            else:
+                                st.caption(
+                                    "기준 제품으로 다시 검색한 결과입니다. `열기`로 실제 영상을 확인한 뒤 "
+                                    "쇼츠에 사용할 영상만 체크하세요."
+                                )
+                        else:
+                            st.markdown("#### 🎬 TikTok 검색 결과 · 바로 확인하고 선택")
+                            st.caption(
+                                "기본 정렬: 검색어 관련성 판정을 통과한 후보 안에서 조회수 높은 순으로 표시합니다."
+                            )
+                        st.caption("실제 사용할 영상은 여러 개 선택한 뒤 기존 자동 필터로 장면 후보를 줄이는 방식입니다.")
+                        st.caption(
+                            "각 영상의 `영상 열기` 바로 옆 `선택` 체크박스를 누르세요. "
+                            "아래에 별도 선택창은 없습니다."
+                        )
+
+                        st.markdown("##### 후보 영상 선택")
+                        st.caption(
+                            "프런트 오류를 줄이기 위해 표 편집기 대신 안정적인 체크박스 방식으로 표시합니다."
+                        )
+
+                        _selected_ids_3bn = []
+                        _result_header_3bn = st.columns([0.7, 1.1, 1.5, 4.2, 0.9, 0.8])
+                        for _c3bn, _label3bn in zip(
+                            _result_header_3bn,
+                            ["순위", "조회수", "계정", "제목", "열기", "선택"],
+                        ):
+                            with _c3bn:
+                                st.markdown(f"**{_label3bn}**")
+
+                        for _row_index_3bn, _item3bn in enumerate(_source_items_196_3, 1):
+                            _vid3bn = str(_item3bn.get("video_id") or "")
+                            _rowcols3bn = st.columns([0.7, 1.1, 1.5, 4.2, 0.9, 0.8])
+                            with _rowcols3bn[0]:
+                                st.write(_item3bn.get("screen_rank") or _row_index_3bn)
+                            with _rowcols3bn[1]:
+                                _v3bn = int(_item3bn.get("view_count") or 0)
+                                st.write(f"{_v3bn:,}" if _v3bn > 0 else "-")
+                            with _rowcols3bn[2]:
+                                st.write(str(_item3bn.get("creator") or "")[:22])
+                            with _rowcols3bn[3]:
+                                st.write(str(_item3bn.get("title") or "")[:120])
+                            with _rowcols3bn[4]:
+                                _url3bn = str(_item3bn.get("url") or "")
+                                if _url3bn:
+                                    st.link_button(
+                                        "열기",
+                                        _url3bn,
+                                        use_container_width=True,
+                                    )
+                            with _rowcols3bn[5]:
+                                _checked3bn = st.checkbox(
+                                    "선택",
+                                    value=_vid3bn in _saved_ids_3ay,
+                                    key=f"sprint196_3bn_pick_{_vid3bn}",
+                                    label_visibility="collapsed",
+                                )
+                                if _checked3bn and _vid3bn:
+                                    _selected_ids_3bn.append(_vid3bn)
+
+                        _selected_ids_3ay = list(_selected_ids_3bn)
+                        st.session_state["sprint196_3ay_selected_video_ids"] = _selected_ids_3ay
+
+                        _selected_pool_items_3ay = [
+                            dict(item)
+                            for item in _source_items_196_3
+                            if str(item.get("video_id") or "") in _selected_ids_3ay
+                        ]
+                        _usable_196_3ag = [x for x in _source_items_196_3 if x.get("auto_usable")]
+                        st.session_state["sprint196_3ag_tiktok_usable_candidates"] = _usable_196_3ag
+
+                        # Sprint196-3AY: 선택은 위 검색 결과표 체크박스에서 바로 처리합니다.
+                        _selected_pool_items_3ar = list(_selected_pool_items_3ay)
+                        _pool_store_3ar = (
+                            Path("exports")
+                            / "shopping_discovery"
+                            / "selected_tiktok_source_pool.json"
+                        )
+
+                        st.caption(
+                            f"현재 선택: {len(_selected_pool_items_3ar)}개 영상"
+                        )
+                        if st.button(
+                            f"선택한 {len(_selected_pool_items_3ar)}개 영상으로 자동편집 준비",
+                            use_container_width=True,
+                            key="sprint196_3ay_confirm_source_pool",
+                            disabled=not bool(_selected_pool_items_3ar),
+                        ):
+                            _pool_store_3ar.parent.mkdir(parents=True, exist_ok=True)
+                            _pool_payload_3ar = {
+                                "product": str(
+                                    _video_sources_196_3.get("manual_keyword")
+                                    or _video_sources_196_3.get("product")
+                                    or _sel196
+                                ),
+                                "count": len(_selected_pool_items_3ar),
+                                "mode": "tiktok_multi_source_pool",
+                                "items": _selected_pool_items_3ar,
+                            }
+                            _pool_store_3ar.write_text(
+                                __import__("json").dumps(
+                                    _pool_payload_3ar,
+                                    ensure_ascii=False,
+                                    indent=2,
+                                    default=str,
+                                ),
+                                encoding="utf-8",
+                            )
+                            st.session_state["sprint196_3ar_source_pool"] = _pool_payload_3ar
+                            st.success(
+                                f"TikTok 영상 {len(_selected_pool_items_3ar)}개를 자동편집 소스로 저장했습니다."
+                            )
+                            st.info(
+                                "다음 자동편집 단계: 선택 영상별 사용 가능 구간 추출 → "
+                                "박힌 자막/워터마크가 심한 구간 제외 → 제품 사용/디테일 장면 선별 → "
+                                "기존 쇼핑쇼츠 대본·TTS·자막·BGM·SFX·CTA에 자동 배치."
+                            )
+
+                        _saved_pool_3ar = st.session_state.get("sprint196_3ar_source_pool") or {}
+                        if not _saved_pool_3ar and _pool_store_3ar.is_file():
+                            try:
+                                _saved_pool_3ar = __import__("json").loads(
+                                    _pool_store_3ar.read_text(encoding="utf-8")
+                                )
+                            except Exception:
+                                _saved_pool_3ar = {}
+
+                        if _saved_pool_3ar:
+                            st.info(
+                                f"현재 장면 소스 풀: {int(_saved_pool_3ar.get('count') or 0)}개 영상 · "
+                                "다시 TikTok 검색할 필요 없이 아래 버튼으로 바로 실제 영상 확보를 실행할 수 있습니다."
+                            )
+
+                            if st.button(
+                                "선택 영상 Chrome에서 실제 가져오기 · 기본 구간 추출",
+                                use_container_width=True,
+                                key="sprint196_3bb_acquire_selected_sources",
+                            ):
+                                with st.spinner(
+                                    "선택한 TikTok 영상을 실제 Chrome에서 열어 미디어를 확보하고 기본 사용 구간을 계산하고 있습니다..."
+                                ):
+                                    _acquired_3bb = (
+                                        ShoppingVideoSourceFinder.acquire_selected_tiktok_sources(
+                                            _saved_pool_3ar
+                                        )
+                                    )
+                                st.session_state["sprint196_3bb_acquired_sources"] = _acquired_3bb
+
+                                if _acquired_3bb.get("ok"):
+                                    st.success(str(_acquired_3bb.get("summary") or "소스 확보 완료"))
+                                else:
+                                    st.warning(str(_acquired_3bb.get("summary") or "소스 확보 실패"))
+
+                            _acquired_state_3bb = st.session_state.get(
+                                "sprint196_3bb_acquired_sources"
+                            ) or {}
+                            if _acquired_state_3bb:
+                                _acquired_items_3bb = list(_acquired_state_3bb.get("items") or [])
+                                st.dataframe(
+                                    [
+                                        {
+                                            "계정": x.get("creator"),
+                                            "영상ID": x.get("video_id"),
+                                            "확보": "완료" if x.get("acquire_ok") else "실패",
+                                            "길이(초)": x.get("duration"),
+                                            "기본구간수": len(list(x.get("segment_candidates") or [])),
+                                            "로컬파일": x.get("local_path"),
+                                        }
+                                        for x in _acquired_items_3bb
+                                    ],
+                                    use_container_width=True,
+                                    hide_index=True,
+                                )
+                                if _acquired_state_3bb.get("ok"):
+                                    st.info(
+                                        "이번 단계는 원본 확보 + 3초 기본 구간 생성까지만 합니다. "
+                                        "먼저 실제 영상의 한국어 자막/나레이션을 검사한 뒤, 자막/워터마크와 장면 품질을 선별합니다."
+                                    )
+
+                                    if st.button(
+                                        "실제 영상 한국어 자막·나레이션 검사",
+                                        use_container_width=True,
+                                        key="sprint196_3bq_korean_language_filter",
+                                    ):
+                                        with st.spinner(
+                                            "선택한 TikTok 영상의 실제 음성과 화면 자막을 분석하고 있습니다..."
+                                        ):
+                                            _language_filter_3bq = (
+                                                ShoppingVideoSourceFinder.analyze_korean_content_in_acquired_sources(
+                                                    _acquired_state_3bb
+                                                )
+                                            )
+                                        st.session_state["sprint196_3bq_language_filter"] = _language_filter_3bq
+                                        if _language_filter_3bq.get("ok"):
+                                            st.success(str(_language_filter_3bq.get("summary") or "언어 검사 완료"))
+                                        else:
+                                            st.warning(str(_language_filter_3bq.get("summary") or "언어 검사 실패"))
+
+                                    _language_state_3bq = st.session_state.get(
+                                        "sprint196_3bq_language_filter"
+                                    ) or {}
+                                    if _language_state_3bq:
+                                        st.dataframe(
+                                            [
+                                                {
+                                                    "계정": x.get("creator"),
+                                                    "영상ID": x.get("video_id"),
+                                                    "음성언어": x.get("voice_language") or "-",
+                                                    "한국어음성": "예" if x.get("korean_voice") else "아니오",
+                                                    "한국어자막": "예" if x.get("korean_text_overlay") else "아니오",
+                                                    "자막확신": x.get("korean_text_confidence"),
+                                                    "판정": "제외" if x.get("language_filter_status") == "excluded_korean" else "사용",
+                                                }
+                                                for x in list(_language_state_3bq.get("items") or [])
+                                            ],
+                                            use_container_width=True,
+                                            hide_index=True,
+                                        )
+                                        if _language_state_3bq.get("ok"):
+                                            _kept_items_3bq = list(_language_state_3bq.get("kept_items") or [])
+                                            if _kept_items_3bq:
+                                                _filtered_acquired_3bq = dict(_acquired_state_3bb)
+                                                _filtered_acquired_3bq["items"] = _kept_items_3bq
+                                                _filtered_acquired_3bq["count"] = len(_kept_items_3bq)
+                                                st.session_state["sprint196_3bb_acquired_sources"] = _filtered_acquired_3bq
+                                                st.info(
+                                                    f"한국어 콘텐츠를 제외한 {_language_state_3bq.get('kept_count', 0)}개 영상만 "
+                                                    "아래 품질 분석 단계로 넘깁니다."
+                                                )
+
+                                    if st.button(
+                                        "기본 구간 품질 분석 · 자동편집 장면 추천",
+                                        use_container_width=True,
+                                        key="sprint196_3be_analyze_segments",
+                                    ):
+                                        with st.spinner(
+                                            "각 구간을 분석하고 있습니다. 같은 원본 반복과 박힌 자막·워터마크 위험 구간은 자동 제외합니다..."
+                                        ):
+                                            _segment_analysis_3be = (
+                                                ShoppingVideoSourceFinder.analyze_acquired_tiktok_segments(
+                                                    _acquired_state_3bb
+                                                )
+                                            )
+                                        st.session_state["sprint196_3be_segment_analysis"] = _segment_analysis_3be
+                                        if _segment_analysis_3be.get("ok"):
+                                            st.success(
+                                                str(_segment_analysis_3be.get("summary") or "구간 분석 완료")
+                                            )
+                                        else:
+                                            st.warning(
+                                                str(_segment_analysis_3be.get("summary") or "분석할 구간이 없습니다.")
+                                            )
+
+                                    _segment_state_3be = st.session_state.get(
+                                        "sprint196_3be_segment_analysis"
+                                    ) or {}
+                                    if _segment_state_3be:
+                                        _recommended_3be = list(
+                                            _segment_state_3be.get("recommended_segments") or []
+                                        )
+                                        st.dataframe(
+                                            [
+                                                {
+                                                    "계정": x.get("creator"),
+                                                    "영상ID": x.get("video_id"),
+                                                    "구간": f"{x.get('start')}~{x.get('end')}초",
+                                                    "품질점수": x.get("quality_score"),
+                                                    "움직임": x.get("motion_score"),
+                                                    "자막/워터마크위험": x.get("overlay_risk"),
+                                                    "텍스트형밀도": x.get("center_text_density"),
+                                                    "화면중복": "중복" if x.get("visual_duplicate") else "",
+                                                    "유사도": x.get("visual_duplicate_similarity"),
+                                                    "추천": "사용" if x.get("recommended") else "제외",
+                                                }
+                                                for x in list(_segment_state_3be.get("segments") or [])
+                                            ],
+                                            use_container_width=True,
+                                            hide_index=True,
+                                        )
+                                        if _recommended_3be:
+                                            st.info(
+                                                f"자동편집 우선 장면 {len(_recommended_3be)}개를 준비했습니다. "
+                                                "같은 원본뿐 아니라 서로 다른 게시물의 비슷한 화면도 중복 제외하고, "
+                                                "중앙·상단까지 포함해 박힌 자막/워터마크 위험이 낮은 구간만 통과시켰습니다."
+                                            )
+
+                                            if st.button(
+                                                f"추천 {len(_recommended_3be)}개 장면 실제 클립 생성 · 쇼핑쇼츠에 적용",
+                                                use_container_width=True,
+                                                key="sprint196_3bf_build_and_apply_clips",
+                                            ):
+                                                with st.spinner(
+                                                    "추천 구간을 실제 MP4 클립으로 자르고 기존 쇼핑쇼츠 편집 소스로 연결하고 있습니다..."
+                                                ):
+                                                    _built_clips_3bf = (
+                                                        ShoppingVideoSourceFinder.build_recommended_tiktok_clips(
+                                                            _segment_state_3be,
+                                                            max_clips=8,
+                                                        )
+                                                    )
+                                                st.session_state["sprint196_3bf_built_clips"] = _built_clips_3bf
+
+                                                if _built_clips_3bf.get("ok"):
+                                                    _clip_paths_3bf = [
+                                                        str(x)
+                                                        for x in list(_built_clips_3bf.get("clip_paths") or [])
+                                                        if str(x) and Path(str(x)).is_file()
+                                                    ]
+                                                    # 기존 쇼핑쇼츠 '이전 작업 영상 경로' 계약을 그대로 이용.
+                                                    # workflow/video renderer는 수정하지 않음.
+                                                    st.session_state["sprint193_29_loaded_clip_paths"] = _clip_paths_3bf
+                                                    st.session_state["sprint195_43_shopping_video_source_mode"] = "외부소스형"
+                                                    st.session_state["sprint196_3bf_auto_source_applied"] = True
+
+                                                    st.success(
+                                                        f"TikTok 추천 장면 {_built_clips_3bf.get('count')}개를 "
+                                                        "기존 쇼핑쇼츠 장면 소스로 연결했습니다."
+                                                    )
+                                                    st.info(
+                                                        "아래 제작 모드의 쇼핑쇼츠 편집에서는 이 클립들을 다시 업로드하지 않고 사용합니다. "
+                                                        "기존 대본·TTS·자막·BGM·SFX·CTA 렌더러는 그대로 유지합니다."
+                                                    )
+                                                    st.rerun()
+                                                else:
+                                                    st.warning(
+                                                        str(
+                                                            _built_clips_3bf.get("summary")
+                                                            or "추천 장면 클립 생성에 실패했습니다."
+                                                        )
+                                                    )
+
+                                        _built_state_3bf = st.session_state.get(
+                                            "sprint196_3bf_built_clips"
+                                        ) or {}
+                                        if _built_state_3bf.get("ok"):
+                                            st.dataframe(
+                                                [
+                                                    {
+                                                        "장면": x.get("scene_index"),
+                                                        "계정": x.get("creator"),
+                                                        "영상ID": x.get("video_id"),
+                                                        "원본구간": f"{x.get('start')}~{x.get('end')}초",
+                                                        "클립길이": x.get("clip_duration"),
+                                                        "클립파일": x.get("clip_path"),
+                                                    }
+                                                    for x in list(_built_state_3bf.get("items") or [])
+                                                    if x.get("clip_ok")
+                                                ],
+                                                use_container_width=True,
+                                                hide_index=True,
+                                            )
+                        st.caption(
+                            f"1차 자동 선별: 사용 후보 {len(_usable_196_3ag)}개 / 전체 {len(_source_items_196_3)}개. "
+                            "자동점수는 참고용입니다. 실제 사용할 영상은 아래에서 직접 여러 개 선택해 소스 풀로 확정합니다."
+                        )
+                        _diag_xhs_ui_196_3g = dict(
+                            (_video_sources_196_3.get("statuses") or {}).get("xiaohongshu_diagnostics")
+                            or {}
+                        )
+                        if False and _diag_xhs_ui_196_3g:
+                            with st.expander("샤오홍슈 수집 진단", expanded=True):
+                                st.json({
+                                    "현재 URL": _diag_xhs_ui_196_3g.get("url"),
+                                    "페이지 제목": _diag_xhs_ui_196_3g.get("title"),
+                                    "링크/카드 수": _diag_xhs_ui_196_3g.get("anchor_counts"),
+                                    "__INITIAL_STATE__": _diag_xhs_ui_196_3g.get("initial_state_exists"),
+                                    "search 키": _diag_xhs_ui_196_3g.get("search_keys"),
+                                    "feeds 형태": _diag_xhs_ui_196_3g.get("feeds_kind"),
+                                    "feeds 개수": _diag_xhs_ui_196_3g.get("feeds_count"),
+                                    "본문 앞부분": _diag_xhs_ui_196_3g.get("body_preview"),
+                                    "진단 파일": (_video_sources_196_3.get("statuses") or {}).get("xiaohongshu_diagnostics_path"),
+                                })
+                    else:
+                        st.warning(str(_video_sources_196_3.get("summary") or "영상 후보를 찾지 못했습니다."))
+                        _statuses_196_3 = dict(_video_sources_196_3.get("statuses") or {})
+                        if any(bool((v or {}).get("needs_login_or_verification")) for v in _statuses_196_3.values()):
+                            st.info("로그인 또는 보안 인증이 필요한 플랫폼이 있습니다. 위 로그인/세션 저장 버튼으로 최초 1회 로그인한 뒤 Chrome을 닫고 다시 수집하세요.")
+                        _errors_196_3 = list(_video_sources_196_3.get("errors") or [])
+                        if _errors_196_3:
+                            st.code("\n".join(_errors_196_3[-6:]))
+            elif _r196:
+                st.warning(str(_r196.get("summary") or "상품 후보를 찾지 못했습니다."))
+                if str(_r196.get("status") or "") == "naver_credentials_missing":
+                    st.info("PowerShell에서 NAVER_API_HUB_CLIENT_ID / NAVER_API_HUB_CLIENT_SECRET을 설정한 뒤 다시 검색하면 됩니다.")
+                _errs196 = list((_r196.get("tiktok") or {}).get("errors") or [])
+                if _errs196:
+                    st.code("\n".join(_errs196[-3:]))
 
     st.markdown("### 🎯 제작 모드")
     # Sprint194-25: keep a permanently stable widget tree.
@@ -3576,47 +4720,27 @@ def show_one_click_pipeline():
     # Separate content type and language into two widgets that are ALWAYS rendered.
     _content_mode = st.radio(
         "쇼츠 종류",
-        options=["shopping", "history", "hasenmom"],
-        format_func=lambda value: {
-            "shopping": "🛍️ 쇼핑 쇼츠",
-            "history": "🍪 역사쿠키",
-            "hasenmom": "👩 하센맘",
-        }[value],
+        options=["shopping", "history"],
+        format_func=lambda value: {"shopping": "🛍️ 쇼핑 쇼츠", "history": "🍪 역사쿠키"}[value],
         horizontal=True,
         key="sprint194_25_content_mode",
     )
-    is_history_mode = _content_mode == "history"
-    is_hasenmom_mode = _content_mode == "hasenmom"
-    # Sprint195-2: 역사쿠키 언어 선택은 역사쿠키 모드에서만 노출합니다.
-    # 다른 모드에서는 저장된 언어값만 유지해 기존 history_ko/history_en 복원 동작을 보호합니다.
-    if is_history_mode:
-        _history_language = st.radio(
-            "역사쿠키 언어",
-            options=["ko", "en"],
-            format_func=lambda value: {"ko": "🇰🇷 한국어", "en": "🇺🇸 English"}[value],
-            horizontal=True,
-            key="sprint194_25_history_language",
-        )
-    else:
-        _history_language = str(st.session_state.get("sprint194_25_history_language") or "ko")
-        if _history_language not in {"ko", "en"}:
-            _history_language = "ko"
-    production_mode = (
-        f"history_{_history_language}"
-        if is_history_mode
-        else ("hasenmom" if is_hasenmom_mode else "shopping")
+    _history_language = st.radio(
+        "역사쿠키 언어",
+        options=["ko", "en"],
+        format_func=lambda value: {"ko": "🇰🇷 한국어", "en": "🇺🇸 English"}[value],
+        horizontal=True,
+        key="sprint194_25_history_language",
     )
+    is_history_mode = _content_mode == "history"
+    production_mode = (f"history_{_history_language}" if is_history_mode else "shopping")
     _history_mode_info = (
         "🌍 History Cookie English: 한국어 장면을 불러온 뒤 영어 자동 현지화로 영어 자막·나레이션을 생성하고 별도 MP4를 제작합니다."
         if production_mode == "history_en"
         else (
             "🍪 역사 쇼츠 모드: 장면 이미지 1~25장 + 장면별 나레이션/자막/SFX를 넣어 최종 9:16 MP4를 제작합니다."
             if is_history_mode
-            else (
-                "👩 하센맘 모드: 완성한 Gemini 장면 영상을 순서대로 넣고 나레이션·자막·BGM을 적용해 최종 9:16 MP4를 제작합니다."
-                if is_hasenmom_mode
-                else "🛍️ 쇼핑 쇼츠 모드: 기존 쇼핑 원클릭 흐름을 그대로 사용합니다."
-            )
+            else "🛍️ 쇼핑 쇼츠 모드: 기존 쇼핑 원클릭 흐름을 그대로 사용합니다."
         )
     )
     _history_mode_caption = (
@@ -3625,11 +4749,7 @@ def show_one_click_pipeline():
         else (
             "쇼핑용 리뷰·평점·상품 CTA는 사용하지 않습니다. 한국어 기본 성우는 기존 설정을 유지합니다."
             if is_history_mode
-            else (
-                "하센맘 모드에서는 쇼핑용 리뷰·평점·상품 CTA를 사용하지 않습니다. 성우는 지안으로 고정합니다."
-                if is_hasenmom_mode
-                else "역사쿠키 언어 선택은 쇼핑 모드에서는 무시됩니다."
-            )
+            else "역사쿠키 언어 선택은 쇼핑 모드에서는 무시됩니다."
         )
     )
     # Always render both slots so language changes update text only.
@@ -3641,16 +4761,6 @@ def show_one_click_pipeline():
         "production_mode": production_mode,
         "stable_dom": True,
     }, flush=True)
-    if is_hasenmom_mode:
-        print("[Sprint195-2 Hasenmom Mode] READY", {
-            "production_mode": production_mode,
-            "renderer_family": "standing/gemini-video",
-            "shopping_trust_ui": False,
-            "shopping_cta_ui": False,
-            "history_flow_untouched": True,
-            "voice_lock": "지안",
-            "black_bookends": True,
-        }, flush=True)
 
     st.markdown("### 📂 이전 작업 불러오기")
     recent_presets = _sprint193_29_recent_edit_presets(limit=30)
@@ -3773,21 +4883,13 @@ def show_one_click_pipeline():
     st.markdown(
         ("""<div class="mini-grid">역사 주제 │ 캐릭터 기준이미지 │ 장면이미지 │ 오디오 │ BGM │ 자막 │ 나레이션 │ 자막효과 │ 사운드효과 │ 장면속도</div><div class="mini-grid">역사 장면 이미지 최대 25장 · 이미지 → 9:16 영상 자동 변환 · 장면별 자막/나레이션/SFX/속도 편집</div>"""
          if is_history_mode else
-         ("""<div class="mini-grid">영상 제목 │ 하센맘 기준이미지 │ Gemini 영상 │ 오디오 │ BGM │ 자막 │ 나레이션 │ 자막효과 │ 사운드효과 │ 장면속도</div><div class="mini-grid">하센맘 Gemini 영상 수동 업로드 1~10 · 영상별 자막 / 나레이션 / 자막효과 / 사운드효과 한 줄 편집</div>"""
-          if is_hasenmom_mode else
-          """<div class="mini-grid">상품명 │ 평점 │ 리뷰수 │ 대표이미지 │ 오디오 │ BGM │ 자막 │ 나레이션 │ 자막효과 │ 사운드효과 │ 장면속도</div><div class="mini-grid">Gemini 영상 수동 업로드 1~10 · 영상별 자막 / 나레이션 / 자막효과 / 사운드효과 한 줄 편집</div>""")),
+         """<div class="mini-grid">상품명 │ 평점 │ 리뷰수 │ 대표이미지 │ 오디오 │ BGM │ 자막 │ 나레이션 │ 자막효과 │ 사운드효과 │ 장면속도</div><div class="mini-grid">Gemini 영상 수동 업로드 1~10 · 영상별 자막 / 나레이션 / 자막효과 / 사운드효과 한 줄 편집</div>"""),
         unsafe_allow_html=True,
     )
 
-    _main_name_label = "역사 주제" if is_history_mode else ("영상 제목" if is_hasenmom_mode else "상품명")
-    _main_name_placeholder = (
-        "예: 조선 코끼리 유배 사건"
-        if is_history_mode
-        else ("예: 오늘 드디어 쇼츠 하나를 업로드했습니다" if is_hasenmom_mode else "예: 미끄럼 방지 EVA 욕실화")
-    )
     product_name = st.text_input(
-        _main_name_label,
-        placeholder=_main_name_placeholder,
+        "역사 주제" if is_history_mode else "상품명",
+        placeholder=("예: 조선 코끼리 유배 사건" if is_history_mode else "예: 미끄럼 방지 EVA 욕실화"),
         key="sprint172_product_name",
     )
     # Sprint191-4: 별도 후킹 입력란 제거.
@@ -3811,41 +4913,23 @@ def show_one_click_pipeline():
     video_cta_platform = "none"
     cta_text = ""
 
-    st.markdown(
-        "#### 기준 이미지 (선택)"
-        if is_history_mode
-        else ("#### 하센맘 기준 이미지 (선택)" if is_hasenmom_mode else "#### 제품 대표이미지")
-    )
+    st.markdown("#### 기준 이미지 (선택)" if is_history_mode else "#### 제품 대표이미지")
     hook_product_image = st.file_uploader(
-        "역사 캐릭터/대표 이미지 (선택)"
-        if is_history_mode
-        else ("하센맘 인물 기준 이미지 (선택)" if is_hasenmom_mode else "제품 대표 이미지 (선택)"),
+        "역사 캐릭터/대표 이미지 (선택)" if is_history_mode else "제품 대표 이미지 (선택)",
         type=["png", "jpg", "jpeg", "webp"],
         accept_multiple_files=False,
         key="sprint189_hook_product_image",
         help="첫 신뢰 후킹 장면의 제품 배경으로 사용합니다. 후킹 배경의 실제 표시 강도는 영상 파이프라인에서 적용됩니다.",
     )
-    st.caption(
-        "이 이미지는 캐릭터 일관성 기준용입니다. 실제 영상 장면은 아래 역사 장면 이미지에서 선택합니다."
-        if is_history_mode
-        else (
-            "하센맘 인물 일관성 기준용입니다. 실제 최종 장면은 아래 Gemini 영상에서 선택합니다."
-            if is_hasenmom_mode
-            else "대표 이미지를 올리지 않으면 첫 Gemini 영상 프레임을 자동으로 사용합니다."
-        )
-    )
+    st.caption("이 이미지는 캐릭터 일관성 기준용입니다. 실제 영상 장면은 아래 역사 장면 이미지에서 선택합니다." if is_history_mode else "대표 이미지를 올리지 않으면 첫 Gemini 영상 프레임을 자동으로 사용합니다.")
 
     # Sprint193-8: 최근 한 달 구매수 입력은 제거합니다.
     # 현재 쇼핑 후킹은 리뷰수 + 평점 기준으로 고정합니다.
     monthly_purchase_count = 0
-    if is_history_mode or is_hasenmom_mode:
+    if is_history_mode:
         declared_review_count = 0
         rating = 0.0
-        st.caption(
-            "역사 모드에서는 쇼핑용 평점·리뷰 신뢰 후킹을 사용하지 않습니다."
-            if is_history_mode
-            else "하센맘 모드에서는 쇼핑용 평점·리뷰 신뢰 후킹을 사용하지 않습니다."
-        )
+        st.caption("역사 모드에서는 쇼핑용 평점·리뷰 신뢰 후킹을 사용하지 않습니다.")
     else:
         st.markdown("#### 평점 · 리뷰수")
         trust_c1, trust_c2 = st.columns(2)
@@ -3881,26 +4965,18 @@ def show_one_click_pipeline():
         st.info(auto_hook_text)
 
     hook_text = st.text_area(
-        "역사 후킹멘트" if is_history_mode else ("첫 문장 (선택)" if is_hasenmom_mode else "후킹멘트"),
+        "역사 후킹멘트" if is_history_mode else "후킹멘트",
         height=78,
         placeholder=(
             "예: 조선시대에 코끼리가 유배를 갔다?!"
             if is_history_mode
-            else (
-                "비워두면 장면별 나레이션만 사용합니다."
-                if is_hasenmom_mode
-                else "예: 양치할 때 아직도 손으로 물 받아 쓰세요?"
-            )
+            else "예: 양치할 때 아직도 손으로 물 받아 쓰세요?"
         ),
         key="sprint193_9_hook_phrase",
         help=(
             "구독 요청이 아니라, 사건에서 가장 궁금한 사실을 첫 문장으로 넣습니다."
             if is_history_mode
-            else (
-                "하센맘 영상은 장면별 나레이션만으로 제작하려면 비워두세요."
-                if is_hasenmom_mode
-                else "신뢰 후킹 다음, 첫 Gemini 영상 시작 시 표시·나레이션될 후킹 문장입니다."
-            )
+            else "신뢰 후킹 다음, 첫 Gemini 영상 시작 시 표시·나레이션될 후킹 문장입니다."
         ),
     )
 
@@ -4006,32 +5082,7 @@ def show_one_click_pipeline():
         else next((i for i, name in enumerate(_voice_labels) if name == "지안"), 0)
     )
 
-    def _sprint195_2_find_jian_voice(choices):
-        rows = []
-        for _name, _vid in list(choices or []):
-            _label = str(_name or "").strip()
-            if not _label or not str(_vid or "").strip():
-                continue
-            _low = _label.casefold()
-            if _label == "지안":
-                rows.append((0, _label, str(_vid).strip()))
-            elif "지안" in _label or "jian" in _low:
-                rows.append((1, _label, str(_vid).strip()))
-        rows.sort(key=lambda row: (row[0], len(row[1]), row[1]))
-        return (rows[0][1], rows[0][2]) if rows else ("", "")
-
-    if is_hasenmom_mode:
-        _jian_voice_name, _jian_voice_id = _sprint195_2_find_jian_voice(_voice_choices)
-        selected_voice_name = _jian_voice_name or "지안"
-        selected_voice_id = _jian_voice_id
-        st.success("👩 하센맘 성우: 지안 고정")
-        if not selected_voice_id:
-            st.warning("Typecast 보이스 목록에서 지안 voice_id를 찾지 못했습니다. API 연결/보이스 목록을 확인해 주세요.")
-        print("[Sprint195-2 Hasenmom Voice Lock]", {
-            "voice_name": selected_voice_name,
-            "voice_id_present": bool(selected_voice_id),
-        }, flush=True)
-    elif _voice_labels:
+    if _voice_labels:
         voice_search_text = st.text_input(
             "🔎 Typecast 성우 검색",
             value="",
@@ -4105,11 +5156,6 @@ def show_one_click_pipeline():
         key="sprint173_bgm_audio",
     )
 
-    # Sprint195-3: 하센맘 제작 기본값 고정. 쇼핑/역사 모드는 기존 값을 그대로 유지합니다.
-    if is_hasenmom_mode:
-        st.session_state["sprint193_1_tts_speed"] = 1.0
-        st.session_state["sprint193_1_bgm_volume"] = 20
-
     audio_c1, audio_c2, audio_c3 = st.columns(3)
     with audio_c1:
         tts_volume_percent = st.slider(
@@ -4160,6 +5206,9 @@ def show_one_click_pipeline():
     uploaded_history_scene1_video = None
     uploaded_gemini_clips = []
     history_expected_scene_count = 0
+    shopping_video_source_mode = str(
+        st.session_state.get("sprint195_43_shopping_video_source_mode") or "혼합형"
+    )
     if is_history_mode:
         st.info("🎨 역사쿠키 스타일 고정: 귀엽고 친근한 2D 웹툰·카툰 캐릭터 / 동글동글한 형태 / 풍부한 표정 / 실사풍 3D 제외")
         st.markdown("#### 역사 장면 이미지 업로드 · 최대 25장")
@@ -4226,13 +5275,50 @@ def show_one_click_pipeline():
                 flush=True,
             )
     else:
-        st.markdown("#### Gemini 영상수동업로드 · 1~10")
+        st.markdown("#### 쇼핑쇼츠 장면 영상 · 1~10")
+        shopping_video_source_mode = st.radio(
+            "영상 소스 방식",
+            options=["혼합형", "외부소스형", "기존 AI형"],
+            index=0,
+            horizontal=True,
+            key="sprint195_43_shopping_video_source_mode",
+            help=(
+                "혼합형: 직접 만든/AI 장면과 외부 제품 영상을 함께 사용합니다. "
+                "외부소스형: 확보한 제품 영상 위주로 구성합니다. "
+                "기존 AI형: 기존 Gemini 장면 제작 흐름을 그대로 사용합니다."
+            ),
+        )
+        st.caption(
+            "혼합형은 업로드 순서를 직접 지정하지 않아도 됩니다. "
+            "프로그램이 각 영상의 원본 파일명·길이·화면비·초반 움직임을 분석해 "
+            "후킹 후보를 먼저 고르고 나머지 장면을 자동 배치합니다. "
+            "외부소스형/기존 AI형은 기존 순서를 그대로 유지합니다."
+        )
+        _auto_tiktok_paths_3bf = [
+            str(x)
+            for x in list(st.session_state.get("sprint193_29_loaded_clip_paths") or [])
+            if str(x) and Path(str(x)).is_file()
+            and "tiktok_auto_" in str(x).replace("\\", "/")
+        ]
+        if _auto_tiktok_paths_3bf:
+            st.success(
+                f"TikTok 자동 추천 클립 {len(_auto_tiktok_paths_3bf)}개가 이미 쇼핑쇼츠 장면 소스로 적용되어 있습니다. "
+                "별도 영상 업로드 없이 그대로 제작할 수 있습니다."
+            )
         uploaded_gemini_clips = st.file_uploader(
-            "편집 순서대로 영상 선택",
+            "장면 영상 선택 · 혼합형은 순서 자동 배치",
             type=["mp4", "mov", "mkv", "webm", "m4v"],
             accept_multiple_files=True,
             key="sprint172_gemini_clips",
+            help="직접 제작 영상, AI 생성 영상, 사용 권한이 있는 외부 제품 영상을 함께 선택할 수 있습니다.",
         )
+        print("[Sprint195-45 Shopping Mixed Auto Arrange UI] READY", {
+            "mode": shopping_video_source_mode,
+            "uploaded_count": len(uploaded_gemini_clips or []),
+            "shopping_only": True,
+            "history_untouched": True,
+            "hasenmom_untouched": True,
+        }, flush=True)
 
     loaded_gemini_clip_paths = [
         str(item or "").strip()
@@ -4304,25 +5390,6 @@ def show_one_click_pipeline():
                 else "업로드 목록의 순서대로 연결합니다. Gemini 영상의 기존 BGM과 음향은 자동 제거됩니다."
             )
 
-    hasenmom_intro_subtitle = ""
-    hasenmom_intro_narration = ""
-    hasenmom_outro_subtitle = ""
-    hasenmom_outro_narration = ""
-    if is_hasenmom_mode:
-        st.markdown("#### ⬛ 하센맘 첫 장면 · 검정 화면")
-        st.caption("3줄 입력: 큰 제목 / 부제 / EP 번호. 각 줄은 서로 다른 크기와 위치로 렌더됩니다.")
-        _hm_i1, _hm_i2 = st.columns(2)
-        with _hm_i1:
-            hasenmom_intro_subtitle = st.text_area(
-                "첫 검정 장면 자막", height=72, key="sprint195_2_hasenmom_intro_subtitle",
-                placeholder="하센맘의 일어서기\n- 드디어 업로드했습니다.\nEP.10"
-            )
-        with _hm_i2:
-            hasenmom_intro_narration = st.text_area(
-                "첫 검정 장면 나레이션 (선택)", height=72, key="sprint195_2_hasenmom_intro_narration",
-                placeholder="비워두면 나레이션 없이 자막만 표시합니다."
-            )
-
     clip_subtitles = []
     clip_narrations = []
     clip_subtitle_effects = []
@@ -4343,9 +5410,8 @@ def show_one_click_pipeline():
             ("장면마다 한 줄에서 자막 · 나레이션 · 자막효과 · 사운드효과를 바로 입력합니다. "
              "입력한 나레이션을 장면 순서대로 합쳐 확정 대본으로 사용합니다.")
             if is_history_mode else
-            ("영상마다 자막 · 나레이션 · 자막효과 · 사운드효과를 입력합니다. "
-             + ("하센맘은 자막 입력 중 빈 줄 1개를 넣으면 같은 영상 안에서 다음 자막으로 분할됩니다. " if is_hasenmom_mode else "")
-             + "확정 대본이 비어 있으면 입력한 나레이션을 영상 순서대로 합쳐 사용합니다.")
+            ("영상마다 한 줄에서 자막 · 나레이션 · 자막효과 · 사운드효과를 바로 입력합니다. "
+             "확정 대본이 비어 있으면 입력한 나레이션을 영상 순서대로 합쳐 사용합니다.")
         )
 
         # Sprint194-23: render the same localization controls in both history languages.
@@ -4596,10 +5662,7 @@ def show_one_click_pipeline():
             clip_narrations.append(str(narration_value or "").strip())
             clip_subtitle_effects.append(str(subtitle_effect_value or "기본").strip())
             clip_sfx.append(str(sfx_value or "없음").strip())
-            clip_playback_speeds.append(
-                2.0 if is_hasenmom_mode
-                else (0.0 if scene_speed_value == "자동" else float(scene_speed_value or 1.5))
-            )
+            clip_playback_speeds.append(0.0 if scene_speed_value == "자동" else float(scene_speed_value or 1.5))
 
         # Sprint194-47B: a Scene 1 MP4 is visual-source replacement only.
         # Keep all 1..N editing arrays aligned so Scene 1 still receives subtitle/TTS/effects.
@@ -4673,29 +5736,6 @@ def show_one_click_pipeline():
         if narration_script:
             st.caption("영상별 나레이션을 순서대로 합쳐 내부 확정 대본으로 사용합니다.")
 
-    if is_hasenmom_mode:
-        st.markdown("#### ⬛ 하센맘 마지막 장면 · 검정 화면")
-        st.caption("2줄 입력: 큰 엔딩 문구 / 하단 시리즈+다음 EP. 서로 다른 크기와 위치로 렌더됩니다.")
-        _hm_o1, _hm_o2 = st.columns(2)
-        with _hm_o1:
-            hasenmom_outro_subtitle = st.text_area(
-                "마지막 검정 장면 자막", height=72, key="sprint195_2_hasenmom_outro_subtitle",
-                placeholder="기록은 계속됩니다.\n- 하센맘의 일어서기 EP.11"
-            )
-        with _hm_o2:
-            hasenmom_outro_narration = st.text_area(
-                "마지막 검정 장면 나레이션 (선택)", height=72, key="sprint195_2_hasenmom_outro_narration",
-                placeholder="비워두면 나레이션 없이 자막만 표시합니다."
-            )
-        _hm_full_narrations = [
-            str(hasenmom_intro_narration or "").strip(),
-            *[str(x or "").strip() for x in list(clip_narrations or [])],
-            str(hasenmom_outro_narration or "").strip(),
-        ]
-        narration_script = " ".join(x for x in _hm_full_narrations if x).strip()
-        locked_script = narration_script
-        st.caption("편집 순서: 검정 첫 장면 → Gemini 영상들 → 검정 마지막 장면")
-
     if is_history_mode:
         # Sprint194-3: 역사 모드에는 쇼핑 CTA 상품명 입력을 노출하지 않습니다.
         cta_product_logo_text = ""
@@ -4706,14 +5746,6 @@ def show_one_click_pipeline():
             if production_mode == "history_ko"
             else "🌍 History Cookie (English)"
         )
-    elif is_hasenmom_mode:
-        # Sprint195-1: 하센맘은 기존 '일어서기' 렌더 경로를 재사용하되
-        # 쇼핑용 상품 CTA 입력은 노출하지 않는다.
-        cta_product_logo_text = ""
-        channel_type = "standing"
-        st.markdown("#### 채널")
-        st.success("👩 하센맘 · 다시 일어서기")
-        st.caption("쇼핑용 상품 CTA 없이 하센맘 장면 영상·나레이션·자막·BGM만 사용합니다.")
     else:
         st.markdown("#### CTA 상단 상품명")
         cta_product_logo_text = st.text_input(
@@ -4734,10 +5766,6 @@ def show_one_click_pipeline():
             index=0,
             key="sprint172_channel_type",
         )
-
-    # Sprint195-3: 하센맘 Gemini 본문 영상은 2.0배를 기본/고정값으로 사용합니다.
-    if is_hasenmom_mode:
-        st.session_state["sprint176_playback_speed"] = 2.0
 
     c2, c3 = st.columns(2)
     with c2:
@@ -4815,7 +5843,7 @@ def show_one_click_pipeline():
 
         direct_errors = []
         if not str(product_name or "").strip():
-            direct_errors.append("역사 주제를 입력해 주세요." if is_history_mode else ("영상 제목을 입력해 주세요." if is_hasenmom_mode else "상품명을 입력해 주세요."))
+            direct_errors.append("역사 주제를 입력해 주세요." if is_history_mode else "상품명을 입력해 주세요.")
         if not str(locked_script or "").strip():
             direct_errors.append("확정 대본을 입력해 주세요.")
         if not editor_clip_sources:
@@ -4886,26 +5914,14 @@ def show_one_click_pipeline():
             st.error(f"프로젝트 생성 실패: {exc}")
             return
 
-        _render_clip_subtitles = list(clip_subtitles or [])
-        _render_clip_narrations = list(clip_narrations or [])
-        _render_clip_subtitle_effects = list(clip_subtitle_effects or [])
-        _render_clip_sfx = list(clip_sfx or [])
-        _render_clip_playback_speeds = list(clip_playback_speeds or [])
-        if is_hasenmom_mode:
-            _render_clip_subtitles = [str(hasenmom_intro_subtitle or "").strip()] + _render_clip_subtitles + [str(hasenmom_outro_subtitle or "").strip()]
-            _render_clip_narrations = [str(hasenmom_intro_narration or "").strip()] + _render_clip_narrations + [str(hasenmom_outro_narration or "").strip()]
-            _render_clip_subtitle_effects = ["기본"] + _render_clip_subtitle_effects + ["기본"]
-            _render_clip_sfx = ["없음"] + _render_clip_sfx + ["없음"]
-            _render_clip_playback_speeds = [0.0] + _render_clip_playback_speeds + [0.0]
-
         _save_clip_subtitle_sidecar(
             direct_project,
-            _render_clip_subtitles,
+            clip_subtitles,
             subtitle_style,
-            _render_clip_narrations,
-            _render_clip_subtitle_effects,
-            _render_clip_sfx,
-            _render_clip_playback_speeds,
+            clip_narrations,
+            clip_subtitle_effects,
+            clip_sfx,
+            clip_playback_speeds,
         )
 
         # 후킹 배경 제품 이미지 저장
@@ -4948,6 +5964,10 @@ def show_one_click_pipeline():
                 destination = direct_folder / f"gemini_{index:02d}{suffix}"
                 destination.write_bytes(uploaded.getbuffer())
                 direct_clip_paths.append(str(destination))
+            if not is_history_mode:
+                _sprint195_45_write_source_name_manifest(
+                    direct_folder, uploaded_gemini_clips, direct_clip_paths
+                )
         else:
             direct_clip_paths = [
                 str(path)
@@ -4959,70 +5979,6 @@ def show_one_click_pipeline():
                 {"count": len(direct_clip_paths), "paths": direct_clip_paths},
                 flush=True,
             )
-
-        _render_clip_paths = list(direct_clip_paths or [])
-        if is_hasenmom_mode:
-            try:
-                # Sprint195-4: 빈 줄 기준 자막 분할. 영상 자체를 같은 비율로 잘라
-                # 전체 시각 길이는 유지하면서 각 분할 자막을 독립 scene으로 전달합니다.
-                _split_paths, _split_subs, _split_nars, _split_fx, _split_sfx, _split_speeds = [], [], [], [], [], []
-                for _idx, _src in enumerate(list(direct_clip_paths or [])):
-                    _subtitle_raw = str((clip_subtitles + [""])[_idx] or "").strip()
-                    _original_narration = str((clip_narrations + [""])[_idx] or "").strip()
-                    _blocks, _narration_parts = _sprint195_7_aligned_blocks(_subtitle_raw, _original_narration)
-                    _parts = _sprint195_4_split_video_equal(_src, len(_blocks), direct_folder, _idx + 1)
-                    for _part_i, (_part_path, _block) in enumerate(zip(_parts, _blocks)):
-                        _split_paths.append(_part_path)
-                        _split_subs.append(_block)
-                        # Sprint195-5: 원 나레이션 전체를 분할 scene 수에 맞춰 보존합니다.
-                        # 3줄 이상이어도 첫 조각에 몰아넣지 않아 TTS가 잘리거나 사라지지 않습니다.
-                        _split_nars.append(str((_narration_parts + [""])[_part_i] or "").strip())
-                        _split_fx.append(str((clip_subtitle_effects + ["기본"])[_idx] or "기본"))
-                        _split_sfx.append(str((clip_sfx + ["없음"])[_idx] or "없음") if _part_i == 0 else "없음")
-                        _split_speeds.append(2.0)
-                _render_clip_paths = _split_paths
-                _render_clip_subtitles = _split_subs
-                _render_clip_narrations = _split_nars
-                _render_clip_subtitle_effects = _split_fx
-                _render_clip_sfx = _split_sfx
-                _render_clip_playback_speeds = _split_speeds
-
-                _hm_intro_black = _sprint195_4_render_title_card(direct_folder / "hasenmom_black_00_intro.mp4", hasenmom_intro_subtitle, "intro", seconds=3.0)
-                _hm_outro_black = _sprint195_4_render_title_card(direct_folder / "hasenmom_black_99_outro.mp4", hasenmom_outro_subtitle, "outro", seconds=3.0)
-                _render_clip_paths = [_hm_intro_black] + _render_clip_paths + [_hm_outro_black]
-                # 카드 텍스트는 영상 자체에 이미 렌더했으므로 일반 본문 자막 렌더러에는 빈 문자열 전달.
-                _render_clip_subtitles = [""] + _render_clip_subtitles + [""]
-                _render_clip_narrations = [str(hasenmom_intro_narration or "").strip()] + _render_clip_narrations + [str(hasenmom_outro_narration or "").strip()]
-                _render_clip_subtitle_effects = ["기본"] + _render_clip_subtitle_effects + ["기본"]
-                _render_clip_sfx = ["없음"] + _render_clip_sfx + ["없음"]
-                _render_clip_playback_speeds = [1.0] + _render_clip_playback_speeds + [1.0]
-            except Exception as exc:
-                st.error(f"하센맘 자막 분할/타이틀 카드 생성 실패: {type(exc).__name__}: {exc}")
-                return
-            # Sprint195-4A: split/card scene count is finalized only here.
-            # Overwrite the earlier sidecar with the EXACT render arrays so WorkflowEngine
-            # does not reload stale unsplit metadata (which caused silent TTS/subtitle loss).
-            _save_clip_subtitle_sidecar(
-                direct_project,
-                _render_clip_subtitles,
-                subtitle_style,
-                _render_clip_narrations,
-                _render_clip_subtitle_effects,
-                _render_clip_sfx,
-                _render_clip_playback_speeds,
-            )
-            print("[Sprint195-4A Hasenmom Render Sidecar Realign] READY", {
-                "scene_count": len(_render_clip_paths),
-                "subtitle_count": len(_render_clip_subtitles),
-                "narration_count": len(_render_clip_narrations),
-                "speed_count": len(_render_clip_playback_speeds),
-            }, flush=True)
-            print("[Sprint195-4 Hasenmom Subtitle Split + Cards] READY", {
-                "source_clip_count": len(direct_clip_paths),
-                "render_scene_count": len(_render_clip_paths),
-                "subtitle_blocks": len(_render_clip_subtitles) - 2,
-                "order": [Path(x).name for x in _render_clip_paths],
-            }, flush=True)
 
         # 수동 오디오 저장
         direct_audio_folder = (
@@ -5062,12 +6018,10 @@ def show_one_click_pipeline():
             "clip_subtitle_effects": list(clip_subtitle_effects or []),
             "clip_sfx": list(clip_sfx or []),
             "clip_playback_speeds": list(clip_playback_speeds or []),
-            "hasenmom_intro_subtitle": str(hasenmom_intro_subtitle or "").strip(),
-            "hasenmom_intro_narration": str(hasenmom_intro_narration or "").strip(),
-            "hasenmom_outro_subtitle": str(hasenmom_outro_subtitle or "").strip(),
-            "hasenmom_outro_narration": str(hasenmom_outro_narration or "").strip(),
-            "hasenmom_black_bookends": bool(is_hasenmom_mode),
             "gemini_clip_paths": list(direct_clip_paths or []),
+            "shopping_video_source_mode": (
+                str(shopping_video_source_mode or "혼합형") if not is_history_mode else ""
+            ),
             "subtitle_style": dict(subtitle_style or {}),
             "cta_product_logo_text": str(cta_product_logo_text or "").strip(),
             "playback_speed": float(playback_speed or 1.5),
@@ -5114,7 +6068,7 @@ def show_one_click_pipeline():
                 "declared_review_count": int(declared_review_count or 0),
                 "rating": float(rating or 0.0),
                 "hook_product_image_path": direct_hook_product_image_path,
-                "clip_count": len(_render_clip_paths),
+                "clip_count": len(direct_clip_paths),
                 "force_run_id": direct_force_run_id,
             },
             flush=True,
@@ -5126,14 +6080,14 @@ def show_one_click_pipeline():
             try:
                 direct_result = run_project_pipeline(
                     project=direct_project,
-                    sample_count=len(_render_clip_paths),
+                    sample_count=len(direct_clip_paths),
                     review_text=hook_text.strip(),
                     locked_script=locked_script.strip(),
                     review_image_paths=[],
                     product_image_paths=[],
                     product_image_path="",
                     youtube_privacy_status=youtube_privacy_status,
-                    viral_video_sources=_render_clip_paths,
+                    viral_video_sources=direct_clip_paths,
                     input_product_name=product_name.strip(),
                     stop_after_image_generation=False,
                     gemini_video_mode=True,
@@ -5148,15 +6102,18 @@ def show_one_click_pipeline():
                     typecast_api_key=str(typecast_api_key or ""),
                     tts_volume_percent=int(tts_volume_percent or 100),
                     tts_speech_speed=float(_effective_tts_speech_speed_194_41),
-                    clip_subtitles=list(_render_clip_subtitles or []),
-                    clip_subtitle_effects=list(_render_clip_subtitle_effects or []),
-                    clip_sfx=list(_render_clip_sfx or []),
-                    clip_playback_speeds=list(_render_clip_playback_speeds or []),
-                    clip_narrations=list(_render_clip_narrations or []),
-                    gemini_clip_count=len(_render_clip_paths),
+                    clip_subtitles=list(clip_subtitles or []),
+                    clip_subtitle_effects=list(clip_subtitle_effects or []),
+                    clip_sfx=list(clip_sfx or []),
+                    clip_playback_speeds=list(clip_playback_speeds or []),
+                    clip_narrations=list(clip_narrations or []),
+                    gemini_clip_count=len(direct_clip_paths),
                     upload_enabled=False,
                     playback_speed=float(playback_speed),
                     channel_type=channel_type,
+                    shopping_video_source_mode=(
+                        str(shopping_video_source_mode or "혼합형") if not is_history_mode else ""
+                    ),
                     monthly_purchase_count=int(monthly_purchase_count or 0),
                     declared_review_count=int(declared_review_count or 0),
                     rating=float(rating or 0.0),
@@ -5173,16 +6130,7 @@ def show_one_click_pipeline():
                 )
                 return
 
-        # Sprint195-13: 하센맘 DIRECT CREATE 화면은 product-named 복사본보다
-        # 이번 실행에서 Workflow가 실제로 만든 native final MP4를 우선 표시합니다.
-        # 쇼핑/역사쿠키의 기존 최종 경로 선택 순서는 그대로 유지합니다.
-        direct_final_path = (
-            _resolve_hasenmom_native_final_video_path(direct_result)
-            if is_hasenmom_mode
-            else _resolve_final_video_path(direct_result)
-        )
-        if is_hasenmom_mode and not direct_final_path:
-            direct_final_path = _resolve_final_video_path(direct_result)
+        direct_final_path = _resolve_final_video_path(direct_result)
         if direct_final_path and Path(direct_final_path).is_file():
             st.success("🎬 영상 제작이 완료됐습니다. 업로드는 실행하지 않았습니다.")
             st.video(direct_final_path)
@@ -7312,7 +8260,7 @@ def show_one_click_pipeline():
 
     errors = []
     if not str(product_name or "").strip():
-        errors.append("역사 주제를 입력해 주세요." if is_history_mode else ("영상 제목을 입력해 주세요." if is_hasenmom_mode else "상품명을 입력해 주세요."))
+        errors.append("역사 주제를 입력해 주세요." if is_history_mode else "상품명을 입력해 주세요.")
     if not str(locked_script or "").strip():
         errors.append("확정 대본을 입력해 주세요.")
     if not editor_clip_sources:
@@ -7374,26 +8322,14 @@ def show_one_click_pipeline():
         st.error(f"프로젝트 생성 실패: {exc}")
         return
 
-    _main_render_clip_subtitles = list(clip_subtitles or [])
-    _main_render_clip_narrations = list(clip_narrations or [])
-    _main_render_clip_subtitle_effects = list(clip_subtitle_effects or [])
-    _main_render_clip_sfx = list(clip_sfx or [])
-    _main_render_clip_playback_speeds = list(clip_playback_speeds or [])
-    if is_hasenmom_mode:
-        _main_render_clip_subtitles = [str(hasenmom_intro_subtitle or "").strip()] + _main_render_clip_subtitles + [str(hasenmom_outro_subtitle or "").strip()]
-        _main_render_clip_narrations = [str(hasenmom_intro_narration or "").strip()] + _main_render_clip_narrations + [str(hasenmom_outro_narration or "").strip()]
-        _main_render_clip_subtitle_effects = ["기본"] + _main_render_clip_subtitle_effects + ["기본"]
-        _main_render_clip_sfx = ["없음"] + _main_render_clip_sfx + ["없음"]
-        _main_render_clip_playback_speeds = [0.0] + _main_render_clip_playback_speeds + [0.0]
-
     _save_clip_subtitle_sidecar(
         project,
-        _main_render_clip_subtitles,
+        clip_subtitles,
         subtitle_style,
-        _main_render_clip_narrations,
-        _main_render_clip_subtitle_effects,
-        _main_render_clip_sfx,
-        _main_render_clip_playback_speeds,
+        clip_narrations,
+        clip_subtitle_effects,
+        clip_sfx,
+        clip_playback_speeds,
     )
 
     hook_product_image_path = ""
@@ -7429,52 +8365,12 @@ def show_one_click_pipeline():
             destination = folder / f"gemini_{index:02d}{suffix}"
             destination.write_bytes(uploaded.getbuffer())
             clip_paths.append(str(destination))
+        if not is_history_mode:
+            _sprint195_45_write_source_name_manifest(
+                folder, uploaded_gemini_clips, clip_paths
+            )
     else:
         clip_paths = [str(path) for path in loaded_gemini_clip_paths if Path(str(path)).is_file()]
-
-    _main_render_clip_paths = list(clip_paths or [])
-    if is_hasenmom_mode:
-        try:
-            # Sprint195-6: 일반 제작 경로도 '영상만 제작'과 완전히 같은 빈 줄 분할 배열을 사용합니다.
-            _split_paths, _split_subs, _split_nars, _split_fx, _split_sfx, _split_speeds = [], [], [], [], [], []
-            for _idx, _src in enumerate(list(clip_paths or [])):
-                _subtitle_raw = str((clip_subtitles + [""])[_idx] or "").strip()
-                _original_narration = str((clip_narrations + [""])[_idx] or "").strip()
-                _blocks, _narration_parts = _sprint195_7_aligned_blocks(_subtitle_raw, _original_narration)
-                _parts = _sprint195_4_split_video_equal(_src, len(_blocks), folder, _idx + 1)
-                for _part_i, (_part_path, _block) in enumerate(zip(_parts, _blocks)):
-                    _split_paths.append(_part_path)
-                    _split_subs.append(_block)
-                    _split_nars.append(str((_narration_parts + [""])[_part_i] or "").strip())
-                    _split_fx.append(str((clip_subtitle_effects + ["기본"])[_idx] or "기본"))
-                    _split_sfx.append(str((clip_sfx + ["없음"])[_idx] or "없음") if _part_i == 0 else "없음")
-                    _split_speeds.append(2.0)
-            _main_render_clip_paths = _split_paths
-            _main_render_clip_subtitles = _split_subs
-            _main_render_clip_narrations = _split_nars
-            _main_render_clip_subtitle_effects = _split_fx
-            _main_render_clip_sfx = _split_sfx
-            _main_render_clip_playback_speeds = _split_speeds
-
-            _hm_intro_black = _sprint195_4_render_title_card(folder / "hasenmom_black_00_intro.mp4", hasenmom_intro_subtitle, "intro", seconds=3.0)
-            _hm_outro_black = _sprint195_4_render_title_card(folder / "hasenmom_black_99_outro.mp4", hasenmom_outro_subtitle, "outro", seconds=3.0)
-            _main_render_clip_paths = [_hm_intro_black] + _main_render_clip_paths + [_hm_outro_black]
-            _main_render_clip_subtitles = [""] + _main_render_clip_subtitles + [""]
-            _main_render_clip_narrations = [str(hasenmom_intro_narration or "").strip()] + _main_render_clip_narrations + [str(hasenmom_outro_narration or "").strip()]
-            _main_render_clip_subtitle_effects = ["기본"] + _main_render_clip_subtitle_effects + ["기본"]
-            _main_render_clip_sfx = ["없음"] + _main_render_clip_sfx + ["없음"]
-            _main_render_clip_playback_speeds = [1.0] + _main_render_clip_playback_speeds + [1.0]
-            _save_clip_subtitle_sidecar(project, _main_render_clip_subtitles, subtitle_style, _main_render_clip_narrations, _main_render_clip_subtitle_effects, _main_render_clip_sfx, _main_render_clip_playback_speeds)
-        except Exception as exc:
-            st.error(f"하센맘 자막 분할/타이틀 카드 생성 실패: {type(exc).__name__}: {exc}")
-            return
-        print("[Sprint195-6 Hasenmom Main Render Realign] READY", {
-            "scene_count": len(_main_render_clip_paths),
-            "subtitle_count": len(_main_render_clip_subtitles),
-            "narration_count": len(_main_render_clip_narrations),
-            "highlight_marked": sum("[" in str(x) and "]" in str(x) for x in _main_render_clip_subtitles),
-            "order": [Path(x).name for x in _main_render_clip_paths],
-        }, flush=True)
 
     audio_folder = Path("assets/manual_audio") / f"project_{safe_project_id(project)}"
     audio_folder.mkdir(parents=True, exist_ok=True)
@@ -7534,14 +8430,14 @@ def show_one_click_pipeline():
         try:
             result = run_project_pipeline(
                 project=project,
-                sample_count=len(_main_render_clip_paths),
+                sample_count=len(clip_paths),
                 review_text=hook_text.strip(),
                 locked_script=locked_script.strip(),
                 review_image_paths=[],
                 product_image_paths=[],
                 product_image_path="",
                 youtube_privacy_status=youtube_privacy_status,
-                viral_video_sources=_main_render_clip_paths,
+                viral_video_sources=clip_paths,
                 input_product_name=product_name.strip(),
                 stop_after_image_generation=False,
                 gemini_video_mode=True,
@@ -7554,12 +8450,12 @@ def show_one_click_pipeline():
                 typecast_api_key=str(typecast_api_key or ""),
                 tts_volume_percent=int(tts_volume_percent or 100),
                 tts_speech_speed=float(_effective_tts_speech_speed_194_41),
-                clip_subtitles=list(_main_render_clip_subtitles or []),
-                clip_subtitle_effects=list(_main_render_clip_subtitle_effects or []),
-                clip_sfx=list(_main_render_clip_sfx or []),
-                clip_playback_speeds=list(_main_render_clip_playback_speeds or []),
-                clip_narrations=list(_main_render_clip_narrations or []),
-                gemini_clip_count=len(_main_render_clip_paths),
+                clip_subtitles=list(clip_subtitles or []),
+                clip_subtitle_effects=list(clip_subtitle_effects or []),
+                clip_sfx=list(clip_sfx or []),
+                clip_playback_speeds=list(clip_playback_speeds or []),
+                clip_narrations=list(clip_narrations or []),
+                gemini_clip_count=len(clip_paths),
                 upload_enabled=bool(upload_enabled),
                 playback_speed=float(playback_speed),
                 channel_type=channel_type,
@@ -7575,7 +8471,7 @@ def show_one_click_pipeline():
 
     final_path = _resolve_final_video_path(result)
     if final_path and Path(final_path).is_file():
-        st.success("역사쿠키 쇼츠 제작이 완료됐습니다." if is_history_mode else ("하센맘 쇼츠 제작이 완료됐습니다." if is_hasenmom_mode else "Gemini 쇼츠 자동 편집이 완료됐습니다."))
+        st.success("역사쿠키 쇼츠 제작이 완료됐습니다." if is_history_mode else "Gemini 쇼츠 자동 편집이 완료됐습니다.")
         st.video(final_path)
         st.caption(f"최종 영상: {final_path}")
         st.caption(f"적용 속도: {float(playback_speed):.2f}배 / 음성 파일: {'적용' if voice_audio_path else '자동 모듈 탐색'} / 공개 설정: {youtube_privacy_status}")
