@@ -61,11 +61,6 @@ from modules.publisher.tiktok_upload_executor import TikTokUploadExecutor
 from modules.publisher.threads_upload_executor import ThreadsUploadExecutor
 from modules.publisher.naver_clip_upload_executor import NaverClipUploadExecutor
 from modules.utils.product_output_naming import create_product_named_video_copy
-from modules.product.shopping_product_discovery import ShoppingProductDiscovery
-import importlib
-import modules.source.shopping_video_source_finder as _shopping_video_source_finder_module
-_shopping_video_source_finder_module = importlib.reload(_shopping_video_source_finder_module)
-ShoppingVideoSourceFinder = _shopping_video_source_finder_module.ShoppingVideoSourceFinder
 
 try:
     from modules.product.product_engine import ProductEngine
@@ -78,7 +73,7 @@ except Exception:
     SearchKeywordEngine = None
 
 
-UI_VERSION = "sprint196-3cl-reference-title-product-query"
+UI_VERSION = "sprint195-52-history-auto-scene-count"
 RESULT_DIR = Path("exports/one_click_results")
 OPENAI_LOCALIZATION_KEY_PATH = Path("secrets/openai_localization_api_key.txt")
 
@@ -922,6 +917,13 @@ def _sprint193_29_apply_preset_to_session(preset):
     st.session_state["sprint193_29_loaded_preset_path"] = str(preset.get("_preset_path") or "")
     st.session_state["sprint193_29_loaded_project_id"] = str(preset.get("project_id") or "")
 
+    _loaded_bgm_path = str(preset.get("bgm_audio_path") or "").strip()
+    st.session_state["sprint193_29_loaded_bgm_audio_path"] = (
+        _loaded_bgm_path
+        if _loaded_bgm_path and Path(_loaded_bgm_path).is_file()
+        else ""
+    )
+
 
 def normalize_text(value, fallback=""):
     if value is None:
@@ -1019,74 +1021,223 @@ def _sprint194_5_merge_history_uploads(primary, extra=None):
     return sorted(merged.values(), key=_sprint194_5_scene_sort_key)[:25]
 
 
-def _sprint194_4_save_history_scene_images(project, uploaded_images, clip_narrations=None, tts_speed=1.2, first_scene_video=None):
-    """History scenes: scene 1 may be supplied by video while images start at 2.png."""
+def _sprint194_4_save_history_scene_images(
+    project,
+    uploaded_images,
+    clip_narrations=None,
+    tts_speed=1.2,
+    first_scene_video=None,
+    scene_videos=None,
+):
+    """History scenes 1..25: each scene may use either image or video.
+    When both exist for the same scene number, video takes priority.
+    Uploaded video audio is always removed.
+    """
     project_id = str(safe_project_id(project))
     image_folder = Path("assets/history_scene_images") / f"project_{project_id}"
     clip_folder = Path("assets/gemini_clips") / f"project_{project_id}"
+
     image_folder.mkdir(parents=True, exist_ok=True)
     clip_folder.mkdir(parents=True, exist_ok=True)
-    images = sorted(list(uploaded_images or []), key=_sprint194_5_scene_sort_key)[:25]
+
+    images = sorted(
+        list(uploaded_images or []),
+        key=_sprint194_5_scene_sort_key,
+    )[:25]
     narrations = list(clip_narrations or [])
+    videos = list(scene_videos or [])[:25]
 
     def _scene_no(item, fallback):
         name = str(getattr(item, "name", "") or "")
         match = re.search(r"(\d+)", Path(name).stem)
-        return int(match.group(1)) if match else int(fallback)
+        if match:
+            value = int(match.group(1))
+            if 1 <= value <= 25:
+                return value
+        return int(fallback)
 
-    image_scene_numbers = [_scene_no(item, i) for i, item in enumerate(images, start=1)]
-    scene1_missing_from_images = 1 not in set(image_scene_numbers)
+    # Build scene-number -> video map.
+    scene_video_map = {}
+    for fallback_index, video in enumerate(videos, start=1):
+        scene_no = _scene_no(video, fallback_index)
+        if 1 <= scene_no <= 25:
+            scene_video_map[scene_no] = video
+
+    # Backward compatibility for the old Scene-1 uploader.
+    if first_scene_video is not None and 1 not in scene_video_map:
+        scene_video_map[1] = first_scene_video
+
+    image_scene_map = {}
+    for fallback_index, image in enumerate(images, start=1):
+        scene_no = _scene_no(image, fallback_index)
+        if 1 <= scene_no <= 25:
+            image_scene_map[scene_no] = image
+
     clip_map = {}
 
-    def _render_scene1_video():
-        video_name = str(getattr(first_scene_video, "name", "scene_01.mp4") or "scene_01.mp4")
+    def _render_scene_video(scene_no, uploaded_video):
+        video_name = str(
+            getattr(uploaded_video, "name", f"scene_{scene_no:02d}.mp4")
+            or f"scene_{scene_no:02d}.mp4"
+        )
         video_suffix = Path(video_name).suffix.lower()
         if video_suffix not in SUPPORTED_VIRAL_VIDEO_SUFFIXES:
             video_suffix = ".mp4"
-        original_video = clip_folder / f"history_01_source{video_suffix}"
-        first_scene_video.seek(0)
-        original_video.write_bytes(first_scene_video.getbuffer())
-        clip_target = clip_folder / "history_01.mp4"
+
+        original_video = (
+            clip_folder /
+            f"history_{scene_no:02d}_source{video_suffix}"
+        )
+
+        uploaded_video.seek(0)
+        original_video.write_bytes(uploaded_video.getbuffer())
+
+        clip_target = clip_folder / f"history_{scene_no:02d}.mp4"
+
         command = [
-            "ffmpeg", "-y", "-i", str(original_video), "-map", "0:v:0", "-an",
-            "-vf", "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black,fps=30,format=yuv420p",
-            "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
-            "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(clip_target),
+            "ffmpeg",
+            "-y",
+            "-i",
+            str(original_video),
+            "-map",
+            "0:v:0",
+            "-an",
+            "-vf",
+            (
+                "scale=1080:1920:force_original_aspect_ratio=decrease,"
+                "pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black,"
+                "fps=30,format=yuv420p"
+            ),
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "20",
+            "-pix_fmt",
+            "yuv420p",
+            "-movflags",
+            "+faststart",
+            str(clip_target),
         ]
-        completed = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
-        ok = completed.returncode == 0 and clip_target.is_file() and clip_target.stat().st_size > 1024
-        print("[Sprint194-47A History Scene1 Video]", {"ok": ok, "source": str(original_video), "output": str(clip_target)}, flush=True)
+
+        completed = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+        )
+
+        ok = (
+            completed.returncode == 0
+            and clip_target.is_file()
+            and clip_target.stat().st_size > 1024
+        )
+
+        print(
+            "[Sprint195-48 History Scene Video]",
+            {
+                "scene": scene_no,
+                "ok": ok,
+                "source": str(original_video),
+                "output": str(clip_target),
+            },
+            flush=True,
+        )
+
         if not ok:
-            raise RuntimeError("history_scene1_video_failed: " + str((completed.stderr or completed.stdout or "")[-1200:]))
+            raise RuntimeError(
+                f"history_scene_video_failed: scene={scene_no}: "
+                + str(
+                    (completed.stderr or completed.stdout or "")[-1200:]
+                )
+            )
+
         return str(clip_target)
 
-    if first_scene_video is not None and scene1_missing_from_images:
-        clip_map[1] = _render_scene1_video()
+    # Video has priority over image for the same scene.
+    for scene_no in sorted(scene_video_map):
+        clip_map[scene_no] = _render_scene_video(
+            scene_no,
+            scene_video_map[scene_no],
+        )
 
-    for fallback_index, uploaded in enumerate(images, start=1):
-        scene_no = _scene_no(uploaded, fallback_index + (1 if scene1_missing_from_images and first_scene_video is not None else 0))
-        original_name = str(getattr(uploaded, "name", f"scene_{scene_no:02d}.png") or "")
+    # Render image scenes only where no video replacement exists.
+    for scene_no in sorted(image_scene_map):
+        uploaded = image_scene_map[scene_no]
+
+        original_name = str(
+            getattr(uploaded, "name", f"scene_{scene_no:02d}.png") or ""
+        )
         suffix = Path(original_name).suffix.lower()
         if suffix not in {".png", ".jpg", ".jpeg", ".webp"}:
             suffix = ".png"
+
         image_target = image_folder / f"scene_{scene_no:02d}{suffix}"
         uploaded.seek(0)
         image_target.write_bytes(uploaded.getbuffer())
+
+        if scene_no in scene_video_map:
+            continue
+
         clip_target = clip_folder / f"history_{scene_no:02d}.mp4"
-        narration = narrations[scene_no - 1] if scene_no - 1 < len(narrations) else ""
-        seconds = _sprint194_4_estimate_scene_seconds(narration, tts_speed)
-        if scene_no == 1 and first_scene_video is not None:
-            clip_map[1] = _render_scene1_video()
-        else:
-            clip_map[scene_no] = _sprint194_4_render_history_image_clip(image_target, clip_target, seconds, 30, scene_no)
 
-    clip_paths = [clip_map[key] for key in sorted(clip_map)]
-    expected_count = len(images) + (1 if first_scene_video is not None and scene1_missing_from_images else 0)
-    if len(clip_paths) != expected_count:
-        raise RuntimeError(f"history_scene_count_mismatch: expected={expected_count} clips={len(clip_paths)}")
-    print("[Sprint194-47A History Scene Images] READY", {"images": len(images), "scene1_video": bool(first_scene_video is not None), "clips": len(clip_paths), "narrations": len(narrations)}, flush=True)
+        narration = (
+            narrations[scene_no - 1]
+            if scene_no - 1 < len(narrations)
+            else ""
+        )
+
+        seconds = _sprint194_4_estimate_scene_seconds(
+            narration,
+            tts_speed,
+        )
+
+        clip_map[scene_no] = _sprint194_4_render_history_image_clip(
+            image_target,
+            clip_target,
+            seconds,
+            30,
+            scene_no,
+        )
+
+    expected_scene_numbers = sorted(
+        set(image_scene_map) | set(scene_video_map)
+    )
+    clip_paths = [
+        clip_map[scene_no]
+        for scene_no in expected_scene_numbers
+        if scene_no in clip_map
+    ]
+
+    if len(clip_paths) != len(expected_scene_numbers):
+        missing = [
+            scene_no
+            for scene_no in expected_scene_numbers
+            if scene_no not in clip_map
+        ]
+        raise RuntimeError(
+            "history_scene_count_mismatch: "
+            f"expected={len(expected_scene_numbers)} "
+            f"clips={len(clip_paths)} "
+            f"missing={missing}"
+        )
+
+    print(
+        "[Sprint195-48 History Mixed Scenes] READY",
+        {
+            "images": len(image_scene_map),
+            "videos": len(scene_video_map),
+            "scene_numbers": expected_scene_numbers,
+            "clips": len(clip_paths),
+            "narrations": len(narrations),
+        },
+        flush=True,
+    )
+
     return clip_paths
-
 
 def pipeline_result_path(project):
     return RESULT_DIR / f"{safe_project_id(project)}_latest_result.json"
@@ -3353,7 +3504,58 @@ def show_one_click_pipeline():
     pending_preset = st.session_state.pop("sprint194_6_pending_preset", None)
     _restore_intent_194_45 = st.session_state.pop("sprint194_45_restore_intent", None)
     if isinstance(pending_preset, dict) and pending_preset:
-        _sprint193_29_apply_preset_to_session(pending_preset)
+        # Sprint195-53:
+        # When the user is currently working in Korean History mode,
+        # an English History preset may restore its visual sources,
+        # but must never overwrite Korean edit fields with English
+        # subtitles/narrations/SFX.
+        _preset_to_apply_195_53 = dict(pending_preset)
+
+        _intent_content_195_53 = ""
+        _intent_lang_195_53 = ""
+        if isinstance(_restore_intent_194_45, dict):
+            _intent_content_195_53 = str(
+                _restore_intent_194_45.get("content_mode") or ""
+            ).strip()
+            _intent_lang_195_53 = str(
+                _restore_intent_194_45.get("history_language") or ""
+            ).strip()
+
+        _source_mode_195_53 = str(
+            pending_preset.get("production_mode")
+            or pending_preset.get("channel_type")
+            or ""
+        ).strip()
+
+        _block_english_edit_restore_195_53 = (
+            _intent_content_195_53 == "history"
+            and _intent_lang_195_53 == "ko"
+            and _source_mode_195_53 == "history_en"
+        )
+
+        if _block_english_edit_restore_195_53:
+            for _field_195_53 in (
+                "clip_subtitles",
+                "clip_narrations",
+                "clip_subtitle_effects",
+                "clip_sfx",
+                "clip_playback_speeds",
+            ):
+                _preset_to_apply_195_53[_field_195_53] = []
+
+            print(
+                "[Sprint195-53 History Language Restore Guard] BLOCK_EN_TO_KO_EDIT_FIELDS",
+                {
+                    "source_mode": _source_mode_195_53,
+                    "target_language": _intent_lang_195_53,
+                    "visual_sources_preserved": True,
+                },
+                flush=True,
+            )
+
+        _sprint193_29_apply_preset_to_session(
+            _preset_to_apply_195_53
+        )
         # Sprint194-45: loading a Korean source project must not overwrite the user's
         # current History Cookie language choice. If English was selected before Load,
         # keep English selected after the rerun so Oliver/localized render stay active.
@@ -3395,1323 +3597,6 @@ def show_one_click_pipeline():
     st.title("⚡ 쇼츠 원클릭")
     st.caption("쇼핑 쇼츠는 Gemini 영상을, 역사 쇼츠는 장면 이미지를 사용해 TTS·자막·BGM·효과음을 적용합니다.")
     st.caption(f"UI 버전: {UI_VERSION}")
-    st.caption(
-        f"TikTok 수집기 런타임 버전: {getattr(ShoppingVideoSourceFinder, 'VERSION', 'unknown')}"
-    )
-
-    if st.session_state.get("sprint194_25_content_mode", "shopping") == "shopping":
-        with st.expander("🔎 팔리는 제품 자동 발굴 · Sprint196-1", expanded=False):
-            st.caption("국내 NAVER 쇼핑인사이트의 실제 쇼핑 클릭 추이를 비교해 수요가 높고 최근 상승하는 쇼츠형 상품 후보를 찾습니다. TikTok·샤오홍슈는 다음 단계에서 영상 소스 탐색용으로 연결합니다.")
-            _limit196 = st.selectbox("추천 상품 수", [5,10,15,20], index=1, key="sprint196_1_discovery_limit")
-
-            # Sprint196-3H: NAVER 검색 결과는 메모리 캐시가 아니라 JSON 파일로 영구 저장/복원합니다.
-            _discovery_store_196_3h = Path("exports") / "shopping_discovery" / "latest_products.json"
-            if (
-                not st.session_state.get("sprint196_1_discovery_result")
-                and _discovery_store_196_3h.is_file()
-            ):
-                try:
-                    _saved_r196_3h = __import__("json").loads(
-                        _discovery_store_196_3h.read_text(encoding="utf-8")
-                    )
-                    if isinstance(_saved_r196_3h, dict) and list(_saved_r196_3h.get("items") or []):
-                        st.session_state["sprint196_1_discovery_result"] = _saved_r196_3h
-                        print("[Sprint196-3H Product Discovery Restore] READY", {
-                            "path": str(_discovery_store_196_3h),
-                            "count": len(list(_saved_r196_3h.get("items") or [])),
-                        }, flush=True)
-                except Exception as _restore_exc196_3h:
-                    print("[Sprint196-3H Product Discovery Restore] ERROR", repr(_restore_exc196_3h), flush=True)
-
-            _existing_r196_3h = st.session_state.get("sprint196_1_discovery_result") or {}
-            _has_saved_products_196_3h = bool(list(_existing_r196_3h.get("items") or []))
-            _search_label_196_3h = "상품 새로 검색" if _has_saved_products_196_3h else "팔리는 제품 자동 검색"
-
-            if _has_saved_products_196_3h:
-                st.info("이전에 저장한 상품 검색 결과를 불러왔습니다. 새 검색이 필요할 때만 아래 버튼을 누르세요.")
-
-            if st.button(_search_label_196_3h, type="primary", use_container_width=True, key="sprint196_1_discover_products"):
-                with st.spinner("팔리는 제품 후보와 대표 상품사진을 찾고 있습니다..."):
-                    _r196 = ShoppingProductDiscovery.discover(limit=int(_limit196))
-                    if list(_r196.get("items") or []):
-                        _r196 = ShoppingVideoSourceFinder.enrich_product_images_from_naver_shopping(_r196)
-                st.session_state["sprint196_1_discovery_result"] = _r196
-                if list(_r196.get("items") or []):
-                    try:
-                        _discovery_store_196_3h.parent.mkdir(parents=True, exist_ok=True)
-                        _discovery_store_196_3h.write_text(
-                            __import__("json").dumps(
-                                _r196,
-                                ensure_ascii=False,
-                                indent=2,
-                                default=str,
-                            ),
-                            encoding="utf-8",
-                        )
-                        print("[Sprint196-3H Product Discovery Save] READY", {
-                            "path": str(_discovery_store_196_3h),
-                            "count": len(list(_r196.get("items") or [])),
-                        }, flush=True)
-                    except Exception as _save_exc196_3h:
-                        print("[Sprint196-3H Product Discovery Save] ERROR", repr(_save_exc196_3h), flush=True)
-                print("[Sprint196-2 Naver Shopping Insight Discovery] READY", {"ok":bool(_r196.get("ok")), "count":len(list(_r196.get("items") or [])), "naver":bool(_r196.get("naver_datalab_enabled"))}, flush=True)
-            _r196 = st.session_state.get("sprint196_1_discovery_result") or {}
-            _items196 = list(_r196.get("items") or [])
-
-            _missing_images_196_3ah = [
-                x for x in _items196
-                if not str(
-                    x.get("image_url")
-                    or x.get("thumbnail")
-                    or x.get("product_image")
-                    or ""
-                ).startswith("http")
-            ]
-            if _items196 and _missing_images_196_3ah:
-                if st.button(
-                    "NAVER 쇼핑에서 후보 제품사진 가져오기",
-                    use_container_width=True,
-                    key="sprint196_3al_fetch_naver_shopping_images",
-                ):
-                    with st.spinner(
-                        "NAVER 쇼핑 검색 결과에서 후보별 실제 상품카드 사진을 가져오고 있습니다..."
-                    ):
-                        _r196 = ShoppingVideoSourceFinder.enrich_product_images_from_naver_shopping(
-                            _r196
-                        )
-                    st.session_state["sprint196_1_discovery_result"] = _r196
-                    _items196 = list(_r196.get("items") or [])
-                    try:
-                        _discovery_store_196_3h.parent.mkdir(parents=True, exist_ok=True)
-                        _discovery_store_196_3h.write_text(
-                            __import__("json").dumps(
-                                _r196,
-                                ensure_ascii=False,
-                                indent=2,
-                                default=str,
-                            ),
-                            encoding="utf-8",
-                        )
-                    except Exception:
-                        pass
-                    print("[Sprint196-3AL Product Images] READY", {
-                        "count": len([
-                            x for x in _items196
-                            if str(x.get("image_url") or "").startswith("http")
-                        ]),
-                        "total": len(_items196),
-                    }, flush=True)
-                    st.rerun()
-
-            if _items196:
-                st.success(str(_r196.get("summary") or "상품 후보를 찾았습니다."))
-
-                st.caption("NAVER는 팔릴 제품/검색어 확인용입니다. 대표이미지는 참고용이며 TikTok 검색에는 사용하지 않습니다.")
-                _image_cols_196_3ah = st.columns(min(5, max(1, len(_items196))))
-                for _idx_img196_3ah, _item_img196_3ah in enumerate(_items196):
-                    with _image_cols_196_3ah[_idx_img196_3ah % len(_image_cols_196_3ah)]:
-                        _img_url196_3ah = str(
-                            _item_img196_3ah.get("image_url")
-                            or _item_img196_3ah.get("thumbnail")
-                            or _item_img196_3ah.get("product_image")
-                            or ""
-                        )
-                        if _img_url196_3ah.startswith("http"):
-                            try:
-                                st.image(_img_url196_3ah, width=150)
-                            except Exception:
-                                st.caption("이미지 표시 실패")
-                        else:
-                            st.caption("대표사진 없음")
-                        st.caption(
-                            f"{_idx_img196_3ah + 1}. "
-                            f"{str(_item_img196_3ah.get('product') or '')}"
-                        )
-
-                st.dataframe([{"순위":i,"상품":x.get("product"),"분류":x.get("group"),"종합점수":x.get("discovery_score"),"국내수요":x.get("domestic_demand_score"),"최근 클릭지수":x.get("recent_click_ratio"),"증감률(%)":x.get("growth_percent"),"쇼츠적합":x.get("shorts_visual_score"),"대표사진":("있음" if str(x.get("image_url") or "").startswith("http") else "없음")} for i,x in enumerate(_items196,1)], use_container_width=True, hide_index=True)
-                _product_names196_3h = [str(x.get("product") or "") for x in _items196]
-                _selection_store196_3h = Path("exports") / "shopping_discovery" / "selected_product.txt"
-                if "sprint196_1_selected_product" not in st.session_state and _selection_store196_3h.is_file():
-                    try:
-                        _saved_sel196_3h = _selection_store196_3h.read_text(encoding="utf-8").strip()
-                        if _saved_sel196_3h in _product_names196_3h:
-                            st.session_state["sprint196_1_selected_product"] = _saved_sel196_3h
-                    except Exception:
-                        pass
-                _sel196 = st.selectbox("영상 소스를 찾을 상품", _product_names196_3h, key="sprint196_1_selected_product")
-                st.session_state["sprint196_1_selected_product_name"] = _sel196
-
-                _selected_item196_3ah = next(
-                    (
-                        x for x in _items196
-                        if str(x.get("product") or "") == str(_sel196)
-                    ),
-                    {},
-                )
-                _selected_image196_3ah = str(
-                    _selected_item196_3ah.get("image_url")
-                    or _selected_item196_3ah.get("thumbnail")
-                    or _selected_item196_3ah.get("product_image")
-                    or ""
-                )
-                st.session_state["sprint196_3ah_selected_product_image_url"] = _selected_image196_3ah
-                if _selected_image196_3ah.startswith("http"):
-                    _sel_img_col196_3ah, _sel_txt_col196_3ah = st.columns([1, 4])
-                    with _sel_img_col196_3ah:
-                        try:
-                            st.image(_selected_image196_3ah, width=140)
-                        except Exception:
-                            pass
-                    with _sel_txt_col196_3ah:
-                        st.info(
-                            "이 사진을 기준 이미지로 저장했습니다. "
-                            "다음 단계에서 TikTok 영상 프레임과 비교해 동일상품 여부를 판별합니다."
-                        )
-
-                    try:
-                        _reference_store196_3ah = (
-                            Path("exports")
-                            / "shopping_discovery"
-                            / "selected_product_reference.json"
-                        )
-                        _reference_store196_3ah.parent.mkdir(parents=True, exist_ok=True)
-                        _reference_store196_3ah.write_text(
-                            __import__("json").dumps(
-                                {
-                                    "product": _sel196,
-                                    "image_url": _selected_image196_3ah,
-                                    "image_source": _selected_item196_3ah.get("image_source"),
-                                },
-                                ensure_ascii=False,
-                                indent=2,
-                            ),
-                            encoding="utf-8",
-                        )
-                    except Exception:
-                        pass
-
-                try:
-                    _selection_store196_3h.parent.mkdir(parents=True, exist_ok=True)
-                    _selection_store196_3h.write_text(str(_sel196), encoding="utf-8")
-                except Exception:
-                    pass
-                st.caption(
-                    "NAVER에서는 제품만 선택하고, TikTok은 해외 검색용 영문 + 중국어 키워드로 검색합니다. "
-                    "대표이미지와 로그인된 내 TikTok 계정은 사용하지 않습니다. 전용 해외 검색 프로필에서 영문 + 중국어 키워드로 검색합니다."
-                )
-
-                if st.button(
-                    "TikTok 로그인/세션 열기",
-                    use_container_width=True,
-                    key="sprint196_3ab_open_source_login",
-                ):
-                    _login_196_3ab = ShoppingVideoSourceFinder.open_tiktok_xhs_login_browser(
-                        product_name=_sel196,
-                    )
-                    st.session_state["sprint196_3ab_login_result"] = _login_196_3ab
-                    if _login_196_3ab.get("ok"):
-                        st.info(
-                            "TikTok이 열렸습니다. 로그인 상태를 확인한 뒤 창을 닫지 말고 아래 수집 버튼을 누르세요."
-                        )
-                    else:
-                        st.error(str(_login_196_3ab.get("error") or _login_196_3ab.get("message") or "로그인 브라우저 열기 실패"))
-
-                # Sprint196-3BC: TikTok 후보/선택 결과를 디스크에 저장해
-                # 앱 재실행 후에도 다시 검색하지 않고 이어서 사용합니다.
-                _tiktok_saved_dir_3bc = Path("exports") / "shopping_discovery"
-                _tiktok_saved_dir_3bc.mkdir(parents=True, exist_ok=True)
-                _tiktok_search_store_3bc = _tiktok_saved_dir_3bc / "latest_tiktok_search_result.json"
-                _tiktok_pool_store_3bc = _tiktok_saved_dir_3bc / "selected_tiktok_source_pool.json"
-
-                if (
-                    not st.session_state.get("sprint196_3_video_source_result")
-                    and _tiktok_search_store_3bc.is_file()
-                ):
-                    try:
-                        _saved_search_3bc = __import__("json").loads(
-                            _tiktok_search_store_3bc.read_text(encoding="utf-8")
-                        )
-                        if isinstance(_saved_search_3bc, dict) and list(_saved_search_3bc.get("items") or []):
-                            st.session_state["sprint196_3_video_source_result"] = _saved_search_3bc
-                            st.session_state["sprint196_3bc_restored_search"] = True
-                    except Exception:
-                        pass
-
-                if st.session_state.get("sprint196_3bc_restored_search"):
-                    _restored_result_3bc = st.session_state.get("sprint196_3_video_source_result") or {}
-                    st.info(
-                        f"저장된 TikTok 후보 {len(list(_restored_result_3bc.get('items') or []))}개를 불러왔습니다. "
-                        "다시 검색하지 않고 바로 확인·선택·자동편집 준비를 진행할 수 있습니다."
-                    )
-
-                if _tiktok_search_store_3bc.is_file():
-                    if st.button(
-                        "저장된 TikTok 후보 다시 불러오기",
-                        use_container_width=True,
-                        key="sprint196_3bc_reload_saved_candidates",
-                    ):
-                        try:
-                            _saved_search_reload_3bc = __import__("json").loads(
-                                _tiktok_search_store_3bc.read_text(encoding="utf-8")
-                            )
-                            st.session_state["sprint196_3_video_source_result"] = _saved_search_reload_3bc
-                            st.session_state["sprint196_3bc_restored_search"] = True
-                            st.rerun()
-                        except Exception as _reload_exc_3bc:
-                            st.error(f"저장 후보 불러오기 실패: {_reload_exc_3bc}")
-
-                try:
-                    _runtime_queries_3bu = ShoppingVideoSourceFinder._tiktok_query_variants_3bn(_sel196)
-                except Exception:
-                    _runtime_queries_3bu = []
-                if _runtime_queries_3bu:
-                    st.caption(
-                        "🌎 실제 해외 검색어: " + " / ".join(str(x) for x in _runtime_queries_3bu)
-                    )
-
-                st.markdown("#### 🖼️ 동일제품 기준 이미지")
-                st.caption(
-                    "쿠팡 상품 상세에서 제품이 크게 보이는 대표 이미지를 1장 캡처해 넣어주세요. "
-                    "이 이미지는 2차 검색 후 동일제품 판정의 제품 외형 기준으로 사용합니다."
-                )
-                _product_ref_upload_3cd = st.file_uploader(
-                    "쿠팡 제품 기준 이미지 1장",
-                    type=["png", "jpg", "jpeg", "webp"],
-                    accept_multiple_files=False,
-                    key="sprint196_3cd_product_reference_image",
-                )
-                _product_ref_path_3cd = Path(
-                    st.session_state.get("sprint196_3cd_product_reference_path") or ""
-                )
-                if _product_ref_upload_3cd is not None:
-                    try:
-                        _ref_dir_3cd = Path("exports") / "shopping_discovery" / "product_reference_3cd"
-                        _ref_dir_3cd.mkdir(parents=True, exist_ok=True)
-                        _suffix_3cd = Path(
-                            getattr(_product_ref_upload_3cd, "name", "") or ""
-                        ).suffix.lower()
-                        if _suffix_3cd not in {".png", ".jpg", ".jpeg", ".webp"}:
-                            _suffix_3cd = ".jpg"
-                        _product_ref_path_3cd = _ref_dir_3cd / f"latest_product_reference{_suffix_3cd}"
-                        _product_ref_path_3cd.write_bytes(_product_ref_upload_3cd.getbuffer())
-                        st.session_state["sprint196_3cd_product_reference_path"] = str(
-                            _product_ref_path_3cd
-                        )
-                    except Exception as _ref_save_exc_3cd:
-                        st.warning(f"기준 이미지 저장 실패: {_ref_save_exc_3cd}")
-                if _product_ref_path_3cd.is_file():
-                    st.image(str(_product_ref_path_3cd), width=220)
-                    st.success("쿠팡 제품 기준 이미지가 준비됐습니다.")
-
-                if st.button(
-                    "① TikTok에서 제품 영상 찾기",
-                    use_container_width=True,
-                    key="sprint196_3_find_video_sources",
-                ):
-                    with st.spinner(f"{_sel196} 제품의 1차 기준 영상 후보를 최대 15개 찾고 있습니다..."):
-                        _video_sources_196_3 = ShoppingVideoSourceFinder.collect_direct(
-                            product_name=_sel196,
-                            per_platform=15,
-                        )
-                    st.session_state["sprint196_3_video_source_result"] = _video_sources_196_3
-                    try:
-                        _tiktok_search_store_3bc.write_text(
-                            __import__("json").dumps(
-                                _video_sources_196_3,
-                                ensure_ascii=False,
-                                indent=2,
-                                default=str,
-                            ),
-                            encoding="utf-8",
-                        )
-                    except Exception as _save_exc_3bc:
-                        print("[Sprint196-3BC Search Save] WARN", type(_save_exc_3bc).__name__, str(_save_exc_3bc), flush=True)
-                    st.session_state["sprint196_3bc_restored_search"] = False
-
-                st.markdown("#### ✍️ TikTok 수동 검색")
-                st.caption(
-                    "NAVER 후보와 관계없이 직접 검색어를 입력해 TikTok 영상 최대 40개를 찾을 수 있습니다. "
-                    "예: 변기솔, 욕실청소솔, 전동청소브러시"
-                )
-                _manual_keyword_3az = st.text_input(
-                    "TikTok 수동 검색어",
-                    value=st.session_state.get("sprint196_3az_manual_keyword", ""),
-                    placeholder="예: 변기솔",
-                    key="sprint196_3az_manual_keyword_input",
-                )
-                st.session_state["sprint196_3az_manual_keyword"] = str(_manual_keyword_3az or "").strip()
-
-                if st.button(
-                    "입력한 검색어로 TikTok 영상 40개 찾기",
-                    use_container_width=True,
-                    key="sprint196_3az_manual_tiktok_search",
-                    disabled=not bool(str(_manual_keyword_3az or "").strip()),
-                ):
-                    _manual_keyword_clean_3az = str(_manual_keyword_3az or "").strip()
-                    with st.spinner(
-                        f"{_manual_keyword_clean_3az} 검색어로 TikTok 영상 최대 40개를 찾고 있습니다..."
-                    ):
-                        _video_sources_196_3 = ShoppingVideoSourceFinder.collect_direct(
-                            product_name=_manual_keyword_clean_3az,
-                            per_platform=40,
-                        )
-                    _video_sources_196_3 = dict(_video_sources_196_3 or {})
-                    _video_sources_196_3["manual_keyword"] = _manual_keyword_clean_3az
-                    _video_sources_196_3["search_origin"] = "manual_keyword"
-                    st.session_state["sprint196_3_video_source_result"] = _video_sources_196_3
-                    st.session_state["sprint196_3az_active_search_keyword"] = _manual_keyword_clean_3az
-                    try:
-                        _tiktok_search_store_3bc.write_text(
-                            __import__("json").dumps(
-                                _video_sources_196_3,
-                                ensure_ascii=False,
-                                indent=2,
-                                default=str,
-                            ),
-                            encoding="utf-8",
-                        )
-                    except Exception as _save_exc_3bc:
-                        print("[Sprint196-3BC Manual Search Save] WARN", type(_save_exc_3bc).__name__, str(_save_exc_3bc), flush=True)
-                    st.session_state["sprint196_3bc_restored_search"] = False
-                    print("[Sprint196-3AZ Manual TikTok Search] READY", {
-                        "keyword": _manual_keyword_clean_3az,
-                        "count": len(list(_video_sources_196_3.get("items") or [])),
-                        "ok": bool(_video_sources_196_3.get("ok")),
-                    }, flush=True)
-
-                    print("[Sprint196-3 Shopping Video Source Finder] READY", {
-                        "product": _sel196,
-                        "ok": bool(_video_sources_196_3.get("ok")),
-                        "counts": dict(_video_sources_196_3.get("counts") or {}),
-                    }, flush=True)
-
-                _video_sources_196_3 = st.session_state.get("sprint196_3_video_source_result") or {}
-
-                # Sprint196-3BY: 1차 제품 발견 -> 기준 영상 1개 -> 2차 동일제품 검색
-                _items_for_reference_3by = list(
-                    _video_sources_196_3.get("items") or []
-                )
-                if _items_for_reference_3by:
-                    _stage_3by = str(
-                        _video_sources_196_3.get("search_stage")
-                        or "product_discovery_1st"
-                    )
-                    st.caption(
-                        "검색 단계: "
-                        + (
-                            "② 같은 제품 영상 검색 결과"
-                            if _stage_3by == "same_product_2nd"
-                            else "① 제품 발견 검색 결과"
-                        )
-                    )
-
-                    if _stage_3by != "same_product_2nd":
-                        st.markdown("#### 🎯 1차 후보 영상 확인 → 기준 제품 1개 선택")
-                        st.caption(
-                            "각 후보의 `열기`로 실제 TikTok 영상을 확인한 뒤, "
-                            "아래 선택창에서 기준 제품 영상 1개를 지정하세요."
-                        )
-
-                        _ref_labels_3by = []
-                        _ref_map_3by = {}
-
-                        # Sprint196-3CC:
-                        # st.dataframe / st.radio의 큰 동적 DOM을 사용하지 않습니다.
-                        # 고정된 Streamlit columns + link_button + selectbox만 사용해
-                        # 검색 단계 전환 시 React removeChild 충돌 가능성을 줄입니다.
-                        _header_3cc = st.columns([0.6, 1.0, 1.5, 4.8, 0.9])
-                        for _c3cc, _txt3cc in zip(
-                            _header_3cc,
-                            ["순위", "조회수", "계정", "제목", "열기"],
-                        ):
-                            with _c3cc:
-                                st.markdown(f"**{_txt3cc}**")
-
-                        for _idx3by, _it3by in enumerate(_items_for_reference_3by, 1):
-                            _vid3by = str(_it3by.get("video_id") or "")
-                            _creator3by = str(_it3by.get("creator") or "")
-                            _title3by = re.sub(
-                                r"\s+",
-                                " ",
-                                str(_it3by.get("title") or ""),
-                            ).strip()
-                            _url3by = str(_it3by.get("url") or "")
-                            _views3by = int(
-                                _it3by.get("view_count")
-                                or _it3by.get("views")
-                                or _it3by.get("play_count")
-                                or 0
-                            )
-
-                            _label3by = (
-                                f"{_idx3by}. @{_creator3by or '-'} · "
-                                f"{_title3by[:70] or _vid3by}"
-                            )
-                            _ref_labels_3by.append(_label3by)
-                            _ref_map_3by[_label3by] = _it3by
-
-                            _cols_3cc = st.columns([0.6, 1.0, 1.5, 4.8, 0.9])
-                            with _cols_3cc[0]:
-                                st.write(_idx3by)
-                            with _cols_3cc[1]:
-                                st.write(f"{_views3by:,}" if _views3by else "-")
-                            with _cols_3cc[2]:
-                                st.write(f"@{_creator3by}" if _creator3by else "-")
-                            with _cols_3cc[3]:
-                                st.write(_title3by[:120])
-                            with _cols_3cc[4]:
-                                if _url3by:
-                                    st.link_button(
-                                        "열기",
-                                        _url3by,
-                                        use_container_width=True,
-                                    )
-
-                        _selected_ref_label_3by = st.selectbox(
-                            "기준 제품 영상 1개 선택",
-                            _ref_labels_3by,
-                            key="sprint196_3cc_reference_video",
-                        )
-
-                        if st.button(
-                            "② 선택한 제품으로 같은 제품 영상 다시 찾기",
-                            use_container_width=True,
-                            key="sprint196_3cc_same_product_search",
-                        ):
-                            _reference_item_3by = dict(
-                                _ref_map_3by.get(_selected_ref_label_3by) or {}
-                            )
-                            with st.spinner(
-                                "선택한 제품으로 2차 TikTok 검색 후 실제 프레임을 비교하고 있습니다..."
-                            ):
-                                _same_product_result_3by = (
-                                    ShoppingVideoSourceFinder.collect_direct(
-                                        product_name=_sel196,
-                                        per_platform=40,
-                                        reference_item=_reference_item_3by,
-                                    )
-                                )
-
-                                # Sprint196-3CE:
-                                # 2차 검색은 '새로운 같은 제품 영상'을 확보하는 단계입니다.
-                                # 1차 검색에서 이미 본 모든 video_id는 2차 후보에서 제거합니다.
-                                _first_stage_ids_3ce = {
-                                    str(_x3ce.get("video_id") or "").strip()
-                                    for _x3ce in list(_items_for_reference_3by or [])
-                                    if str(_x3ce.get("video_id") or "").strip()
-                                }
-
-                                _second_raw_items_3ce = list(
-                                    _same_product_result_3by.get("items") or []
-                                )
-                                _second_new_items_3ce = [
-                                    dict(_x3ce)
-                                    for _x3ce in _second_raw_items_3ce
-                                    if str(_x3ce.get("video_id") or "").strip()
-                                    not in _first_stage_ids_3ce
-                                ]
-                                _removed_first_stage_3ce = (
-                                    len(_second_raw_items_3ce)
-                                    - len(_second_new_items_3ce)
-                                )
-
-                                _same_product_result_3by = dict(
-                                    _same_product_result_3by or {}
-                                )
-                                _same_product_result_3by["items"] = (
-                                    _second_new_items_3ce
-                                )
-                                _same_product_result_3by[
-                                    "second_stage_raw_count"
-                                ] = len(_second_raw_items_3ce)
-                                _same_product_result_3by[
-                                    "first_stage_duplicate_removed"
-                                ] = _removed_first_stage_3ce
-                                _same_product_result_3by[
-                                    "first_stage_video_ids"
-                                ] = sorted(_first_stage_ids_3ce)
-
-                                # Sprint196-3CJ diagnostics only:
-                                # 콘솔 로그가 파일에 남지 않는 환경에서도 화면에서 직접 확인할 수 있게
-                                # 1차/2차 ID와 2차 검색 자체의 DOM 진단값을 결과 payload에 저장합니다.
-                                _same_product_result_3by[
-                                    "second_stage_diagnostics_3cj"
-                                ] = {
-                                    "first_stage_count": len(_first_stage_ids_3ce),
-                                    "first_stage_ids": sorted(_first_stage_ids_3ce),
-                                    "second_raw_count": len(_second_raw_items_3ce),
-                                    "second_raw_ids": [
-                                        str((x or {}).get("video_id") or "")
-                                        for x in _second_raw_items_3ce
-                                    ],
-                                    "duplicate_removed_count": _removed_first_stage_3ce,
-                                    "second_new_count": len(_second_new_items_3ce),
-                                    "second_new_ids": [
-                                        str((x or {}).get("video_id") or "")
-                                        for x in _second_new_items_3ce
-                                    ],
-                                    "second_search_stage": str(
-                                        _same_product_result_3by.get("search_stage") or ""
-                                    ),
-                                    "second_query_variants": list(
-                                        _same_product_result_3by.get("query_variants") or []
-                                    ),
-                                    "second_current_url": str(
-                                        _same_product_result_3by.get("current_url") or ""
-                                    ),
-                                    "second_dom_diagnostics": dict(
-                                        _same_product_result_3by.get("dom_diagnostics_3ci")
-                                        or {}
-                                    ),
-                                    "second_found_ids_before_filter": list(
-                                        _same_product_result_3by.get(
-                                            "found_video_ids_before_filter_3ci"
-                                        ) or []
-                                    ),
-                                    "second_verified_ids_after_filter": list(
-                                        _same_product_result_3by.get(
-                                            "verified_video_ids_after_filter_3ci"
-                                        ) or []
-                                    ),
-                                }
-
-                                _same_product_result_3by["counts"] = {
-                                    "tiktok": len(_second_new_items_3ce),
-                                    "xiaohongshu": 0,
-                                }
-
-                                print("[Sprint196-3CE Second Stage Dedup]", {
-                                    "first_stage_ids": len(_first_stage_ids_3ce),
-                                    "second_raw": len(_second_raw_items_3ce),
-                                    "removed": _removed_first_stage_3ce,
-                                    "second_new": len(_second_new_items_3ce),
-                                }, flush=True)
-                                print("[Sprint196-3CI 1ST VS 2ND IDS]", {
-                                    "first_stage_ids": sorted(_first_stage_ids_3ce),
-                                    "second_raw_ids": [
-                                        str((x or {}).get("video_id") or "")
-                                        for x in _second_raw_items_3ce
-                                    ],
-                                    "second_new_ids": [
-                                        str((x or {}).get("video_id") or "")
-                                        for x in _second_new_items_3ce
-                                    ],
-                                }, flush=True)
-
-                                if _same_product_result_3by.get("ok"):
-                                    _visual_same_3cb = (
-                                        ShoppingVideoSourceFinder
-                                        .filter_same_product_candidates_by_reference_video_3cb(
-                                            _reference_item_3by,
-                                            list(_same_product_result_3by.get("items") or []),
-                                            max_candidates=40,
-                                            product_reference_image_path=str(
-                                                st.session_state.get(
-                                                    "sprint196_3cd_product_reference_path"
-                                                ) or ""
-                                            ),
-                                        )
-                                    )
-                                    if _visual_same_3cb.get("ok"):
-                                        _same_product_result_3by = dict(
-                                            _same_product_result_3by
-                                        )
-                                        _same_product_result_3by["same_product_visual_filter"] = (
-                                            _visual_same_3cb
-                                        )
-                                        _same_product_result_3by["items"] = list(
-                                            _visual_same_3cb.get("kept_items") or []
-                                        )
-                                        _same_product_result_3by["counts"] = {
-                                            "tiktok": len(
-                                                list(
-                                                    _visual_same_3cb.get("kept_items")
-                                                    or []
-                                                )
-                                            ),
-                                            "xiaohongshu": 0,
-                                        }
-                                        _same_product_result_3by["summary"] = str(
-                                            _visual_same_3cb.get("summary") or ""
-                                        )
-
-                            st.session_state["sprint196_3_video_source_result"] = (
-                                _same_product_result_3by
-                            )
-                            st.session_state["sprint196_3by_reference_item"] = (
-                                _reference_item_3by
-                            )
-                            st.session_state["sprint196_3ay_selected_video_ids"] = []
-                            try:
-                                _tiktok_search_store_3bc.write_text(
-                                    __import__("json").dumps(
-                                        _same_product_result_3by,
-                                        ensure_ascii=False,
-                                        indent=2,
-                                        default=str,
-                                    ),
-                                    encoding="utf-8",
-                                )
-                            except Exception:
-                                pass
-
-                            # 3CC: 즉시 대규모 UI 교체를 강제하지 않습니다.
-                            # 다음 자연스러운 Streamlit rerun에서 2차 결과 화면을 렌더링합니다.
-                            st.success(
-                                str(
-                                    _same_product_result_3by.get("summary")
-                                    or "2차 검색 및 동일제품 판정을 완료했습니다."
-                                )
-                            )
-                            st.session_state["sprint196_3cc_stage_ready"] = True
-                    else:
-                        _ref_vid_3by = str(
-                            _video_sources_196_3.get("reference_video_id") or ""
-                        )
-                        st.success(
-                            "② 같은 제품 2차 검색 결과입니다."
-                            + (f" · 기준 영상ID: {_ref_vid_3by}" if _ref_vid_3by else "")
-                        )
-
-                _second_diag_3cj = dict(
-                    _video_sources_196_3.get("second_stage_diagnostics_3cj") or {}
-                )
-                if _second_diag_3cj:
-                    with st.expander(
-                        "🔎 2차 검색 진단 · 3CJ",
-                        expanded=True,
-                    ):
-                        st.json(_second_diag_3cj)
-
-                _removed_first_stage_3ce = int(
-                    _video_sources_196_3.get("first_stage_duplicate_removed")
-                    or 0
-                )
-                _second_raw_3ce = int(
-                    _video_sources_196_3.get("second_stage_raw_count")
-                    or 0
-                )
-                if _second_raw_3ce:
-                    st.caption(
-                        f"♻️ 2차 검색 중 1차에서 이미 본 영상 "
-                        f"{_removed_first_stage_3ce}개 제외 "
-                        f"({_second_raw_3ce}개 → "
-                        f"{max(0, _second_raw_3ce - _removed_first_stage_3ce)}개)"
-                    )
-
-                _same_visual_state_3cb = dict(
-                    _video_sources_196_3.get("same_product_visual_filter") or {}
-                )
-                if _same_visual_state_3cb:
-                    _input_3cb = int(
-                        _same_visual_state_3cb.get("input_count") or 0
-                    )
-                    _kept_3cb = int(
-                        _same_visual_state_3cb.get("kept_count") or 0
-                    )
-                    st.info(
-                        f"🎯 2차 동일제품 시각 판정: {_input_3cb}개 → {_kept_3cb}개"
-                    )
-
-                _dom_diag_3ci = dict(
-                    _video_sources_196_3.get("dom_diagnostics_3ci") or {}
-                )
-                _found_ids_3ci = list(
-                    _video_sources_196_3.get("found_video_ids_before_filter_3ci")
-                    or []
-                )
-                _verified_ids_3ci = list(
-                    _video_sources_196_3.get("verified_video_ids_after_filter_3ci")
-                    or []
-                )
-                if _dom_diag_3ci:
-                    with st.expander(
-                        "🔎 TikTok 수집 진단 · 3CI",
-                        expanded=True,
-                    ):
-                        st.json({
-                            "현재 URL": _dom_diag_3ci.get("url"),
-                            "DOM 전체 video 링크 수": _dom_diag_3ci.get(
-                                "all_video_anchor_count"
-                            ),
-                            "DOM 고유 video_id 수": _dom_diag_3ci.get(
-                                "unique_video_id_count"
-                            ),
-                            "DOM 화면표시 고유 video_id 수": _dom_diag_3ci.get(
-                                "visible_unique_video_id_count"
-                            ),
-                            "검색 카드 셀렉터 수": _dom_diag_3ci.get(
-                                "selector_counts"
-                            ),
-                            "DOM 고유 video_id": _dom_diag_3ci.get(
-                                "unique_video_ids"
-                            ),
-                            "수집 found 전 필터 ID": _found_ids_3ci,
-                            "최종 검증 후 ID": _verified_ids_3ci,
-                        })
-
-                _strict_sources_3bx = dict(
-                    _video_sources_196_3.get("strict_source_counts") or {}
-                )
-                if _strict_sources_3bx:
-                    st.caption(
-                        "검색 카드 소스: "
-                        + " · ".join(
-                            f"{k} {v}개" for k, v in _strict_sources_3bx.items()
-                        )
-                    )
-
-                _filter_diag_3bt = dict(
-                    _video_sources_196_3.get("candidate_filter_diagnostics") or {}
-                )
-                if _filter_diag_3bt:
-                    st.caption(
-                        "후보 검증: "
-                        f"입력 {_filter_diag_3bt.get('input_found', 0)}개 → "
-                        f"ID누락 {_filter_diag_3bt.get('missing_video_id', 0)}개 제외 → "
-                        f"중복 {_filter_diag_3bt.get('duplicate_video_id', 0)}개 제외 → "
-                        f"최종 {_filter_diag_3bt.get('accepted', 0)}개"
-                    )
-
-                _english_keyword_3br = str(
-                    _video_sources_196_3.get("english_search_keyword") or ""
-                ).strip()
-                if _english_keyword_3br:
-                    st.caption("🌎 해외 TikTok 검색: 영문 + 중국어 키워드 사용")
-
-                _same_added_3bp = int(
-                    _video_sources_196_3.get("same_product_added") or 0
-                )
-                _ko_excluded_3bp = int(
-                    _video_sources_196_3.get("korean_excluded") or 0
-                )
-                if _video_sources_196_3:
-                    st.caption(
-                        f"동일제품 확장검색 추가 {_same_added_3bp}개 · "
-                        "검색 제목으로는 한국 영상 여부를 판단하지 않습니다."
-                    )
-
-                _indexed_added_3bo = int(
-                    _video_sources_196_3.get("indexed_fill_added") or 0
-                )
-                if _video_sources_196_3 and _indexed_added_3bo:
-                    st.info(
-                        f"TikTok 웹 검색 후보에 검색엔진 인덱스 후보 {_indexed_added_3bo}개를 추가해 "
-                        "40개 후보 풀을 확장했습니다."
-                    )
-
-                _scroll_diag_3bm = list(
-                    _video_sources_196_3.get("scroll_diagnostics") or []
-                )
-                if _scroll_diag_3bm:
-                    with st.expander("TikTok 40개 수집 진단", expanded=True):
-                        st.caption(
-                            "각 스크롤 회차에서 TikTok 검색 카드가 실제로 몇 개 보였고, "
-                            "고유 영상이 몇 개까지 누적됐는지 표시합니다."
-                        )
-                        st.dataframe(
-                            [
-                                {
-                                    "회차": row.get("round"),
-                                    "현재카드수": row.get("cards_now"),
-                                    "누적고유영상": row.get("unique_total"),
-                                    "목표": row.get("target"),
-                                    "검색어": row.get("query", ""),
-                                    "정체회차": row.get("stagnant_rounds_before"),
-                                }
-                                for row in _scroll_diag_3bm
-                            ],
-                            use_container_width=True,
-                            hide_index=True,
-                        )
-                        st.info(
-                            f"최종 누적: {int(_video_sources_196_3.get('scroll_final_unique') or 0)}개 / "
-                            f"목표 {int(_video_sources_196_3.get('scroll_target') or 0)}개"
-                        )
-
-                if False and _video_sources_196_3 and list(_video_sources_196_3.get("items") or []):
-                    if st.button(
-                        "대표이미지 ↔ TikTok 영상 프레임 비교",
-                        use_container_width=True,
-                        key="sprint196_3am_visual_match",
-                    ):
-                        with st.spinner(
-                            "NAVER 대표이미지와 TikTok 후보 영상의 실제 프레임을 비교하고 있습니다..."
-                        ):
-                            _visual_items196_3am = (
-                                ShoppingVideoSourceFinder.compare_tiktok_candidates_with_reference(
-                                    product_name=_sel196,
-                                    items=list(_video_sources_196_3.get("items") or []),
-                                    max_candidates=10,
-                                    frames_per_video=4,
-                                )
-                            )
-                        _video_sources_196_3 = dict(_video_sources_196_3)
-                        _video_sources_196_3["items"] = _visual_items196_3am
-                        _video_sources_196_3["visual_match_applied"] = True
-                        st.session_state["sprint196_3_video_source_result"] = _video_sources_196_3
-                        st.success(
-                            "상품 영역 중심 비교를 완료했습니다. "
-                            "흰 배경을 제거한 NAVER 상품영역과 TikTok 프레임의 여러 crop 중 "
-                            "가장 유사한 영역을 기준으로 순위를 다시 계산했습니다."
-                        )
-
-                _statuses_force_196_3i = dict(_video_sources_196_3.get("statuses") or {})
-                if _statuses_force_196_3i:
-                    with st.expander("플랫폼 수집 상태 · 3I 진단", expanded=True):
-                        st.json({
-                            "TikTok": _statuses_force_196_3i.get("tiktok"),
-                            "샤오홍슈": _statuses_force_196_3i.get("xiaohongshu"),
-                            "오류": list(_video_sources_196_3.get("errors") or []),
-                        })
-                if (
-                    _video_sources_196_3
-                    and (
-                        str(_video_sources_196_3.get("product") or "") == str(_sel196)
-                        or str(_video_sources_196_3.get("search_origin") or "") == "manual_keyword"
-                    )
-                ):
-                    _source_items_196_3 = list(_video_sources_196_3.get("items") or [])
-                    if _source_items_196_3:
-                        st.success(str(_video_sources_196_3.get("summary") or "영상 후보를 찾았습니다."))
-                        st.caption("3AX: 개인 TikTok 계정/피드를 사용하지 않고, 공개 검색 결과 카드의 고유 /video/ URL만 후보로 사용합니다. 서버 오류 페이지에서는 후보를 0개로 처리합니다.")
-
-                        # Sprint196-3AS: dataframe 링크 동작에 의존하지 않는 확실한 영상 열기 UI.
-                        _saved_ids_3ay = st.session_state.get(
-                            "sprint196_3ay_selected_video_ids"
-                        )
-                        if not isinstance(_saved_ids_3ay, list):
-                            _saved_ids_3ay = []
-
-                        # 앱 재실행 시 이전 확정 소스 풀의 체크 상태도 복원.
-                        if not _saved_ids_3ay and _tiktok_pool_store_3bc.is_file():
-                            try:
-                                _saved_pool_for_ids_3bc = __import__("json").loads(
-                                    _tiktok_pool_store_3bc.read_text(encoding="utf-8")
-                                )
-                                _saved_ids_3ay = [
-                                    str(x.get("video_id") or "")
-                                    for x in list(_saved_pool_for_ids_3bc.get("items") or [])
-                                    if str(x.get("video_id") or "")
-                                ]
-                                st.session_state["sprint196_3ay_selected_video_ids"] = _saved_ids_3ay
-                            except Exception:
-                                pass
-
-                        _inline_rows_3ay = [
-                            {
-                                "순위": x.get("screen_rank"),
-                                "조회수": (
-                                    f"{int(x.get('view_count') or 0):,}"
-                                    if int(x.get("view_count") or 0) > 0
-                                    else "-"
-                                ),
-                                "계정": x.get("creator"),
-                                "제목": x.get("title"),
-                                "영상 열기": x.get("url"),
-                                "선택": str(x.get("video_id") or "") in _saved_ids_3ay,
-                                "영상ID": x.get("video_id"),
-                            }
-                            for x in _source_items_196_3
-                        ]
-
-                        _display_stage_3ca = str(
-                            _video_sources_196_3.get("search_stage") or ""
-                        )
-                        if _display_stage_3ca == "same_product_2nd":
-                            st.markdown("#### 🎬 ② 같은 제품 후보 · 영상 확인하고 선택")
-                            if _video_sources_196_3.get("same_product_visual_filter"):
-                                st.caption(
-                                    "기준 영상과 실제 프레임 비교를 통과한 동일제품 후보만 표시합니다. "
-                                    "`열기`로 확인한 뒤 쇼츠에 사용할 영상만 체크하세요."
-                                )
-                            else:
-                                st.caption(
-                                    "기준 제품으로 다시 검색한 결과입니다. `열기`로 실제 영상을 확인한 뒤 "
-                                    "쇼츠에 사용할 영상만 체크하세요."
-                                )
-                        else:
-                            st.markdown("#### 🎬 TikTok 검색 결과 · 바로 확인하고 선택")
-                            st.caption(
-                                "기본 정렬: 검색어 관련성 판정을 통과한 후보 안에서 조회수 높은 순으로 표시합니다."
-                            )
-                        st.caption("실제 사용할 영상은 여러 개 선택한 뒤 기존 자동 필터로 장면 후보를 줄이는 방식입니다.")
-                        st.caption(
-                            "각 영상의 `영상 열기` 바로 옆 `선택` 체크박스를 누르세요. "
-                            "아래에 별도 선택창은 없습니다."
-                        )
-
-                        st.markdown("##### 후보 영상 선택")
-                        st.caption(
-                            "프런트 오류를 줄이기 위해 표 편집기 대신 안정적인 체크박스 방식으로 표시합니다."
-                        )
-
-                        _selected_ids_3bn = []
-                        _result_header_3bn = st.columns([0.7, 1.1, 1.5, 4.2, 0.9, 0.8])
-                        for _c3bn, _label3bn in zip(
-                            _result_header_3bn,
-                            ["순위", "조회수", "계정", "제목", "열기", "선택"],
-                        ):
-                            with _c3bn:
-                                st.markdown(f"**{_label3bn}**")
-
-                        for _row_index_3bn, _item3bn in enumerate(_source_items_196_3, 1):
-                            _vid3bn = str(_item3bn.get("video_id") or "")
-                            _rowcols3bn = st.columns([0.7, 1.1, 1.5, 4.2, 0.9, 0.8])
-                            with _rowcols3bn[0]:
-                                st.write(_item3bn.get("screen_rank") or _row_index_3bn)
-                            with _rowcols3bn[1]:
-                                _v3bn = int(_item3bn.get("view_count") or 0)
-                                st.write(f"{_v3bn:,}" if _v3bn > 0 else "-")
-                            with _rowcols3bn[2]:
-                                st.write(str(_item3bn.get("creator") or "")[:22])
-                            with _rowcols3bn[3]:
-                                st.write(str(_item3bn.get("title") or "")[:120])
-                            with _rowcols3bn[4]:
-                                _url3bn = str(_item3bn.get("url") or "")
-                                if _url3bn:
-                                    st.link_button(
-                                        "열기",
-                                        _url3bn,
-                                        use_container_width=True,
-                                    )
-                            with _rowcols3bn[5]:
-                                _checked3bn = st.checkbox(
-                                    "선택",
-                                    value=_vid3bn in _saved_ids_3ay,
-                                    key=f"sprint196_3bn_pick_{_vid3bn}",
-                                    label_visibility="collapsed",
-                                )
-                                if _checked3bn and _vid3bn:
-                                    _selected_ids_3bn.append(_vid3bn)
-
-                        _selected_ids_3ay = list(_selected_ids_3bn)
-                        st.session_state["sprint196_3ay_selected_video_ids"] = _selected_ids_3ay
-
-                        _selected_pool_items_3ay = [
-                            dict(item)
-                            for item in _source_items_196_3
-                            if str(item.get("video_id") or "") in _selected_ids_3ay
-                        ]
-                        _usable_196_3ag = [x for x in _source_items_196_3 if x.get("auto_usable")]
-                        st.session_state["sprint196_3ag_tiktok_usable_candidates"] = _usable_196_3ag
-
-                        # Sprint196-3AY: 선택은 위 검색 결과표 체크박스에서 바로 처리합니다.
-                        _selected_pool_items_3ar = list(_selected_pool_items_3ay)
-                        _pool_store_3ar = (
-                            Path("exports")
-                            / "shopping_discovery"
-                            / "selected_tiktok_source_pool.json"
-                        )
-
-                        st.caption(
-                            f"현재 선택: {len(_selected_pool_items_3ar)}개 영상"
-                        )
-                        if st.button(
-                            f"선택한 {len(_selected_pool_items_3ar)}개 영상으로 자동편집 준비",
-                            use_container_width=True,
-                            key="sprint196_3ay_confirm_source_pool",
-                            disabled=not bool(_selected_pool_items_3ar),
-                        ):
-                            _pool_store_3ar.parent.mkdir(parents=True, exist_ok=True)
-                            _pool_payload_3ar = {
-                                "product": str(
-                                    _video_sources_196_3.get("manual_keyword")
-                                    or _video_sources_196_3.get("product")
-                                    or _sel196
-                                ),
-                                "count": len(_selected_pool_items_3ar),
-                                "mode": "tiktok_multi_source_pool",
-                                "items": _selected_pool_items_3ar,
-                            }
-                            _pool_store_3ar.write_text(
-                                __import__("json").dumps(
-                                    _pool_payload_3ar,
-                                    ensure_ascii=False,
-                                    indent=2,
-                                    default=str,
-                                ),
-                                encoding="utf-8",
-                            )
-                            st.session_state["sprint196_3ar_source_pool"] = _pool_payload_3ar
-                            st.success(
-                                f"TikTok 영상 {len(_selected_pool_items_3ar)}개를 자동편집 소스로 저장했습니다."
-                            )
-                            st.info(
-                                "다음 자동편집 단계: 선택 영상별 사용 가능 구간 추출 → "
-                                "박힌 자막/워터마크가 심한 구간 제외 → 제품 사용/디테일 장면 선별 → "
-                                "기존 쇼핑쇼츠 대본·TTS·자막·BGM·SFX·CTA에 자동 배치."
-                            )
-
-                        _saved_pool_3ar = st.session_state.get("sprint196_3ar_source_pool") or {}
-                        if not _saved_pool_3ar and _pool_store_3ar.is_file():
-                            try:
-                                _saved_pool_3ar = __import__("json").loads(
-                                    _pool_store_3ar.read_text(encoding="utf-8")
-                                )
-                            except Exception:
-                                _saved_pool_3ar = {}
-
-                        if _saved_pool_3ar:
-                            st.info(
-                                f"현재 장면 소스 풀: {int(_saved_pool_3ar.get('count') or 0)}개 영상 · "
-                                "다시 TikTok 검색할 필요 없이 아래 버튼으로 바로 실제 영상 확보를 실행할 수 있습니다."
-                            )
-
-                            if st.button(
-                                "선택 영상 Chrome에서 실제 가져오기 · 기본 구간 추출",
-                                use_container_width=True,
-                                key="sprint196_3bb_acquire_selected_sources",
-                            ):
-                                with st.spinner(
-                                    "선택한 TikTok 영상을 실제 Chrome에서 열어 미디어를 확보하고 기본 사용 구간을 계산하고 있습니다..."
-                                ):
-                                    _acquired_3bb = (
-                                        ShoppingVideoSourceFinder.acquire_selected_tiktok_sources(
-                                            _saved_pool_3ar
-                                        )
-                                    )
-                                st.session_state["sprint196_3bb_acquired_sources"] = _acquired_3bb
-
-                                if _acquired_3bb.get("ok"):
-                                    st.success(str(_acquired_3bb.get("summary") or "소스 확보 완료"))
-                                else:
-                                    st.warning(str(_acquired_3bb.get("summary") or "소스 확보 실패"))
-
-                            _acquired_state_3bb = st.session_state.get(
-                                "sprint196_3bb_acquired_sources"
-                            ) or {}
-                            if _acquired_state_3bb:
-                                _acquired_items_3bb = list(_acquired_state_3bb.get("items") or [])
-                                st.dataframe(
-                                    [
-                                        {
-                                            "계정": x.get("creator"),
-                                            "영상ID": x.get("video_id"),
-                                            "확보": "완료" if x.get("acquire_ok") else "실패",
-                                            "길이(초)": x.get("duration"),
-                                            "기본구간수": len(list(x.get("segment_candidates") or [])),
-                                            "로컬파일": x.get("local_path"),
-                                        }
-                                        for x in _acquired_items_3bb
-                                    ],
-                                    use_container_width=True,
-                                    hide_index=True,
-                                )
-                                if _acquired_state_3bb.get("ok"):
-                                    st.info(
-                                        "이번 단계는 원본 확보 + 3초 기본 구간 생성까지만 합니다. "
-                                        "먼저 실제 영상의 한국어 자막/나레이션을 검사한 뒤, 자막/워터마크와 장면 품질을 선별합니다."
-                                    )
-
-                                    if st.button(
-                                        "실제 영상 한국어 자막·나레이션 검사",
-                                        use_container_width=True,
-                                        key="sprint196_3bq_korean_language_filter",
-                                    ):
-                                        with st.spinner(
-                                            "선택한 TikTok 영상의 실제 음성과 화면 자막을 분석하고 있습니다..."
-                                        ):
-                                            _language_filter_3bq = (
-                                                ShoppingVideoSourceFinder.analyze_korean_content_in_acquired_sources(
-                                                    _acquired_state_3bb
-                                                )
-                                            )
-                                        st.session_state["sprint196_3bq_language_filter"] = _language_filter_3bq
-                                        if _language_filter_3bq.get("ok"):
-                                            st.success(str(_language_filter_3bq.get("summary") or "언어 검사 완료"))
-                                        else:
-                                            st.warning(str(_language_filter_3bq.get("summary") or "언어 검사 실패"))
-
-                                    _language_state_3bq = st.session_state.get(
-                                        "sprint196_3bq_language_filter"
-                                    ) or {}
-                                    if _language_state_3bq:
-                                        st.dataframe(
-                                            [
-                                                {
-                                                    "계정": x.get("creator"),
-                                                    "영상ID": x.get("video_id"),
-                                                    "음성언어": x.get("voice_language") or "-",
-                                                    "한국어음성": "예" if x.get("korean_voice") else "아니오",
-                                                    "한국어자막": "예" if x.get("korean_text_overlay") else "아니오",
-                                                    "자막확신": x.get("korean_text_confidence"),
-                                                    "판정": "제외" if x.get("language_filter_status") == "excluded_korean" else "사용",
-                                                }
-                                                for x in list(_language_state_3bq.get("items") or [])
-                                            ],
-                                            use_container_width=True,
-                                            hide_index=True,
-                                        )
-                                        if _language_state_3bq.get("ok"):
-                                            _kept_items_3bq = list(_language_state_3bq.get("kept_items") or [])
-                                            if _kept_items_3bq:
-                                                _filtered_acquired_3bq = dict(_acquired_state_3bb)
-                                                _filtered_acquired_3bq["items"] = _kept_items_3bq
-                                                _filtered_acquired_3bq["count"] = len(_kept_items_3bq)
-                                                st.session_state["sprint196_3bb_acquired_sources"] = _filtered_acquired_3bq
-                                                st.info(
-                                                    f"한국어 콘텐츠를 제외한 {_language_state_3bq.get('kept_count', 0)}개 영상만 "
-                                                    "아래 품질 분석 단계로 넘깁니다."
-                                                )
-
-                                    if st.button(
-                                        "기본 구간 품질 분석 · 자동편집 장면 추천",
-                                        use_container_width=True,
-                                        key="sprint196_3be_analyze_segments",
-                                    ):
-                                        with st.spinner(
-                                            "각 구간을 분석하고 있습니다. 같은 원본 반복과 박힌 자막·워터마크 위험 구간은 자동 제외합니다..."
-                                        ):
-                                            _segment_analysis_3be = (
-                                                ShoppingVideoSourceFinder.analyze_acquired_tiktok_segments(
-                                                    _acquired_state_3bb
-                                                )
-                                            )
-                                        st.session_state["sprint196_3be_segment_analysis"] = _segment_analysis_3be
-                                        if _segment_analysis_3be.get("ok"):
-                                            st.success(
-                                                str(_segment_analysis_3be.get("summary") or "구간 분석 완료")
-                                            )
-                                        else:
-                                            st.warning(
-                                                str(_segment_analysis_3be.get("summary") or "분석할 구간이 없습니다.")
-                                            )
-
-                                    _segment_state_3be = st.session_state.get(
-                                        "sprint196_3be_segment_analysis"
-                                    ) or {}
-                                    if _segment_state_3be:
-                                        _recommended_3be = list(
-                                            _segment_state_3be.get("recommended_segments") or []
-                                        )
-                                        st.dataframe(
-                                            [
-                                                {
-                                                    "계정": x.get("creator"),
-                                                    "영상ID": x.get("video_id"),
-                                                    "구간": f"{x.get('start')}~{x.get('end')}초",
-                                                    "품질점수": x.get("quality_score"),
-                                                    "움직임": x.get("motion_score"),
-                                                    "자막/워터마크위험": x.get("overlay_risk"),
-                                                    "텍스트형밀도": x.get("center_text_density"),
-                                                    "화면중복": "중복" if x.get("visual_duplicate") else "",
-                                                    "유사도": x.get("visual_duplicate_similarity"),
-                                                    "추천": "사용" if x.get("recommended") else "제외",
-                                                }
-                                                for x in list(_segment_state_3be.get("segments") or [])
-                                            ],
-                                            use_container_width=True,
-                                            hide_index=True,
-                                        )
-                                        if _recommended_3be:
-                                            st.info(
-                                                f"자동편집 우선 장면 {len(_recommended_3be)}개를 준비했습니다. "
-                                                "같은 원본뿐 아니라 서로 다른 게시물의 비슷한 화면도 중복 제외하고, "
-                                                "중앙·상단까지 포함해 박힌 자막/워터마크 위험이 낮은 구간만 통과시켰습니다."
-                                            )
-
-                                            if st.button(
-                                                f"추천 {len(_recommended_3be)}개 장면 실제 클립 생성 · 쇼핑쇼츠에 적용",
-                                                use_container_width=True,
-                                                key="sprint196_3bf_build_and_apply_clips",
-                                            ):
-                                                with st.spinner(
-                                                    "추천 구간을 실제 MP4 클립으로 자르고 기존 쇼핑쇼츠 편집 소스로 연결하고 있습니다..."
-                                                ):
-                                                    _built_clips_3bf = (
-                                                        ShoppingVideoSourceFinder.build_recommended_tiktok_clips(
-                                                            _segment_state_3be,
-                                                            max_clips=8,
-                                                        )
-                                                    )
-                                                st.session_state["sprint196_3bf_built_clips"] = _built_clips_3bf
-
-                                                if _built_clips_3bf.get("ok"):
-                                                    _clip_paths_3bf = [
-                                                        str(x)
-                                                        for x in list(_built_clips_3bf.get("clip_paths") or [])
-                                                        if str(x) and Path(str(x)).is_file()
-                                                    ]
-                                                    # 기존 쇼핑쇼츠 '이전 작업 영상 경로' 계약을 그대로 이용.
-                                                    # workflow/video renderer는 수정하지 않음.
-                                                    st.session_state["sprint193_29_loaded_clip_paths"] = _clip_paths_3bf
-                                                    st.session_state["sprint195_43_shopping_video_source_mode"] = "외부소스형"
-                                                    st.session_state["sprint196_3bf_auto_source_applied"] = True
-
-                                                    st.success(
-                                                        f"TikTok 추천 장면 {_built_clips_3bf.get('count')}개를 "
-                                                        "기존 쇼핑쇼츠 장면 소스로 연결했습니다."
-                                                    )
-                                                    st.info(
-                                                        "아래 제작 모드의 쇼핑쇼츠 편집에서는 이 클립들을 다시 업로드하지 않고 사용합니다. "
-                                                        "기존 대본·TTS·자막·BGM·SFX·CTA 렌더러는 그대로 유지합니다."
-                                                    )
-                                                    st.rerun()
-                                                else:
-                                                    st.warning(
-                                                        str(
-                                                            _built_clips_3bf.get("summary")
-                                                            or "추천 장면 클립 생성에 실패했습니다."
-                                                        )
-                                                    )
-
-                                        _built_state_3bf = st.session_state.get(
-                                            "sprint196_3bf_built_clips"
-                                        ) or {}
-                                        if _built_state_3bf.get("ok"):
-                                            st.dataframe(
-                                                [
-                                                    {
-                                                        "장면": x.get("scene_index"),
-                                                        "계정": x.get("creator"),
-                                                        "영상ID": x.get("video_id"),
-                                                        "원본구간": f"{x.get('start')}~{x.get('end')}초",
-                                                        "클립길이": x.get("clip_duration"),
-                                                        "클립파일": x.get("clip_path"),
-                                                    }
-                                                    for x in list(_built_state_3bf.get("items") or [])
-                                                    if x.get("clip_ok")
-                                                ],
-                                                use_container_width=True,
-                                                hide_index=True,
-                                            )
-                        st.caption(
-                            f"1차 자동 선별: 사용 후보 {len(_usable_196_3ag)}개 / 전체 {len(_source_items_196_3)}개. "
-                            "자동점수는 참고용입니다. 실제 사용할 영상은 아래에서 직접 여러 개 선택해 소스 풀로 확정합니다."
-                        )
-                        _diag_xhs_ui_196_3g = dict(
-                            (_video_sources_196_3.get("statuses") or {}).get("xiaohongshu_diagnostics")
-                            or {}
-                        )
-                        if False and _diag_xhs_ui_196_3g:
-                            with st.expander("샤오홍슈 수집 진단", expanded=True):
-                                st.json({
-                                    "현재 URL": _diag_xhs_ui_196_3g.get("url"),
-                                    "페이지 제목": _diag_xhs_ui_196_3g.get("title"),
-                                    "링크/카드 수": _diag_xhs_ui_196_3g.get("anchor_counts"),
-                                    "__INITIAL_STATE__": _diag_xhs_ui_196_3g.get("initial_state_exists"),
-                                    "search 키": _diag_xhs_ui_196_3g.get("search_keys"),
-                                    "feeds 형태": _diag_xhs_ui_196_3g.get("feeds_kind"),
-                                    "feeds 개수": _diag_xhs_ui_196_3g.get("feeds_count"),
-                                    "본문 앞부분": _diag_xhs_ui_196_3g.get("body_preview"),
-                                    "진단 파일": (_video_sources_196_3.get("statuses") or {}).get("xiaohongshu_diagnostics_path"),
-                                })
-                    else:
-                        st.warning(str(_video_sources_196_3.get("summary") or "영상 후보를 찾지 못했습니다."))
-                        _statuses_196_3 = dict(_video_sources_196_3.get("statuses") or {})
-                        if any(bool((v or {}).get("needs_login_or_verification")) for v in _statuses_196_3.values()):
-                            st.info("로그인 또는 보안 인증이 필요한 플랫폼이 있습니다. 위 로그인/세션 저장 버튼으로 최초 1회 로그인한 뒤 Chrome을 닫고 다시 수집하세요.")
-                        _errors_196_3 = list(_video_sources_196_3.get("errors") or [])
-                        if _errors_196_3:
-                            st.code("\n".join(_errors_196_3[-6:]))
-            elif _r196:
-                st.warning(str(_r196.get("summary") or "상품 후보를 찾지 못했습니다."))
-                if str(_r196.get("status") or "") == "naver_credentials_missing":
-                    st.info("PowerShell에서 NAVER_API_HUB_CLIENT_ID / NAVER_API_HUB_CLIENT_SECRET을 설정한 뒤 다시 검색하면 됩니다.")
-                _errs196 = list((_r196.get("tiktok") or {}).get("errors") or [])
-                if _errs196:
-                    st.code("\n".join(_errs196[-3:]))
 
     st.markdown("### 🎯 제작 모드")
     # Sprint194-25: keep a permanently stable widget tree.
@@ -5173,7 +4058,7 @@ def show_one_click_pipeline():
             "TTS 말하기 속도",
             min_value=0.5,
             max_value=2.0,
-            value=1.0,
+            value=1.2,
             step=0.1,
             format="%.1f배",
             key="sprint193_1_tts_speed",
@@ -5193,10 +4078,10 @@ def show_one_click_pipeline():
 
     with audio_c3:
         bgm_volume_percent = st.slider(
-            "BGM 볼륨",
+            "BGM ??",
             min_value=0,
-            max_value=100,
-            value=10,
+            max_value=200,
+            value=20,
             step=5,
             format="%d%%",
             key="sprint193_1_bgm_volume",
@@ -5204,6 +4089,7 @@ def show_one_click_pipeline():
 
     uploaded_history_scene_images = []
     uploaded_history_scene1_video = None
+    uploaded_history_scene_videos = []
     uploaded_gemini_clips = []
     history_expected_scene_count = 0
     shopping_video_source_mode = str(
@@ -5212,26 +4098,31 @@ def show_one_click_pipeline():
     if is_history_mode:
         st.info("🎨 역사쿠키 스타일 고정: 귀엽고 친근한 2D 웹툰·카툰 캐릭터 / 동글동글한 형태 / 풍부한 표정 / 실사풍 3D 제외")
         st.markdown("#### 역사 장면 이미지 업로드 · 최대 25장")
-        uploaded_history_scene1_video = st.file_uploader(
-            "1번 장면 영상 (선택 · MP4/MOV)",
+        uploaded_history_scene_videos = st.file_uploader(
+            "\uc5ed\uc0ac \uc7a5\uba74 \uc601\uc0c1 \uc120\ud0dd \u00b7 \ucd5c\ub300 25\uac1c (\uc120\ud0dd)",
             type=["mp4", "mov", "mkv", "webm", "m4v"],
-            accept_multiple_files=False,
-            key="sprint194_47_history_scene1_video",
-            help="선택하면 1번 장면 이미지는 기준/편집용으로 유지하고, 최종 영상의 1번 장면만 이 영상으로 교체합니다. 영상 자체의 오디오는 제거됩니다.",
+            accept_multiple_files=True,
+            key="sprint194_48_history_scene_videos",
+            help="\uc601\uc0c1\uc774 \uc788\ub294 \uc7a5\uba74\ub9cc \uc120\ud0dd\ud558\uc138\uc694. 1.mp4~25.mp4\ucc98\ub7fc \ud30c\uc77c\uba85\uc5d0 \uc7a5\uba74 \ubc88\ud638\ub97c \ub123\uc73c\uba74 \uac19\uc740 \ubc88\ud638\uc758 \uc774\ubbf8\uc9c0 \ub300\uc2e0 \uc601\uc0c1\uc774 \uc0ac\uc6a9\ub429\ub2c8\ub2e4. \uc601\uc0c1 \uc6d0\ubcf8 \uc624\ub514\uc624\ub294 \uc81c\uac70\ub429\ub2c8\ub2e4.",
         )
-        if uploaded_history_scene1_video is not None:
-            st.success(f"1번 장면 영상 적용: {uploaded_history_scene1_video.name} · 원본 프레임 유지, 오디오 제거")
-        history_expected_scene_count = st.number_input(
-            "이번 영상의 장면 수", min_value=1, max_value=25, value=17, step=1,
-            key="sprint194_5_expected_history_scene_count",
-            help="17컷 영상이면 17로 두세요. 업로드 감지 수와 다르면 제작 전에 누락 파일을 알려드립니다.",
+        uploaded_history_scene_videos = list(uploaded_history_scene_videos or [])[:25]
+        uploaded_history_scene1_video = next(
+            (
+                _v for _v in uploaded_history_scene_videos
+                if re.search(r"(^|\\D)0*1(\\D|$)", Path(str(getattr(_v, "name", "") or "")).stem)
+            ),
+            None,
         )
+
+        # Sprint195-52: scene count is detected automatically
+        # from uploaded image/video scene numbers.
+        history_expected_scene_count = 0
         primary_history_images = st.file_uploader(
             "편집 순서대로 장면 이미지 선택",
             type=["png", "jpg", "jpeg", "webp"],
             accept_multiple_files=True,
             key="sprint194_2_history_scene_images",
-            help="1.png~17.png처럼 번호를 붙이면 자동으로 숫자 순서로 정렬합니다.",
+            help="1.png~25.png?? ??? ??? ???? ?? ??? ?????.",
         )
         extra_history_images = st.file_uploader(
             "누락 이미지 추가 (선택)",
@@ -5244,34 +4135,103 @@ def show_one_click_pipeline():
             primary_history_images, extra_history_images
         )
         history_scene_count = len(uploaded_history_scene_images)
-        if history_scene_count:
-            detected_names = [str(getattr(item, "name", "") or "") for item in uploaded_history_scene_images]
-            st.write(f"**업로드 감지: {history_scene_count}장 / 목표: {int(history_expected_scene_count)}장**")
-            st.caption("감지 파일: " + ", ".join(detected_names))
-            numeric_ids = []
-            for name in detected_names:
-                match = re.search(r"(\d+)", Path(name).stem)
-                if match:
-                    numeric_ids.append(int(match.group(1)))
-            expected_ids = set(range(1, int(history_expected_scene_count) + 1))
-            detected_id_set = set(numeric_ids)
-            scene1_video_replaces_missing_image = bool(uploaded_history_scene1_video is not None and 1 not in detected_id_set)
-            effective_scene_count = history_scene_count + (1 if scene1_video_replaces_missing_image else 0)
-            covered_ids = detected_id_set | ({1} if scene1_video_replaces_missing_image else set())
-            missing_ids = sorted(expected_ids - covered_ids) if numeric_ids else []
-            if effective_scene_count == int(history_expected_scene_count) and not missing_ids:
-                if scene1_video_replaces_missing_image:
-                    st.success(f"1번 영상 + 역사 장면 이미지 {history_scene_count}장 감지 → 총 {effective_scene_count}장면 정상입니다.")
-                else:
-                    st.success(f"역사 장면 이미지 {history_scene_count}장 감지 → 편집창 {history_scene_count}개를 1:1로 생성합니다.")
-            else:
-                missing_text = f" 누락 번호: {', '.join(map(str, missing_ids))}" if missing_ids else ""
-                st.error(
-                    f"선택한 장면 수와 감지 수가 다릅니다. 목표 {int(history_expected_scene_count)}장 / 유효 장면 {effective_scene_count}장 (이미지 {history_scene_count}장).{missing_text}"
+
+        detected_names = [
+            str(getattr(item, "name", "") or "")
+            for item in uploaded_history_scene_images
+        ]
+
+        image_id_set = set()
+        for name in detected_names:
+            match = re.search(r"(\d+)", Path(name).stem)
+            if match:
+                scene_no = int(match.group(1))
+                if 1 <= scene_no <= 25:
+                    image_id_set.add(scene_no)
+
+        video_names = [
+            str(getattr(item, "name", "") or "")
+            for item in list(uploaded_history_scene_videos or [])
+        ]
+
+        video_id_set = set()
+        for name in video_names:
+            match = re.search(r"(\d+)", Path(name).stem)
+            if match:
+                scene_no = int(match.group(1))
+                if 1 <= scene_no <= 25:
+                    video_id_set.add(scene_no)
+
+        expected_ids = set(
+            range(1, int(history_expected_scene_count) + 1)
+        )
+        covered_ids = image_id_set | video_id_set
+
+        # Sprint195-52:
+        # Highest uploaded scene number becomes this video's scene count.
+        history_expected_scene_count = (
+            max(covered_ids) if covered_ids else 0
+        )
+
+        expected_ids = set(
+            range(1, history_expected_scene_count + 1)
+        )
+
+        effective_scene_count = len(covered_ids)
+        missing_ids = sorted(expected_ids - covered_ids)
+
+        if detected_names or video_names:
+            st.write(
+                f"**\uc5c5\ub85c\ub4dc \uac10\uc9c0: {effective_scene_count}\uc7a5\uba74 / "
+                f"\ubaa9\ud45c: {int(history_expected_scene_count)}\uc7a5\uba74**"
+            )
+
+            if detected_names:
+                st.caption(
+                    "\uc774\ubbf8\uc9c0: " + ", ".join(detected_names)
                 )
+
+            if video_names:
+                st.caption(
+                    "\uc601\uc0c1: " + ", ".join(video_names)
+                )
+
+            if (
+                effective_scene_count
+                == int(history_expected_scene_count)
+                and not missing_ids
+            ):
+                st.success(
+                    f"\uc5ed\uc0ac \uc7a5\uba74 \uc18c\uc2a4 "
+                    f"{effective_scene_count}\uac1c \uc815\uc0c1 \u00b7 "
+                    f"\uc774\ubbf8\uc9c0 {len(image_id_set)}\uac1c / "
+                    f"\uc601\uc0c1 {len(video_id_set)}\uac1c"
+                )
+            else:
+                missing_text = (
+                    f" \ub204\ub77d \ubc88\ud638: "
+                    f"{', '.join(map(str, missing_ids))}"
+                    if missing_ids else ""
+                )
+                st.error(
+                    f"\uc120\ud0dd\ud55c \uc7a5\uba74 \uc218\uc640 "
+                    f"\uac10\uc9c0 \uc218\uac00 \ub2e4\ub985\ub2c8\ub2e4. "
+                    f"\ubaa9\ud45c {int(history_expected_scene_count)}\uc7a5 / "
+                    f"\uc720\ud6a8 \uc7a5\uba74 {effective_scene_count}\uc7a5 "
+                    f"(\uc774\ubbf8\uc9c0 {len(image_id_set)}\uac1c / "
+                    f"\uc601\uc0c1 {len(video_id_set)}\uac1c)."
+                    f"{missing_text}"
+                )
+
             print(
-                "[Sprint194-5 History Upload Count]",
-                {"expected": int(history_expected_scene_count), "detected": history_scene_count, "files": detected_names, "missing": missing_ids},
+                "[Sprint195-51 History Upload Count]",
+                {
+                    "expected": int(history_expected_scene_count),
+                    "images": sorted(image_id_set),
+                    "videos": sorted(video_id_set),
+                    "covered": sorted(covered_ids),
+                    "missing": missing_ids,
+                },
                 flush=True,
             )
     else:
@@ -5326,43 +4286,123 @@ def show_one_click_pipeline():
         if str(item or "").strip() and Path(str(item)).is_file()
     ]
     if is_history_mode:
-        _history_editor_images = list(uploaded_history_scene_images or [])
-        _history_image_ids = []
-        for _item in _history_editor_images:
-            _name = str(getattr(_item, "name", "") or "")
+        _history_editor_images = list(
+            uploaded_history_scene_images or []
+        )
+        _history_editor_videos = list(
+            uploaded_history_scene_videos or []
+        )
+
+        def _history_scene_no_195_49(item, fallback):
+            _name = str(getattr(item, "name", "") or "")
             _match = re.search(r"(\d+)", Path(_name).stem)
             if _match:
-                _history_image_ids.append(int(_match.group(1)))
-        _scene1_video_is_source = bool(uploaded_history_scene1_video is not None)
+                _value = int(_match.group(1))
+                if 1 <= _value <= 25:
+                    return _value
+            return int(fallback)
 
-        # Sprint194-47C: Scene 1 video must replace only Scene 1, never collapse
-        # an already-loaded 17-scene project down to one row.
-        # Priority:
-        #   A) newly uploaded 2..N images -> [scene1 video] + those images
-        #   B) no new images but previous project clips exist -> replace loaded scene 1 only
-        #   C) no scene1 video -> normal image/upload/loaded behavior
-        if _scene1_video_is_source and _history_editor_images:
-            _images_without_scene1_194_47c = []
-            for _img in _history_editor_images:
-                _nm = str(getattr(_img, "name", "") or "")
-                _m = re.search(r"(\d+)", Path(_nm).stem)
-                if _m and int(_m.group(1)) == 1:
-                    continue
-                _images_without_scene1_194_47c.append(_img)
-            newly_uploaded_sources = [uploaded_history_scene1_video] + _images_without_scene1_194_47c
-        elif _scene1_video_is_source and loaded_gemini_clip_paths:
-            editor_clip_sources = [uploaded_history_scene1_video] + list(loaded_gemini_clip_paths[1:])
-            newly_uploaded_sources = []
-            st.caption(
-                f"1번 영상만 교체하고 이전 작업의 2~{len(editor_clip_sources)}번 장면을 그대로 유지합니다."
+        _history_image_map_195_49 = {}
+        for _fallback, _item in enumerate(
+            _history_editor_images,
+            start=1,
+        ):
+            _scene_no = _history_scene_no_195_49(
+                _item,
+                _fallback,
             )
-            print("[Sprint194-47C History Scene1 Merge] LOADED_ROWS_PRESERVED", {
-                "scene1_video": True,
-                "loaded_before": len(loaded_gemini_clip_paths),
-                "editor_after": len(editor_clip_sources),
-            }, flush=True)
+            _history_image_map_195_49[_scene_no] = _item
+
+        _history_video_map_195_49 = {}
+        for _fallback, _item in enumerate(
+            _history_editor_videos,
+            start=1,
+        ):
+            _scene_no = _history_scene_no_195_49(
+                _item,
+                _fallback,
+            )
+            _history_video_map_195_49[_scene_no] = _item
+
+        _history_video_scene_ids = set(
+            _history_video_map_195_49.keys()
+        )
+        _history_scene_video_count = len(
+            _history_video_scene_ids
+        )
+
+        # Compatibility flag for old logging only.
+        _scene1_video_is_source = (
+            1 in _history_video_scene_ids
+        )
+
+        if (
+            _history_image_map_195_49
+            or _history_video_map_195_49
+        ):
+            _history_source_map_195_49 = {}
+
+            # Previous rendered clips are fallback sources only.
+            for _index, _path in enumerate(
+                loaded_gemini_clip_paths,
+                start=1,
+            ):
+                if _index <= 25:
+                    _history_source_map_195_49[_index] = _path
+
+            # New images replace previous sources.
+            _history_source_map_195_49.update(
+                _history_image_map_195_49
+            )
+
+            # New videos have highest priority.
+            _history_source_map_195_49.update(
+                _history_video_map_195_49
+            )
+
+            _uploaded_scene_ids_195_49 = (
+                set(_history_image_map_195_49.keys())
+                | set(_history_video_map_195_49.keys())
+            )
+
+            _max_uploaded_scene_195_49 = max(
+                _uploaded_scene_ids_195_49
+            )
+
+            _target_scene_count_195_49 = max(
+                int(history_expected_scene_count or 0),
+                _max_uploaded_scene_195_49,
+            )
+
+            newly_uploaded_sources = [
+                _history_source_map_195_49[_scene_no]
+                for _scene_no in range(
+                    1,
+                    _target_scene_count_195_49 + 1,
+                )
+                if _scene_no in _history_source_map_195_49
+            ]
+
+            print(
+                "[Sprint195-49 History Editor Mixed Sources]",
+                {
+                    "images": sorted(
+                        _history_image_map_195_49.keys()
+                    ),
+                    "videos": sorted(
+                        _history_video_map_195_49.keys()
+                    ),
+                    "loaded": len(
+                        loaded_gemini_clip_paths
+                    ),
+                    "editor_sources": len(
+                        newly_uploaded_sources
+                    ),
+                },
+                flush=True,
+            )
         else:
-            newly_uploaded_sources = list(_history_editor_images)
+            newly_uploaded_sources = []
     else:
         newly_uploaded_sources = list(uploaded_gemini_clips or [])
 
@@ -5371,7 +4411,7 @@ def show_one_click_pipeline():
         loaded_gemini_clip_paths = []
         st.session_state["sprint193_29_loaded_clip_paths"] = []
         st.caption(
-            "새로 업로드한 장면 소스 순서대로 연결합니다. 1번 영상은 Scene 1만 교체하고 나머지 장면은 그대로 유지합니다."
+            "\uc0c8\ub85c \uc5c5\ub85c\ub4dc\ud55c \uc7a5\uba74 \uc18c\uc2a4\ub97c \uc7a5\uba74 \ubc88\ud638 \uae30\uc900\uc73c\ub85c \uc5f0\uacb0\ud569\ub2c8\ub2e4. \uc601\uc0c1\uc774 \uc788\ub294 \uc7a5\uba74\uc740 \uac19\uc740 \ubc88\ud638\uc758 \uc774\ubbf8\uc9c0 \ub300\uc2e0 \uc601\uc0c1\uc744 \uc0ac\uc6a9\ud569\ub2c8\ub2e4."
             if is_history_mode
             else "새로 업로드한 영상 목록의 순서대로 연결합니다. 기존 불러온 영상 대신 새 영상을 사용합니다."
         )
@@ -5848,13 +4888,28 @@ def show_one_click_pipeline():
             direct_errors.append("확정 대본을 입력해 주세요.")
         if not editor_clip_sources:
             direct_errors.append("역사 장면 이미지를 한 장 이상 업로드하거나 이전 작업을 불러와 주세요." if is_history_mode else "Gemini 영상 파일을 업로드하거나 이전 작업을 불러와 주세요.")
-        if is_history_mode and uploaded_history_scene_images:
+        if is_history_mode and (uploaded_history_scene_images or uploaded_history_scene_videos):
             _ids = []
             for _item in uploaded_history_scene_images:
                 _m = re.search(r"(\d+)", Path(str(getattr(_item, "name", "") or "")).stem)
                 if _m:
                     _ids.append(int(_m.group(1)))
-            _effective_count = len(uploaded_history_scene_images) + (1 if uploaded_history_scene1_video is not None and 1 not in set(_ids) else 0)
+            _video_ids = set()
+            for _video in list(uploaded_history_scene_videos or []):
+                _video_name = str(
+                    getattr(_video, "name", "") or ""
+                )
+                _video_match = re.search(
+                    r"(\d+)",
+                    Path(_video_name).stem,
+                )
+                if _video_match:
+                    _video_no = int(_video_match.group(1))
+                    if 1 <= _video_no <= 25:
+                        _video_ids.add(_video_no)
+            _effective_count = len(
+                set(_ids) | _video_ids
+            )
             if _effective_count != int(history_expected_scene_count or 0):
                 direct_errors.append(
                     f"역사 장면 수를 확인해 주세요. 목표 {int(history_expected_scene_count)}장 / 유효 장면 {_effective_count}장"
@@ -5948,10 +5003,10 @@ def show_one_click_pipeline():
         )
         direct_folder.mkdir(parents=True, exist_ok=True)
         direct_clip_paths = []
-        if is_history_mode and uploaded_history_scene_images:
+        if is_history_mode and (uploaded_history_scene_images or uploaded_history_scene_videos):
             try:
                 direct_clip_paths = _sprint194_4_save_history_scene_images(
-                    direct_project, uploaded_history_scene_images, clip_narrations, _effective_tts_speech_speed_194_41, uploaded_history_scene1_video
+                    direct_project, uploaded_history_scene_images, clip_narrations, _effective_tts_speech_speed_194_41, uploaded_history_scene1_video, scene_videos=uploaded_history_scene_videos
                 )
             except Exception as exc:
                 st.error(f"역사 장면 이미지 영상 변환 실패: {type(exc).__name__}: {exc}")
@@ -5987,7 +5042,15 @@ def show_one_click_pipeline():
         )
         direct_audio_folder.mkdir(parents=True, exist_ok=True)
         direct_voice_audio_path = ""
-        direct_bgm_audio_path = ""
+        _loaded_bgm_audio_path_195_55 = str(
+            st.session_state.get("sprint193_29_loaded_bgm_audio_path") or ""
+        ).strip()
+        direct_bgm_audio_path = (
+            _loaded_bgm_audio_path_195_55
+            if _loaded_bgm_audio_path_195_55
+            and Path(_loaded_bgm_audio_path_195_55).is_file()
+            else ""
+        )
 
         if uploaded_voice_audio is not None:
             suffix = Path(
@@ -8265,13 +7328,28 @@ def show_one_click_pipeline():
         errors.append("확정 대본을 입력해 주세요.")
     if not editor_clip_sources:
         errors.append("역사 장면 이미지를 한 장 이상 업로드하거나 이전 작업을 불러와 주세요." if is_history_mode else "Gemini 영상 파일을 한 개 이상 업로드해 주세요.")
-    if is_history_mode and uploaded_history_scene_images:
+    if is_history_mode and (uploaded_history_scene_images or uploaded_history_scene_videos):
         _ids = []
         for _item in uploaded_history_scene_images:
             _m = re.search(r"(\d+)", Path(str(getattr(_item, "name", "") or "")).stem)
             if _m:
                 _ids.append(int(_m.group(1)))
-        _effective_count = len(uploaded_history_scene_images) + (1 if uploaded_history_scene1_video is not None and 1 not in set(_ids) else 0)
+        _video_ids = set()
+        for _video in list(uploaded_history_scene_videos or []):
+            _video_name = str(
+                getattr(_video, "name", "") or ""
+            )
+            _video_match = re.search(
+                r"(\d+)",
+                Path(_video_name).stem,
+            )
+            if _video_match:
+                _video_no = int(_video_match.group(1))
+                if 1 <= _video_no <= 25:
+                    _video_ids.add(_video_no)
+        _effective_count = len(
+            set(_ids) | _video_ids
+        )
         if _effective_count != int(history_expected_scene_count or 0):
             errors.append(
                 f"역사 장면 수를 확인해 주세요. 목표 {int(history_expected_scene_count)}장 / 유효 장면 {_effective_count}장"
@@ -8351,10 +7429,10 @@ def show_one_click_pipeline():
     folder = Path("assets/gemini_clips") / f"project_{safe_project_id(project)}"
     folder.mkdir(parents=True, exist_ok=True)
     clip_paths = []
-    if is_history_mode and uploaded_history_scene_images:
+    if is_history_mode and (uploaded_history_scene_images or uploaded_history_scene_videos):
         try:
             clip_paths = _sprint194_4_save_history_scene_images(
-                project, uploaded_history_scene_images, clip_narrations, _effective_tts_speech_speed_194_41, uploaded_history_scene1_video
+                project, uploaded_history_scene_images, clip_narrations, _effective_tts_speech_speed_194_41, uploaded_history_scene1_video, scene_videos=uploaded_history_scene_videos
             )
         except Exception as exc:
             st.error(f"역사 장면 이미지 영상 변환 실패: {type(exc).__name__}: {exc}")
@@ -8375,7 +7453,15 @@ def show_one_click_pipeline():
     audio_folder = Path("assets/manual_audio") / f"project_{safe_project_id(project)}"
     audio_folder.mkdir(parents=True, exist_ok=True)
     voice_audio_path = ""
-    bgm_audio_path = ""
+    _loaded_bgm_audio_path_195_55 = str(
+        st.session_state.get("sprint193_29_loaded_bgm_audio_path") or ""
+    ).strip()
+    bgm_audio_path = (
+        _loaded_bgm_audio_path_195_55
+        if _loaded_bgm_audio_path_195_55
+        and Path(_loaded_bgm_audio_path_195_55).is_file()
+        else ""
+    )
     if uploaded_voice_audio is not None:
         suffix = Path(getattr(uploaded_voice_audio, "name", "voice.mp3")).suffix.lower() or ".mp3"
         voice_target = audio_folder / f"jian_voice{suffix}"
