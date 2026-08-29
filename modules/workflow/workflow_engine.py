@@ -6788,33 +6788,56 @@ class WorkflowEngine:
                 _scene_native_audio_194_69 = {}
                 _native_audio_events_194_69 = []
 
-                # Sprint194-69A: audio must come from the ORIGINAL UI-supplied MP4 source,
-                # never from a rendered/intermediate scene file.
+                # Sprint196-4 HISTORY ONLY:
+                # Preserve audio from the untouched UI-uploaded video when the timeline copy
+                # (history_NN.mp4) is a normalized/rendered file without audio. Reuse the existing
+                # Sprint195-31 original-source resolver; do not alter image, shopping, or standing paths.
                 _original_audio_sources_194_69a = list(_scene_sources)
                 for _ev69, _src69 in zip(_timeline, _original_audio_sources_194_69a):
                     _scene69 = int(_ev69.get("scene") or 0)
-                    _srcp69 = Path(str(_src69))
-                    _has69_raw = bool(_source_kind != "images" and _has_audio_stream_194_69(_srcp69))
-                    # Sprint195-30: blank-narration scenes already carry original source audio
-                    # inside the authoritative full voice track. Do not mix the same MP4 audio twice.
-                    _has69 = bool(
+                    _timeline_srcp69 = Path(str(_src69))
+                    _is_native_scene69 = bool(
+                        0 < _scene69 <= len(_native_flags_195_23)
+                        and _native_flags_195_23[_scene69 - 1]
+                    )
+                    _resolved_src69 = (
+                        _resolve_original_source_audio_195_31(_timeline_srcp69, _scene69)
+                        if _is_native_scene69
+                        else None
+                    )
+                    _srcp69 = Path(str(_resolved_src69 or _timeline_srcp69))
+                    _has69_raw = bool(
+                        _is_native_scene69
+                        and _has_audio_stream_194_69(_srcp69)
+                    )
+
+                    # Native-audio presence controls automatic SFX suppression, even when a
+                    # blank-narration scene already carries that source audio in the full voice track.
+                    _scene_native_audio_194_69[_scene69] = _has69_raw
+
+                    # Only add a separate native-audio mix event when the same source audio is NOT
+                    # already part of the authoritative full voice track (Sprint195-30/31).
+                    _should_mix69 = bool(
                         _has69_raw
                         and _scene69 not in _source_audio_resolved_scenes_195_30
                     )
-                    _scene_native_audio_194_69[_scene69] = _has69
-                    if _has69:
+                    if _should_mix69:
                         _native_audio_events_194_69.append((
                             _srcp69,
                             int(round(float(_ev69["start"]) * 1000.0)),
                             max(0.15, float(_ev69["duration"])),
                             _scene69,
                         ))
-                    print("[Sprint194-69A History Original Audio Source]", {
+                    print("[Sprint196-4 History Original Audio Source]", {
                         "scene": _scene69,
-                        "original_source": str(_srcp69),
-                        "native_audio": _has69,
-                        "auto_sfx_eligible": not _has69,
-                        "source_is_original": True,
+                        "timeline_source": str(_timeline_srcp69),
+                        "resolved_original_source": str(_srcp69),
+                        "native_scene": _is_native_scene69,
+                        "native_audio": _has69_raw,
+                        "mixed_separately": _should_mix69,
+                        "already_in_voice_track": _scene69 in _source_audio_resolved_scenes_195_30,
+                        "auto_sfx_eligible": not _has69_raw,
+                        "source_is_original": bool(_resolved_src69),
                     }, flush=True)
 
                 print("[Sprint194-69A History Native Audio Policy] READY", {
