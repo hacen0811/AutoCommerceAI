@@ -7576,10 +7576,75 @@ class WorkflowEngine:
                                     r"(?:구독|좋아요)",
                                 ]
                             for _pat58 in _patterns58:
-                                _m58 = re.search(_pat58, _clean_kw_text, flags=re.IGNORECASE if _is_history_en_194_31 else 0)
+                                _m58 = re.search(
+                                    _pat58,
+                                    _clean_kw_text,
+                                    flags=re.IGNORECASE if _is_history_en_194_31 else 0,
+                                )
                                 if _m58:
                                     _picked_kw = _m58.group(0).strip(" ,.!?…~:;")
                                     break
+
+                            # Sprint196-30 HISTORY EN ONLY:
+                            # Generic automatic emphasis fallback.
+                            # Existing semantic patterns always win.
+                            # If none matched, highlight the last meaningful English content word.
+                            if _is_history_en_194_31 and not _picked_kw:
+                                _en_tokens_196_30 = re.findall(
+                                    r"[A-Za-z][A-Za-z'-]*",
+                                    _clean_kw_text,
+                                )
+
+                                _en_stop_196_30 = {
+                                    "a", "an", "the",
+                                    "and", "or", "but",
+                                    "of", "to", "for", "from", "with", "by",
+                                    "in", "on", "at", "into", "over", "under",
+                                    "is", "are", "was", "were", "be", "been",
+                                    "it", "this", "that", "these", "those",
+                                    "i", "we", "you", "he", "she", "they",
+                                    "my", "our", "your", "his", "her", "their",
+                                    "me", "us", "him", "them",
+                                    "do", "does", "did",
+                                    "have", "has", "had",
+                                    "can", "could", "will", "would",
+                                    "shall", "should", "may", "might",
+                                    "not", "no",
+                                    "so", "very", "just", "really",
+                                    "then", "than",
+                                    "here", "there",
+                                    "now", "today",
+                                    "again",
+                                }
+
+                                _en_weak_196_30 = {
+                                    "thing", "things",
+                                    "people", "person",
+                                    "someone", "something",
+                                    "way", "time",
+                                }
+
+                                for _tok196_30 in reversed(_en_tokens_196_30):
+                                    _tok_low196_30 = _tok196_30.lower().strip("'")
+                                    if len(_tok_low196_30) < 3:
+                                        continue
+                                    if _tok_low196_30 in _en_stop_196_30:
+                                        continue
+                                    if _tok_low196_30 in _en_weak_196_30:
+                                        continue
+
+                                    _picked_kw = _tok196_30
+                                    print(
+                                        "[Sprint196-30 History EN Auto Emphasis] FALLBACK PICK",
+                                        {
+                                            "scene": _i + 1,
+                                            "keyword": _picked_kw,
+                                            "subtitle": _sub,
+                                        },
+                                        flush=True,
+                                    )
+                                    break
+
                             # Avoid weak one-word repeats such as generic '사관'/'기록' unless the whole caption is that concept.
                             if _picked_kw and len(_picked_kw) < 2:
                                 _picked_kw = ""
