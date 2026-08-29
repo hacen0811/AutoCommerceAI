@@ -73,8 +73,134 @@ except Exception:
     SearchKeywordEngine = None
 
 
-UI_VERSION = "sprint195-52-history-auto-scene-count"
+UI_VERSION = "sprint196-10-history-left-right-emoji"
 RESULT_DIR = Path("exports/one_click_results")
+
+# Sprint196-14 HISTORY EMOJI FINALIZER — ALL CREATE PATHS
+def _sprint196_14_finalize_history_emoji(result, project, channel_type):
+    """Apply the verified color-emoji PNG manifest to the actual workflow final MP4 once."""
+    if str(channel_type or "").strip().lower() not in {"history", "history_ko", "history_en"}:
+        return result
+    if not isinstance(result, dict):
+        return result
+
+    outputs = result.setdefault("outputs", {})
+    if outputs.get("_history_emoji_finalized_196_14"):
+        return result
+
+    try:
+        import json as _json_196_14
+        import subprocess as _subprocess_196_14
+
+        project_id = str(safe_project_id(project))
+        manifest = (
+            Path("exports/history_direct")
+            / f"project_{project_id}"
+            / "emoji_196_13_manifest.json"
+        )
+
+        final_text = str(
+            result.get("final_video_path")
+            or outputs.get("final_video_path")
+            or ""
+        ).strip()
+        final_path = Path(final_text) if final_text else None
+
+        if not manifest.is_file():
+            print("[Sprint196-14 History Emoji Finalizer] SKIP manifest_missing", {
+                "manifest": str(manifest),
+            }, flush=True)
+            return result
+
+        if final_path is None or not final_path.is_file():
+            print("[Sprint196-14 History Emoji Finalizer] SKIP final_missing", {
+                "final": str(final_path or ""),
+            }, flush=True)
+            return result
+
+        events = _json_196_14.loads(manifest.read_text(encoding="utf-8"))
+        events = [
+            x for x in list(events or [])
+            if isinstance(x, dict)
+            and str(x.get("path") or "").strip()
+            and Path(str(x.get("path") or "")).is_file()
+            and float(x.get("end") or 0.0) > float(x.get("start") or 0.0)
+        ]
+        if not events:
+            print("[Sprint196-14 History Emoji Finalizer] SKIP no_events", flush=True)
+            return result
+
+        tmp = final_path.with_name(final_path.stem + "_emoji19614_tmp.mp4")
+        inputs = ["-i", str(final_path)]
+        for ev in events:
+            inputs += ["-loop", "1", "-framerate", "30", "-i", str(ev["path"])]
+
+        filters = []
+        prev = "0:v"
+        for n, ev in enumerate(events, start=1):
+            nxt = f"emoji19614_{n}"
+            enable = (
+                f"between(t,{float(ev['start']):.3f},"
+                f"{float(ev['end']):.3f})"
+            )
+            filters.append(
+                f"[{prev}][{n}:v]"
+                f"overlay=x={int(ev['x'])}:y={int(ev['y'])}:"
+                f"enable='{enable}':eof_action=pass:repeatlast=1"
+                f"[{nxt}]"
+            )
+            prev = nxt
+        filters.append(f"[{prev}]format=yuv420p[vemoji19614]")
+
+        cmd = (
+            ["ffmpeg", "-y"]
+            + inputs
+            + [
+                "-filter_complex", ";".join(filters),
+                "-map", "[vemoji19614]",
+                "-map", "0:a?",
+                "-c:v", "libx264",
+                "-preset", "veryfast",
+                "-crf", "20",
+                "-c:a", "copy",
+                "-pix_fmt", "yuv420p",
+                "-movflags", "+faststart",
+                str(tmp),
+            ]
+        )
+
+        run = _subprocess_196_14.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+        )
+        if run.returncode != 0 or not tmp.is_file() or tmp.stat().st_size <= 1024:
+            raise RuntimeError(
+                "history_emoji_196_14_finalizer_failed: "
+                + str((run.stderr or run.stdout or "")[-1800:])
+            )
+
+        final_path.unlink(missing_ok=True)
+        tmp.replace(final_path)
+        outputs["_history_emoji_finalized_196_14"] = True
+        outputs["history_emoji_finalizer_events"] = len(events)
+        outputs["history_emoji_finalizer_path"] = str(final_path)
+        print("[Sprint196-14 History Emoji Finalizer] READY", {
+            "project_id": project_id,
+            "final": str(final_path),
+            "events": len(events),
+            "bytes": final_path.stat().st_size,
+            "all_create_paths": True,
+        }, flush=True)
+    except Exception as exc:
+        print("[Sprint196-14 History Emoji Finalizer] ERROR",
+              type(exc).__name__, str(exc), flush=True)
+    return result
+
+
 OPENAI_LOCALIZATION_KEY_PATH = Path("secrets/openai_localization_api_key.txt")
 
 
@@ -553,7 +679,7 @@ def _publisher_profile(account_name, platform):
 
 
 
-def _save_clip_subtitle_sidecar(project, clip_subtitles, subtitle_style=None, clip_narrations=None, clip_subtitle_effects=None, clip_sfx=None, clip_playback_speeds=None):
+def _save_clip_subtitle_sidecar(project, clip_subtitles, subtitle_style=None, clip_narrations=None, clip_subtitle_effects=None, clip_sfx=None, clip_playback_speeds=None, clip_emoji_left=None, clip_emoji_right=None):
     """프로젝트별 영상 자막을 별도 JSON으로 저장합니다."""
     project_id = str(safe_project_id(project))
     folder = Path("assets/products") / f"project_{project_id}"
@@ -568,6 +694,8 @@ def _save_clip_subtitle_sidecar(project, clip_subtitles, subtitle_style=None, cl
         "clip_narrations": [
             str(item or "").strip() for item in list(clip_narrations or [])
         ],
+        "clip_emoji_left": [str(item or "").strip() for item in list(clip_emoji_left or [])],
+        "clip_emoji_right": [str(item or "").strip() for item in list(clip_emoji_right or [])],
         "clip_subtitle_effects": [
             str(item or "기본").strip() for item in list(clip_subtitle_effects or [])
         ],
@@ -1031,7 +1159,7 @@ def _sprint194_4_save_history_scene_images(
 ):
     """History scenes 1..25: each scene may use either image or video.
     When both exist for the same scene number, video takes priority.
-    Uploaded video audio is always removed.
+    Sprint195-53: uploaded history video audio is preserved for the history mixer.
     """
     project_id = str(safe_project_id(project))
     image_folder = Path("assets/history_scene_images") / f"project_{project_id}"
@@ -1101,7 +1229,8 @@ def _sprint194_4_save_history_scene_images(
             str(original_video),
             "-map",
             "0:v:0",
-            "-an",
+            "-map",
+            "0:a:0?",
             "-vf",
             (
                 "scale=1080:1920:force_original_aspect_ratio=decrease,"
@@ -1116,6 +1245,12 @@ def _sprint194_4_save_history_scene_images(
             "20",
             "-pix_fmt",
             "yuv420p",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "192k",
+            "-ar",
+            "48000",
             "-movflags",
             "+faststart",
             str(clip_target),
@@ -1831,6 +1966,8 @@ def run_project_pipeline(
     tts_volume_percent=100,
     tts_speech_speed=1.0,
     clip_subtitles=None,
+    clip_emoji_left=None,
+    clip_emoji_right=None,
     clip_subtitle_effects=None,
     clip_sfx=None,
     clip_playback_speeds=None,
@@ -1927,6 +2064,8 @@ def run_project_pipeline(
             tts_volume_percent=tts_volume_percent,
             tts_speech_speed=tts_speech_speed,
             clip_subtitles=clip_subtitles,
+            clip_emoji_left=clip_emoji_left,
+            clip_emoji_right=clip_emoji_right,
             clip_subtitle_effects=clip_subtitle_effects,
             clip_sfx=clip_sfx,
             clip_playback_speeds=clip_playback_speeds,
@@ -1977,6 +2116,8 @@ def _run_project_pipeline_impl(
     tts_volume_percent=100,
     tts_speech_speed=1.0,
     clip_subtitles=None,
+    clip_emoji_left=None,
+    clip_emoji_right=None,
     clip_subtitle_effects=None,
     clip_sfx=None,
     clip_playback_speeds=None,
@@ -2117,6 +2258,8 @@ def _run_project_pipeline_impl(
         tts_volume_percent=tts_volume_percent,
         tts_speech_speed=tts_speech_speed,
         clip_subtitles=list(clip_subtitles or []),
+        clip_emoji_left=list(clip_emoji_left or []),
+        clip_emoji_right=list(clip_emoji_right or []),
         clip_subtitle_effects=list(clip_subtitle_effects or []),
         clip_sfx=list(clip_sfx or []),
         clip_playback_speeds=list(clip_playback_speeds or []),
@@ -2130,6 +2273,7 @@ def _run_project_pipeline_impl(
     )
 
     try:
+        result = _sprint196_14_finalize_history_emoji(result=result, project=project, channel_type=channel_type)
         product_named = create_product_named_video_copy(
             result=result,
             product_name=(
@@ -3556,6 +3700,52 @@ def show_one_click_pipeline():
         _sprint193_29_apply_preset_to_session(
             _preset_to_apply_195_53
         )
+
+        # Sprint196-15 HISTORY EMOJI PRESET RESTORE
+        # Restore dedicated left/right emoji widgets before they are created.
+        _emoji_left_restore_196_15 = list(
+            _preset_to_apply_195_53.get("clip_emoji_left") or []
+        )
+        _emoji_right_restore_196_15 = list(
+            _preset_to_apply_195_53.get("clip_emoji_right") or []
+        )
+
+        _emoji_restore_count_196_15 = max(
+            len(_emoji_left_restore_196_15),
+            len(_emoji_right_restore_196_15),
+        )
+
+        for _emoji_i_196_15 in range(_emoji_restore_count_196_15):
+            _scene_no_196_15 = _emoji_i_196_15 + 1
+
+            _left_196_15 = (
+                str(_emoji_left_restore_196_15[_emoji_i_196_15] or "").strip()
+                if _emoji_i_196_15 < len(_emoji_left_restore_196_15)
+                else ""
+            )
+            _right_196_15 = (
+                str(_emoji_right_restore_196_15[_emoji_i_196_15] or "").strip()
+                if _emoji_i_196_15 < len(_emoji_right_restore_196_15)
+                else ""
+            )
+
+            st.session_state[
+                f"sprint196_10a_history_emoji_left_{_scene_no_196_15}"
+            ] = _left_196_15
+
+            st.session_state[
+                f"sprint196_10a_history_emoji_right_{_scene_no_196_15}"
+            ] = _right_196_15
+
+        print(
+            "[Sprint196-15 History Emoji Preset Restore] READY",
+            {
+                "left": _emoji_left_restore_196_15,
+                "right": _emoji_right_restore_196_15,
+                "scene_count": _emoji_restore_count_196_15,
+            },
+            flush=True,
+        )
         # Sprint194-45: loading a Korean source project must not overwrite the user's
         # current History Cookie language choice. If English was selected before Load,
         # keep English selected after the rerun so Oliver/localized render stay active.
@@ -4432,6 +4622,9 @@ def show_one_click_pipeline():
 
     clip_subtitles = []
     clip_narrations = []
+    # SPRINT196-10 HISTORY LEFT/RIGHT EMOJI
+    clip_emoji_left = []
+    clip_emoji_right = []
     clip_subtitle_effects = []
     clip_sfx = []
     clip_playback_speeds = []
@@ -4623,13 +4816,24 @@ def show_one_click_pipeline():
             "highlight_color": str(subtitle_highlight_color or "#FFD700"),
         }
 
-        # Sprint193-6: 영상 1개당 한 줄 편집
-        # [영상] [자막] [나레이션] [자막효과] [사운드효과]
-        header_cols = st.columns([0.7, 2.8, 2.8, 1.15, 1.25, 1.0])
-        for col, label in zip(
-            header_cols,
-            ["장면" if is_history_mode else "영상", "자막", "나레이션", "자막효과", "사운드효과", "속도"],
-        ):
+        # SPRINT196-10E HISTORY UI RUNTIME DIAGNOSTIC
+        if is_history_mode:
+            st.info(
+                "SPRINT196-10E ACTIVE · history_mode=True · "
+                f"left_slots={len(clip_emoji_left)} · right_slots={len(clip_emoji_right)}"
+            )
+        else:
+            st.caption("SPRINT196-10E ACTIVE · history_mode=False")
+
+        # Sprint196-10C HISTORY ONLY:
+        # Use a stable 6-column outer row and nest LEFT / subtitle / RIGHT inside the subtitle group.
+        if is_history_mode:
+            header_cols = st.columns([0.7, 3.65, 2.55, 1.15, 1.25, 1.0])
+            _header_labels_196_9 = ["장면", "앞   |   자막   |   뒤", "나레이션", "자막효과", "사운드효과", "속도"]
+        else:
+            header_cols = st.columns([0.7, 2.8, 2.8, 1.15, 1.25, 1.0])
+            _header_labels_196_9 = ["영상", "자막", "나레이션", "자막효과", "사운드효과", "속도"]
+        for col, label in zip(header_cols, _header_labels_196_9):
             with col:
                 st.markdown(f"**{label}**")
 
@@ -4641,10 +4845,14 @@ def show_one_click_pipeline():
                     getattr(uploaded_clip, "name", f"장면 {index}" if is_history_mode else f"영상 {index}")
                     or (f"장면 {index}" if is_history_mode else f"영상 {index}")
                 )
-            row_c0, row_c1, row_c2, row_c3, row_c4, row_c5 = st.columns(
-                [0.7, 2.8, 2.8, 1.15, 1.25, 1.0],
-                vertical_alignment="center",
-            )
+            if is_history_mode:
+                row_c0, row_c1, row_c2, row_c3, row_c4, row_c5 = st.columns(
+                    [0.7, 3.65, 2.55, 1.15, 1.25, 1.0], vertical_alignment="center",
+                )
+            else:
+                row_c0, row_c1, row_c2, row_c3, row_c4, row_c5 = st.columns(
+                    [0.7, 2.8, 2.8, 1.15, 1.25, 1.0], vertical_alignment="center",
+                )
             with row_c0:
                 # Sprint194-47B: Scene 1 video replaces only the visual source.
                 # Subtitle/narration/effects/SFX/speed remain Scene 1 inputs exactly as before.
@@ -4656,14 +4864,45 @@ def show_one_click_pipeline():
                     st.caption(f"{clip_name} · {_scene_source_label_194_47b}")
                 else:
                     st.caption(clip_name)
+            _emoji_left_value_196_10 = ""
+            _emoji_right_value_196_10 = ""
             with row_c1:
-                subtitle_value = st.text_area(
-                    f"영상 {index} 자막",
-                    height=72,
-                    placeholder="첫 번째 문장\n두 번째 문장",
-                    key=f"sprint193_9_clip_subtitle_{index}",
-                    label_visibility="collapsed",
-                )
+                if is_history_mode:
+                    _sub_left_196_10c, _sub_text_196_10c, _sub_right_196_10c = st.columns(
+                        [0.82, 3.45, 0.82], vertical_alignment="center"
+                    )
+                    with _sub_left_196_10c:
+                        _emoji_left_value_196_10 = st.text_input(
+                            f"장면 {index} 앞 이모지",
+                            placeholder="🎯",
+                            key=f"sprint196_10a_history_emoji_left_{index}",
+                            label_visibility="collapsed",
+                            help="자막 왼쪽에 표시할 컬러 이모지",
+                        )
+                    with _sub_text_196_10c:
+                        subtitle_value = st.text_area(
+                            f"영상 {index} 자막",
+                            height=72,
+                            placeholder="첫 번째 문장\n두 번째 문장",
+                            key=f"sprint193_9_clip_subtitle_{index}",
+                            label_visibility="collapsed",
+                        )
+                    with _sub_right_196_10c:
+                        _emoji_right_value_196_10 = st.text_input(
+                            f"장면 {index} 뒤 이모지",
+                            placeholder="💥",
+                            key=f"sprint196_10a_history_emoji_right_{index}",
+                            label_visibility="collapsed",
+                            help="자막 오른쪽에 표시할 컬러 이모지",
+                        )
+                else:
+                    subtitle_value = st.text_area(
+                        f"영상 {index} 자막",
+                        height=72,
+                        placeholder="첫 번째 문장\n두 번째 문장",
+                        key=f"sprint193_9_clip_subtitle_{index}",
+                        label_visibility="collapsed",
+                    )
             with row_c2:
                 narration_value = st.text_area(
                     f"영상 {index} 나레이션",
@@ -4698,11 +4937,24 @@ def show_one_click_pipeline():
                     label_visibility="collapsed",
                     help="자동맞춤은 장면별 나레이션 실제 길이에 맞춰 영상 속도를 계산하고, 음성이 더 길면 마지막 프레임을 자동 연장해 다음 장면과 겹치지 않게 합니다.",
                 )
-            clip_subtitles.append(str(subtitle_value or "").strip())
+            _subtitle_clean_196_9 = str(subtitle_value or "").strip()
+            clip_subtitles.append(_subtitle_clean_196_9)
+            clip_emoji_left.append(str(_emoji_left_value_196_10 or "").strip() if is_history_mode else "")
+            clip_emoji_right.append(str(_emoji_right_value_196_10 or "").strip() if is_history_mode else "")
             clip_narrations.append(str(narration_value or "").strip())
             clip_subtitle_effects.append(str(subtitle_effect_value or "기본").strip())
             clip_sfx.append(str(sfx_value or "없음").strip())
             clip_playback_speeds.append(0.0 if scene_speed_value == "자동" else float(scene_speed_value or 1.5))
+
+        # SPRINT196-10D HISTORY EMOJI UI DIAGNOSTIC
+        if is_history_mode:
+            print("[Sprint196-10D UI Emoji Values]", {
+                "left": list(clip_emoji_left or []),
+                "right": list(clip_emoji_right or []),
+                "subtitle_count": len(list(clip_subtitles or [])),
+                "left_nonempty": sum(bool(str(x or "").strip()) for x in list(clip_emoji_left or [])),
+                "right_nonempty": sum(bool(str(x or "").strip()) for x in list(clip_emoji_right or [])),
+            }, flush=True)
 
         # Sprint194-47B: a Scene 1 MP4 is visual-source replacement only.
         # Keep all 1..N editing arrays aligned so Scene 1 still receives subtitle/TTS/effects.
@@ -4930,6 +5182,8 @@ def show_one_click_pipeline():
             "suppress_separate_hook": False,
             "locked_script": locked_script.strip(),
             "clip_subtitles": list(clip_subtitles or []),
+            "clip_emoji_left": list(clip_emoji_left or []),
+            "clip_emoji_right": list(clip_emoji_right or []),
             "clip_narrations": list(clip_narrations or []),
             "clip_subtitle_effects": list(clip_subtitle_effects or []),
             "clip_sfx": list(clip_sfx or []),
@@ -4977,6 +5231,8 @@ def show_one_click_pipeline():
             clip_subtitle_effects,
             clip_sfx,
             clip_playback_speeds,
+            clip_emoji_left,
+            clip_emoji_right,
         )
 
         # 후킹 배경 제품 이미지 저장
@@ -5077,6 +5333,8 @@ def show_one_click_pipeline():
             "monthly_purchase_count": int(monthly_purchase_count or 0),
             "hook_text": str(hook_text or "").strip(),
             "clip_subtitles": list(clip_subtitles or []),
+            "clip_emoji_left": list(clip_emoji_left or []),
+            "clip_emoji_right": list(clip_emoji_right or []),
             "clip_narrations": list(clip_narrations or []),
             "clip_subtitle_effects": list(clip_subtitle_effects or []),
             "clip_sfx": list(clip_sfx or []),
@@ -5166,6 +5424,8 @@ def show_one_click_pipeline():
                     tts_volume_percent=int(tts_volume_percent or 100),
                     tts_speech_speed=float(_effective_tts_speech_speed_194_41),
                     clip_subtitles=list(clip_subtitles or []),
+                    clip_emoji_left=list(clip_emoji_left or []),
+                    clip_emoji_right=list(clip_emoji_right or []),
                     clip_subtitle_effects=list(clip_subtitle_effects or []),
                     clip_sfx=list(clip_sfx or []),
                     clip_playback_speeds=list(clip_playback_speeds or []),
@@ -7368,6 +7628,8 @@ def show_one_click_pipeline():
         "suppress_separate_hook": False,
         "locked_script": locked_script.strip(),
         "clip_subtitles": list(clip_subtitles or []),
+        "clip_emoji_left": list(clip_emoji_left or []),
+        "clip_emoji_right": list(clip_emoji_right or []),
         "clip_narrations": list(clip_narrations or []),
         "clip_subtitle_effects": list(clip_subtitle_effects or []),
         "clip_sfx": list(clip_sfx or []),
@@ -7408,6 +7670,8 @@ def show_one_click_pipeline():
         clip_subtitle_effects,
         clip_sfx,
         clip_playback_speeds,
+        clip_emoji_left,
+        clip_emoji_right,
     )
 
     hook_product_image_path = ""
@@ -7537,6 +7801,8 @@ def show_one_click_pipeline():
                 tts_volume_percent=int(tts_volume_percent or 100),
                 tts_speech_speed=float(_effective_tts_speech_speed_194_41),
                 clip_subtitles=list(clip_subtitles or []),
+                clip_emoji_left=list(clip_emoji_left or []),
+                clip_emoji_right=list(clip_emoji_right or []),
                 clip_subtitle_effects=list(clip_subtitle_effects or []),
                 clip_sfx=list(clip_sfx or []),
                 clip_playback_speeds=list(clip_playback_speeds or []),

@@ -1,4 +1,6 @@
 from uuid import uuid4
+print("######## WORKFLOW_ENGINE SPRINT196-8B HISTORY COLOR EMOJI SAFE POSITION FIX LOADED ########", flush=True)
+print("######## WORKFLOW_ENGINE SPRINT196-8A HISTORY COLOR EMOJI POSITION FIX LOADED ########", flush=True)
 from pathlib import Path
 import hashlib
 import json
@@ -136,6 +138,9 @@ print("######## WORKFLOW_ENGINE SPRINT196-3H PERSISTENT PRODUCT RESULTS SAFE ###
 print("######## WORKFLOW_ENGINE SPRINT196-3I FORCED XHS DIAGNOSTICS SAFE ########", flush=True)
 print("######## WORKFLOW_ENGINE SPRINT196-3J DIRECT CHROME CDP SAFE ########", flush=True)
 print("######## WORKFLOW_ENGINE SPRINT196-3K XHS NO WAIT NAVIGATION SAFE ########", flush=True)
+print("######## WORKFLOW_ENGINE SPRINT196-7 HISTORY COLOR EMOJI FINAL ASS FIX LOADED ########", flush=True)
+print("######## WORKFLOW_ENGINE SPRINT196-9 HISTORY SEPARATE EMOJI INPUT + RIGHT SLOT LOADED ########", flush=True)
+print("######## WORKFLOW_ENGINE SPRINT196-10 HISTORY LEFT/RIGHT EMOJI LOADED ########", flush=True)
 
 
 class WorkflowEngine:
@@ -4814,6 +4819,8 @@ class WorkflowEngine:
         tts_volume_percent=100,
         tts_speech_speed=1.0,
         clip_subtitles=None,
+        clip_emoji_left=None,
+        clip_emoji_right=None,
         clip_subtitle_effects=None,
         clip_sfx=None,
         clip_playback_speeds=None,
@@ -4947,6 +4954,25 @@ class WorkflowEngine:
         # Sprint194-11: 역사 모드는 장면별 TTS만 생성하고, 전체 대본 TTS/intro를 별도로 만들지 않습니다.
         # 최종 음성은 scene_01~N을 정확히 한 번씩 이어붙인 단일 트랙만 사용합니다.
         _history_mode_194_11 = str(channel_type or "").strip() in {"history", "history_ko", "history_en"}
+        # SPRINT196-10 HISTORY LEFT/RIGHT EMOJI
+        _clip_emoji_left_196_10 = [str(x or "").strip() for x in list(clip_emoji_left or [])]
+        _clip_emoji_right_196_10 = [str(x or "").strip() for x in list(clip_emoji_right or [])]
+        if _history_mode_194_11:
+            _need_emoji_slots_196_10 = max(len(list(clip_subtitles or [])), len(normalized_clip_narrations))
+            _clip_emoji_left_196_10 += [""] * max(0, _need_emoji_slots_196_10 - len(_clip_emoji_left_196_10))
+            _clip_emoji_right_196_10 += [""] * max(0, _need_emoji_slots_196_10 - len(_clip_emoji_right_196_10))
+            print("[Sprint196-10A History Emoji Input] READY", {
+                "left": _clip_emoji_left_196_10,
+                "right": _clip_emoji_right_196_10,
+                "subtitle_text_untouched": True,
+            }, flush=True)
+            # SPRINT196-10D HISTORY EMOJI ENGINE DIAGNOSTIC
+            print("[Sprint196-10D Engine Emoji Values]", {
+                "left": list(_clip_emoji_left_196_10),
+                "right": list(_clip_emoji_right_196_10),
+                "left_nonempty": sum(bool(str(x or "").strip()) for x in _clip_emoji_left_196_10),
+                "right_nonempty": sum(bool(str(x or "").strip()) for x in _clip_emoji_right_196_10),
+            }, flush=True)
         # Sprint194-20: history_en uses native English TTS and language-isolated audio/output paths.
         _history_language_194_20 = "eng" if str(channel_type or "").strip().lower() == "history_en" else "kor"
         _history_lang_tag_194_20 = "en" if _history_language_194_20 == "eng" else "ko"
@@ -6963,6 +6989,63 @@ class WorkflowEngine:
 
                 _subs = [str(x or "").strip() for x in list(clip_subtitles or [])][: _scene_count]
 
+                # Sprint196-6 HISTORY ONLY: keep the untouched subtitle text for emoji extraction.
+                # ASS/libass often renders Segoe UI Emoji as monochrome. Emoji glyphs are therefore
+                # removed from ASS text and burned later as transparent color-PNG overlays.
+                _subs_raw_196_6 = list(_subs)
+
+                def _is_emoji_base_196_6(_ch):
+                    if not _ch:
+                        return False
+                    _cp = ord(_ch)
+                    return bool(
+                        0x1F000 <= _cp <= 0x1FAFF
+                        or 0x2600 <= _cp <= 0x27BF
+                        or 0x2300 <= _cp <= 0x23FF
+                        or 0x1F1E6 <= _cp <= 0x1F1FF
+                    )
+
+                def _emoji_clusters_196_6(_text):
+                    _text = str(_text or "")
+                    _clusters = []
+                    _i196 = 0
+                    while _i196 < len(_text):
+                        _ch196 = _text[_i196]
+                        if not _is_emoji_base_196_6(_ch196):
+                            _i196 += 1
+                            continue
+                        _cluster196 = _ch196
+                        _i196 += 1
+                        # Regional-indicator flags are two code points.
+                        if 0x1F1E6 <= ord(_ch196) <= 0x1F1FF and _i196 < len(_text):
+                            _nxt196 = _text[_i196]
+                            if 0x1F1E6 <= ord(_nxt196) <= 0x1F1FF:
+                                _cluster196 += _nxt196
+                                _i196 += 1
+                        while _i196 < len(_text):
+                            _nxt196 = _text[_i196]
+                            _cp196 = ord(_nxt196)
+                            if _cp196 in (0xFE0E, 0xFE0F) or 0x1F3FB <= _cp196 <= 0x1F3FF:
+                                _cluster196 += _nxt196
+                                _i196 += 1
+                                continue
+                            if _cp196 == 0x200D and _i196 + 1 < len(_text) and _is_emoji_base_196_6(_text[_i196 + 1]):
+                                _cluster196 += _nxt196 + _text[_i196 + 1]
+                                _i196 += 2
+                                continue
+                            break
+                        _clusters.append(_cluster196)
+                    return _clusters
+
+                def _strip_emoji_196_6(_text):
+                    _text = str(_text or "")
+                    _clusters = _emoji_clusters_196_6(_text)
+                    for _cluster196 in _clusters:
+                        _text = _text.replace(_cluster196, "", 1)
+                    _text = re.sub(r"[ \t]{2,}", " ", _text)
+                    _text = re.sub(r" *\n *", "\n", _text).strip()
+                    return _text, _clusters
+
                 # Sprint194-31: English-only mobile subtitle readability.
                 # Balance long English captions into at most two word-boundary lines.
                 # Korean History Cookie and shopping subtitles are untouched.
@@ -7190,6 +7273,7 @@ class WorkflowEngine:
                 _t = 0.0
                 _emphasis_verify_194_38 = []
                 _subtitle_boxes_194_64 = []
+                _emoji_overlay_events_196_6 = []
 
                 # Sprint194-75F: generic History Cookie ting policy.
                 # Hook always ting-bounces. Up to two additional scenes are selected
@@ -7251,6 +7335,28 @@ class WorkflowEngine:
 
                 for _i, _d in enumerate(_durations):
                     _sub = _subs[_i] if _i < len(_subs) else ""
+                    _raw_sub_196_6 = _subs_raw_196_6[_i] if _i < len(_subs_raw_196_6) else _sub
+                    _emoji_left_text_196_10 = _clip_emoji_left_196_10[_i] if _i < len(_clip_emoji_left_196_10) else ""
+                    _emoji_right_text_196_10 = _clip_emoji_right_196_10[_i] if _i < len(_clip_emoji_right_196_10) else ""
+                    _emoji_left_clusters_196_10 = _emoji_clusters_196_6(_emoji_left_text_196_10)
+                    _emoji_right_clusters_196_10 = _emoji_clusters_196_6(_emoji_right_text_196_10)
+                    _emoji_explicit_196_10 = bool(_emoji_left_clusters_196_10 or _emoji_right_clusters_196_10)
+                    # Sprint196-10D scene emoji parse diagnostic
+                    if _emoji_left_text_196_10 or _emoji_right_text_196_10:
+                        print("[Sprint196-10D Scene Emoji Parse]", {
+                            "scene": _i + 1,
+                            "left_text": _emoji_left_text_196_10,
+                            "right_text": _emoji_right_text_196_10,
+                            "left_clusters": list(_emoji_left_clusters_196_10),
+                            "right_clusters": list(_emoji_right_clusters_196_10),
+                            "explicit": _emoji_explicit_196_10,
+                        }, flush=True)
+                    _emoji_clusters_scene_196_6 = [] if _emoji_explicit_196_10 else _emoji_clusters_196_6(_raw_sub_196_6)
+                    _sub, _emoji_clusters_display_196_6 = _strip_emoji_196_6(_sub)
+                    # Prefer clusters from the untouched source because English unicode-safety may
+                    # have already stripped emoji from the ASS display copy.
+                    if not _emoji_clusters_scene_196_6:
+                        _emoji_clusters_scene_196_6 = list(_emoji_clusters_display_196_6)
                     # Sprint194-64: Scene 1 long hook only - force a balanced mobile-safe 2-line caption.
                     # Timeline/TTS/source subtitle data are not changed; only the ASS display string is wrapped.
                     if _i == 0 and _sub and "\n" not in _sub and len(_sub) >= 18:
@@ -7529,29 +7635,829 @@ class WorkflowEngine:
                         # Sprint194-73: tighter caption background.
                         # Previous box padding felt oversized on mobile, especially for short English captions.
                         _char_px_194_73 = 36 if _is_history_en_194_31 else 46
+
+                        # Sprint196-21: measure REAL subtitle line width with the resolved body font.
+                        # Do not estimate Korean/English width from character count.
+                        _line_widths64_196_18 = []
+                        try:
+                            from PIL import ImageFont as _ImageFont_196_21
+
+                            _body_hit_196_21 = (
+                                _font_resolve_194_48d.get("body") or {}
+                            )
+                            _body_font_path_196_21 = str(
+                                _body_hit_196_21.get("local")
+                                or _body_hit_196_21.get("source")
+                                or ""
+                            ).strip()
+
+                            if (
+                                _body_font_path_196_21
+                                and Path(_body_font_path_196_21).is_file()
+                            ):
+                                _measure_font_196_21 = _ImageFont_196_21.truetype(
+                                    _body_font_path_196_21,
+                                    int(_history_body_size_194_48),
+                                )
+
+                                for _line64 in _plain_lines64:
+                                    _txt_196_21 = str(_line64 or "").strip()
+                                    if not _txt_196_21:
+                                        _line_widths64_196_18.append(80)
+                                        continue
+
+                                    _bbox_196_21 = _measure_font_196_21.getbbox(
+                                        _txt_196_21
+                                    )
+                                    _real_w_196_21 = max(
+                                        1,
+                                        int(
+                                            _bbox_196_21[2]
+                                            - _bbox_196_21[0]
+                                        ),
+                                    )
+
+                                    # ASS outline + small visual breathing room.
+                                    _line_widths64_196_18.append(
+                                        min(
+                                            800,
+                                            max(
+                                                80,
+                                                _real_w_196_21 + 18,
+                                            ),
+                                        )
+                                    )
+                            else:
+                                raise RuntimeError(
+                                    "history_body_font_path_missing"
+                                )
+
+                        except Exception as _measure_exc_196_21:
+                            # Safe fallback only if actual font measurement fails.
+                            _line_widths64_196_18 = [
+                                max(
+                                    80,
+                                    int(
+                                        len(str(_line64 or "").strip())
+                                        * _char_px_194_73
+                                        + 12
+                                    ),
+                                )
+                                for _line64 in _plain_lines64
+                            ]
+                            print(
+                                "[Sprint196-21 Real Subtitle Width] FALLBACK",
+                                type(_measure_exc_196_21).__name__,
+                                str(_measure_exc_196_21),
+                                flush=True,
+                            )
                         # Sprint194-75I: cross-platform Shorts safe area.
                         # Keep captions inside x=140..940 (800px max) and raise them
                         # above bottom-side platform controls. Long English wraps first.
+                        _emoji_left_reserve_196_10 = min(190, 92 * len(_emoji_left_clusters_196_10) + 10) if _emoji_left_clusters_196_10 else 0
+                        _emoji_right_reserve_196_10 = min(190, 92 * len(_emoji_right_clusters_196_10) + 10) if _emoji_right_clusters_196_10 else 0
+                        _emoji_fallback_reserve_196_10 = min(220, 92 * len(_emoji_clusters_scene_196_6) + 16) if _emoji_clusters_scene_196_6 else 0
+                        _emoji_reserve_196_6 = _emoji_left_reserve_196_10 + _emoji_right_reserve_196_10 + _emoji_fallback_reserve_196_10
+                        # Sprint196-10A: subtitle box excludes both emoji slots.
+                        # Sprint196-23:
+                        # Background width follows the ACTUAL measured longest subtitle line.
+                        # Emoji reserve must NOT move or stretch the subtitle background.
+                        _actual_max_line_w_196_23 = max(
+                            [int(x or 0) for x in list(_line_widths64_196_18 or [])]
+                            or [220]
+                        )
+
+                        # Small safety allowance for ASS outline / emphasis font difference.
+                        _actual_max_line_w_196_23 = int(
+                            min(
+                                760,
+                                max(
+                                    140,
+                                    (_actual_max_line_w_196_23 * 1.06) + 24,
+                                ),
+                            )
+                        )
+
                         _box_w64 = min(
                             800,
                             max(
-                                300 if _is_history_en_194_31 else 360,
-                                int(_max_chars64 * _char_px_194_73 + 72),
+                                220 if _is_history_en_194_31 else 240,
+                                _actual_max_line_w_196_23 + 56,
                             ),
                         )
+
+                        # Sprint196-24: tighter 2-line caption background height.
                         _box_h64 = (
-                            118 if _line_count64 == 1 else 214
+                            118 if _line_count64 == 1 else 184
                         ) if _is_history_en_194_31 else (
-                            132 if _line_count64 == 1 else 238
+                            132 if _line_count64 == 1 else 190
                         )
+
+                        # Subtitle itself is ASS Alignment=2, therefore center at x=540.
+                        _box_x64 = int((1080 - _box_w64) / 2)
+                        _box_y64 = int(1250 - (_box_h64 / 2))
                         _subtitle_boxes_194_64.append({
                             "scene": _i + 1, "start": round(_t, 3), "end": round(_t + _d, 3),
-                            "x": max(140, int((1080 - _box_w64) / 2)), "y": int(1250 - (_box_h64 / 2)),
+                            "x": _box_x64, "y": _box_y64,
                             "w": _box_w64, "h": _box_h64, "lines": _line_count64,
                         })
-                        _ass_lines.append(f"Dialogue: 0,{_ass_time_194_9(_t)},{_ass_time_194_9(_t+_d)},{_style},,0,0,0,,{_fx}{_esc}")
+                        if _emoji_explicit_196_10:
+                            for _side_196_10, _clusters_196_10 in (("left", _emoji_left_clusters_196_10), ("right", _emoji_right_clusters_196_10)):
+                                for _cluster_196_10 in _clusters_196_10:
+                                    _emoji_overlay_events_196_6.append({
+                                        "scene": _i + 1, "emoji": _cluster_196_10, "side": _side_196_10,
+                                        "start": round(_t, 3), "end": round(_t + _d, 3),
+                                        "box_x": _box_x64, "box_y": _box_y64, "box_w": _box_w64, "box_h": _box_h64,
+                                        "lines": _line_count64, "line_index": max(0, _line_count64 - 1),
+                                        "char_index": 0, "line_length": 0,
+                                        # Sprint196-19: pass per-line subtitle width
+                                        # to the explicit LEFT/RIGHT emoji renderer.
+                                        "line_widths_196_18": list(_line_widths64_196_18),
+                                    })
+                        # Sprint196-8A HISTORY ONLY:
+                        # Strip emoji from the final ASS payload and create one overlay event per emoji.
+                        _plain_ass_196_8a = re.sub(r"\{[^}]*\}", "", str(_esc or ""))
+                        _plain_ass_196_8a = _plain_ass_196_8a.replace(r"\N", "\n")
+                        _emoji_items_196_8a = []
+
+                        for _line_idx_196_8a, _line_text_196_8a in enumerate(_plain_ass_196_8a.split("\n")):
+                            _clusters_196_8a = _emoji_clusters_196_6(_line_text_196_8a)
+                            _line_without_emoji_196_8a = str(_line_text_196_8a)
+                            for _all_emoji_196_8a in _clusters_196_8a:
+                                _line_without_emoji_196_8a = _line_without_emoji_196_8a.replace(_all_emoji_196_8a, "", 1)
+
+                            for _cluster_196_8a in _clusters_196_8a:
+                                _pos_196_8a = _line_text_196_8a.find(_cluster_196_8a)
+                                _before_196_8a = _line_text_196_8a[:max(0, _pos_196_8a)]
+                                for _prior_emoji_196_8a in _emoji_clusters_196_6(_before_196_8a):
+                                    _before_196_8a = _before_196_8a.replace(_prior_emoji_196_8a, "", 1)
+                                _emoji_items_196_8a.append({
+                                    "emoji": _cluster_196_8a,
+                                    "line_index": int(_line_idx_196_8a),
+                                    "char_index": len(_before_196_8a),
+                                    "line_length": max(1, len(_line_without_emoji_196_8a)),
+                                })
+
+                        for _cluster_196_8a in _emoji_clusters_196_6(_esc):
+                            _esc = _esc.replace(_cluster_196_8a, "", 1)
+                        _esc = "".join(
+                            _ch_196_8a for _ch_196_8a in _esc
+                            if ord(_ch_196_8a) not in {0xFE0E, 0xFE0F, 0x200D, 0x20E3}
+                        )
+
+                        for _emoji_item_196_8a in _emoji_items_196_8a:
+                            _emoji_overlay_events_196_6.append({
+                                "scene": _i + 1,
+                                "emoji": _emoji_item_196_8a["emoji"],
+                                "start": round(_t, 3),
+                                "end": round(_t + _d, 3),
+                                "box_x": _box_x64,
+                                "box_y": _box_y64,
+                                "box_w": _box_w64,
+                                "box_h": _box_h64,
+                                "lines": _line_count64,
+                                "line_index": int(_emoji_item_196_8a["line_index"]),
+                                "char_index": int(_emoji_item_196_8a["char_index"]),
+                                "line_length": int(_emoji_item_196_8a["line_length"]),
+                            })
+
+                        print("[Sprint196-8A History Color Emoji Final ASS]", {
+                            "scene": _i + 1,
+                            "emoji_events": len(_emoji_items_196_8a),
+                            "ass_emoji_remaining": len(_emoji_clusters_196_6(_esc)),
+                            "individual_positioning": True,
+                        }, flush=True)
+
+                        # Sprint196-25:
+                        # Keep the caption background fixed.
+                        # Lower only 2-line ASS subtitle text by 12px.
+                        # Style MarginV is 620, so 608 moves bottom-aligned text down 12px.
+                        _dialogue_margin_v_196_25 = 594 if _line_count64 == 2 else 0
+
+                        _ass_lines.append(
+                            f"Dialogue: 0,{_ass_time_194_9(_t)},{_ass_time_194_9(_t+_d)},"
+                            f"{_style},,0,0,{_dialogue_margin_v_196_25},,"
+                            f"{_fx}{_esc}"
+                        )
                     _t += _d
                 _ass.write_text("\n".join(_ass_lines) + "\n", encoding="utf-8")
+
+                # Sprint196-6 HISTORY ONLY: render emoji as true-color PNG using the Windows
+                # color emoji font. Pillow/FreeType draws embedded COLR/CPAL glyph colors when
+                # embedded_color=True, bypassing libass monochrome fallback.
+                # Sprint196-10D overlay-event diagnostic
+                print("[Sprint196-10D Overlay Events]", {
+                    "count": len(_emoji_overlay_events_196_6),
+                    "events": [
+                        {
+                            "scene": x.get("scene"),
+                            "emoji": x.get("emoji"),
+                            "side": x.get("side"),
+                            "start": x.get("start"),
+                            "end": x.get("end"),
+                        }
+                        for x in list(_emoji_overlay_events_196_6)
+                    ],
+                }, flush=True)
+
+                _emoji_png_events_196_6 = []
+                if _emoji_overlay_events_196_6:
+                    _emoji_dir_196_6 = _history_root / "emoji_196_6"
+                    _emoji_dir_196_6.mkdir(parents=True, exist_ok=True)
+                    _emoji_font_candidates_196_6 = [
+                        Path(os.environ.get("WINDIR", r"C:\Windows")) / "Fonts" / "seguiemj.ttf",
+                        Path(os.environ.get("LOCALAPPDATA", "")) / "Microsoft" / "Windows" / "Fonts" / "seguiemj.ttf",
+                    ]
+                    _emoji_font_path_196_6 = next((x for x in _emoji_font_candidates_196_6 if x.is_file()), None)
+                    if _emoji_font_path_196_6 and Image is not None:
+                        try:
+                            from PIL import ImageDraw as _ImageDraw_196_6, ImageFont as _ImageFont_196_6
+                            _emoji_font_size_196_6 = 88
+                            _emoji_font_196_6 = _ImageFont_196_6.truetype(str(_emoji_font_path_196_6), _emoji_font_size_196_6)
+                            for _emoji_event_no_196_8a, _ee196 in enumerate(_emoji_overlay_events_196_6, start=1):
+                                _emoji_text196 = str(_ee196.get("emoji") or "")
+                                if not _emoji_text196:
+                                    continue
+                                # Sprint196-29:
+                                # Pillow without RAQM/HarfBuzz cannot shape ZWJ emoji
+                                # such as 🤷‍♂️ / 🚶‍♂️ into one visual glyph.
+                                # Render ONLY compound ZWJ emoji with installed Chrome.
+                                _is_zwj_emoji_196_29 = "\u200d" in _emoji_text196
+
+                                if _is_zwj_emoji_196_29:
+                                    try:
+                                        import html as _html_196_29
+                                        from playwright.sync_api import (
+                                            sync_playwright as _sync_playwright_196_29,
+                                        )
+
+                                        _chrome_tmp196_29 = (
+                                            _emoji_dir_196_6
+                                            / f"_chrome_{int(_emoji_event_no_196_8a):02d}.png"
+                                        )
+
+                                        with _sync_playwright_196_29() as _p196_29:
+                                            _browser196_29 = _p196_29.chromium.launch(
+                                                channel="chrome",
+                                                headless=True,
+                                            )
+                                            try:
+                                                _page196_29 = _browser196_29.new_page(
+                                                    viewport={
+                                                        "width": 600,
+                                                        "height": 220,
+                                                    },
+                                                    device_scale_factor=1,
+                                                )
+
+                                                _safe_emoji196_29 = _html_196_29.escape(
+                                                    _emoji_text196
+                                                )
+
+                                                _page196_29.set_content(
+                                                    f"""
+                                                    <html>
+                                                    <head>
+                                                    <style>
+                                                    html, body {{
+                                                        margin: 0;
+                                                        padding: 0;
+                                                        background: transparent;
+                                                        overflow: hidden;
+                                                    }}
+                                                    #emoji {{
+                                                        display: inline-block;
+                                                        white-space: nowrap;
+                                                        font-family:
+                                                            "Segoe UI Emoji",
+                                                            "Segoe UI Symbol",
+                                                            sans-serif;
+                                                        font-size: 88px;
+                                                        line-height: 1.15;
+                                                        padding: 8px;
+                                                    }}
+                                                    </style>
+                                                    </head>
+                                                    <body>
+                                                        <div id="emoji">{_safe_emoji196_29}</div>
+                                                    </body>
+                                                    </html>
+                                                    """
+                                                )
+
+                                                _loc196_29 = _page196_29.locator("#emoji")
+                                                _bb196_29 = _loc196_29.bounding_box()
+
+                                                if not _bb196_29:
+                                                    raise RuntimeError(
+                                                        "chrome_emoji_bounding_box_missing"
+                                                    )
+
+                                                _page196_29.screenshot(
+                                                    path=str(_chrome_tmp196_29),
+                                                    clip={
+                                                        "x": float(_bb196_29["x"]),
+                                                        "y": float(_bb196_29["y"]),
+                                                        "width": float(_bb196_29["width"]),
+                                                        "height": float(_bb196_29["height"]),
+                                                    },
+                                                    omit_background=True,
+                                                )
+                                            finally:
+                                                _browser196_29.close()
+
+                                        with Image.open(_chrome_tmp196_29) as _src196_29:
+                                            _src196_29 = _src196_29.convert("RGBA")
+                                            _alpha196_29 = _src196_29.getchannel("A")
+                                            _crop196_29 = _alpha196_29.getbbox()
+
+                                            if _crop196_29:
+                                                _src196_29 = _src196_29.crop(
+                                                    _crop196_29
+                                                )
+
+                                            _pad196_29 = 8
+                                            _emoji_img196 = Image.new(
+                                                "RGBA",
+                                                (
+                                                    _src196_29.width
+                                                    + _pad196_29 * 2,
+                                                    _src196_29.height
+                                                    + _pad196_29 * 2,
+                                                ),
+                                                (0, 0, 0, 0),
+                                            )
+                                            _emoji_img196.alpha_composite(
+                                                _src196_29,
+                                                (
+                                                    _pad196_29,
+                                                    _pad196_29,
+                                                ),
+                                            )
+
+                                        try:
+                                            _chrome_tmp196_29.unlink(missing_ok=True)
+                                        except Exception:
+                                            pass
+
+                                        print(
+                                            "[Sprint196-29 Chrome ZWJ Emoji] READY",
+                                            {
+                                                "emoji": _emoji_text196,
+                                                "scene": int(
+                                                    _ee196.get("scene") or 0
+                                                ),
+                                                "size": _emoji_img196.size,
+                                            },
+                                            flush=True,
+                                        )
+
+                                    except Exception as _chrome_exc196_29:
+                                        print(
+                                            "[Sprint196-29 Chrome ZWJ Emoji] FALLBACK",
+                                            type(_chrome_exc196_29).__name__,
+                                            str(_chrome_exc196_29),
+                                            flush=True,
+                                        )
+
+                                        _probe_img196 = Image.new(
+                                            "RGBA",
+                                            (600, 180),
+                                            (0, 0, 0, 0),
+                                        )
+                                        _probe_draw196 = _ImageDraw_196_6.Draw(
+                                            _probe_img196
+                                        )
+                                        try:
+                                            _bbox196 = _probe_draw196.textbbox(
+                                                (0, 0),
+                                                _emoji_text196,
+                                                font=_emoji_font_196_6,
+                                                embedded_color=True,
+                                            )
+                                        except TypeError:
+                                            _bbox196 = _probe_draw196.textbbox(
+                                                (0, 0),
+                                                _emoji_text196,
+                                                font=_emoji_font_196_6,
+                                            )
+
+                                        _bw196 = max(
+                                            1,
+                                            int(_bbox196[2] - _bbox196[0]),
+                                        )
+                                        _bh196 = max(
+                                            1,
+                                            int(_bbox196[3] - _bbox196[1]),
+                                        )
+                                        _pad196 = 8
+
+                                        _emoji_img196 = Image.new(
+                                            "RGBA",
+                                            (
+                                                _bw196 + _pad196 * 2,
+                                                _bh196 + _pad196 * 2,
+                                            ),
+                                            (0, 0, 0, 0),
+                                        )
+                                        _draw196 = _ImageDraw_196_6.Draw(
+                                            _emoji_img196
+                                        )
+                                        try:
+                                            _draw196.text(
+                                                (
+                                                    _pad196 - _bbox196[0],
+                                                    _pad196 - _bbox196[1],
+                                                ),
+                                                _emoji_text196,
+                                                font=_emoji_font_196_6,
+                                                embedded_color=True,
+                                            )
+                                        except TypeError:
+                                            _draw196.text(
+                                                (
+                                                    _pad196 - _bbox196[0],
+                                                    _pad196 - _bbox196[1],
+                                                ),
+                                                _emoji_text196,
+                                                font=_emoji_font_196_6,
+                                                fill=(255, 255, 255, 255),
+                                            )
+
+                                else:
+                                    # Existing known-good Pillow path for normal emoji.
+                                    _probe_img196 = Image.new(
+                                        "RGBA",
+                                        (600, 180),
+                                        (0, 0, 0, 0),
+                                    )
+                                    _probe_draw196 = _ImageDraw_196_6.Draw(
+                                        _probe_img196
+                                    )
+
+                                    try:
+                                        _bbox196 = _probe_draw196.textbbox(
+                                            (0, 0),
+                                            _emoji_text196,
+                                            font=_emoji_font_196_6,
+                                            embedded_color=True,
+                                        )
+                                    except TypeError:
+                                        _bbox196 = _probe_draw196.textbbox(
+                                            (0, 0),
+                                            _emoji_text196,
+                                            font=_emoji_font_196_6,
+                                        )
+
+                                    _bw196 = max(
+                                        1,
+                                        int(_bbox196[2] - _bbox196[0]),
+                                    )
+                                    _bh196 = max(
+                                        1,
+                                        int(_bbox196[3] - _bbox196[1]),
+                                    )
+                                    _pad196 = 8
+
+                                    _emoji_img196 = Image.new(
+                                        "RGBA",
+                                        (
+                                            _bw196 + _pad196 * 2,
+                                            _bh196 + _pad196 * 2,
+                                        ),
+                                        (0, 0, 0, 0),
+                                    )
+                                    _draw196 = _ImageDraw_196_6.Draw(
+                                        _emoji_img196
+                                    )
+
+                                    try:
+                                        _draw196.text(
+                                            (
+                                                _pad196 - _bbox196[0],
+                                                _pad196 - _bbox196[1],
+                                            ),
+                                            _emoji_text196,
+                                            font=_emoji_font_196_6,
+                                            embedded_color=True,
+                                        )
+                                    except TypeError:
+                                        _draw196.text(
+                                            (
+                                                _pad196 - _bbox196[0],
+                                                _pad196 - _bbox196[1],
+                                            ),
+                                            _emoji_text196,
+                                            font=_emoji_font_196_6,
+                                            fill=(255, 255, 255, 255),
+                                        )
+
+                                _epath196 = _emoji_dir_196_6 / (
+                                    f"scene_{int(_ee196['scene']):02d}_emoji_{int(_emoji_event_no_196_8a):02d}.png"
+                                )
+                                _emoji_img196.save(_epath196, "PNG")
+                                _ew196, _eh196 = _emoji_img196.size
+
+                                # Sprint196-27:
+                                # Normalize emoji by VISUAL HEIGHT first.
+                                # Wide ZWJ emoji (🚶‍♂️, 🤷‍♂️, ➡️) must not become tiny
+                                # just because their source PNG is horizontally long.
+                                _emoji_target_h_196_27 = 112
+                                _emoji_max_w_196_27 = 180
+                                _emoji_max_h_196_27 = 118
+
+                                if _eh196 > 0:
+                                    _scale_h_196_27 = (
+                                        _emoji_target_h_196_27 / float(_eh196)
+                                    )
+
+                                    _new_w196_27 = max(
+                                        1,
+                                        int(round(_ew196 * _scale_h_196_27)),
+                                    )
+                                    _new_h196_27 = max(
+                                        1,
+                                        int(round(_eh196 * _scale_h_196_27)),
+                                    )
+
+                                    if _new_w196_27 > _emoji_max_w_196_27:
+                                        _scale_w_196_27 = (
+                                            _emoji_max_w_196_27
+                                            / float(_new_w196_27)
+                                        )
+                                        _new_w196_27 = _emoji_max_w_196_27
+                                        _new_h196_27 = max(
+                                            1,
+                                            int(
+                                                round(
+                                                    _new_h196_27
+                                                    * _scale_w_196_27
+                                                )
+                                            ),
+                                        )
+
+                                    _new_h196_27 = min(
+                                        _emoji_max_h_196_27,
+                                        _new_h196_27,
+                                    )
+
+                                    _resampling196_27 = getattr(
+                                        getattr(Image, "Resampling", Image),
+                                        "LANCZOS",
+                                    )
+
+                                    if (
+                                        _new_w196_27 != _ew196
+                                        or _new_h196_27 != _eh196
+                                    ):
+                                        _emoji_img196 = _emoji_img196.resize(
+                                            (
+                                                _new_w196_27,
+                                                _new_h196_27,
+                                            ),
+                                            _resampling196_27,
+                                        )
+                                        _emoji_img196.save(_epath196, "PNG")
+                                        _ew196, _eh196 = _emoji_img196.size
+
+                                # Sprint196-17 LOOP INDENT FIX
+                                # Sprint196-12 HISTORY EMOJI LINE-SIDE POSITION
+                                # Explicit left emoji -> first subtitle line, outside the left edge.
+                                # Explicit right emoji -> last subtitle line, outside the right edge.
+                                # This intentionally overrides legacy 196-8A/8B/9 positional heuristics.
+                                _side196_12 = str(_ee196.get("side") or "").strip().lower()
+                                if _side196_12 in {"left", "right"}:
+                                    _box_x196_12 = int(_ee196.get("box_x") or 0)
+                                    _box_y196_12 = int(_ee196.get("box_y") or 0)
+                                    _box_w196_12 = int(_ee196.get("box_w") or 0)
+                                    _box_h196_12 = max(1, int(_ee196.get("box_h") or 1))
+                                    _lines196_12 = max(1, min(2, int(_ee196.get("lines") or 1)))
+                                    _line_h196_12 = _box_h196_12 / float(_lines196_12)
+                                    _gap196_12 = 18
+
+                                    # Sprint196-23:
+                                    # Use the REAL measured subtitle line edge.
+                                    # Left emoji = first line left edge.
+                                    # Right emoji = last line right edge.
+                                    _line_widths196_23 = list(
+                                        _ee196.get("line_widths_196_18") or []
+                                    )
+
+                                    if _side196_12 == "left":
+                                        _line_index196_12 = 0
+                                    else:
+                                        _line_index196_12 = _lines196_12 - 1
+
+                                    if (
+                                        _line_index196_12
+                                        < len(_line_widths196_23)
+                                    ):
+                                        _line_w196_23 = int(
+                                            _line_widths196_23[
+                                                _line_index196_12
+                                            ]
+                                            or 0
+                                        )
+                                    else:
+                                        _line_w196_23 = int(_box_w196_12)
+
+                                    # ASS outline/emphasis safety margin.
+                                    _line_w196_23 = int(
+                                        min(
+                                            760,
+                                            max(
+                                                100,
+                                                (_line_w196_23 * 1.06) + 24,
+                                            ),
+                                        )
+                                    )
+
+                                    _caption_center_x196_23 = 540
+                                    _gap196_12 = 24
+
+                                    _line_left196_23 = int(
+                                        _caption_center_x196_23
+                                        - (_line_w196_23 / 2)
+                                    )
+                                    _line_right196_23 = int(
+                                        _caption_center_x196_23
+                                        + (_line_w196_23 / 2)
+                                    )
+
+                                    if _side196_12 == "left":
+                                        _x196_12 = int(
+                                            _line_left196_23
+                                            - _ew196
+                                            - _gap196_12
+                                        )
+                                    else:
+                                        _x196_12 = int(
+                                            _line_right196_23
+                                            + _gap196_12
+                                        )
+
+                                    _line_center_y196_12 = (
+                                        _box_y196_12
+                                        + (_line_index196_12 + 0.5) * _line_h196_12
+                                    )
+                                    _y196_12 = int(_line_center_y196_12 - (_eh196 / 2))
+
+                                    _x196_12 = max(24, min(1080 - _ew196 - 24, int(_x196_12)))
+                                    _y196_12 = max(0, min(1920 - _eh196, int(_y196_12)))
+                                # Sprint196-8B HISTORY ONLY:
+                                # Keep color emoji OUTSIDE the rendered subtitle glyph area.
+                                # The caption box already reserves emoji width, so use that reserved
+                                # right-side space instead of estimating Korean/ASS glyph positions.
+                                _box_x_196_8b = int(_ee196.get("box_x") or 140)
+                                _box_y_196_8b = int(_ee196.get("box_y") or 1184)
+                                _box_w_196_8b = max(120, int(_ee196.get("box_w") or 800))
+                                _box_h_196_8b = max(80, int(_ee196.get("box_h") or 132))
+                                _line_count_196_8b = max(1, min(2, int(_ee196.get("lines") or 1)))
+                                _line_index_196_8b = max(
+                                    0,
+                                    min(_line_count_196_8b - 1, int(_ee196.get("line_index") or 0)),
+                                )
+
+                                _same_line_count_196_8b = sum(
+                                    1
+                                    for _x1968b in _emoji_overlay_events_196_6
+                                    if int(_x1968b.get("scene") or 0) == int(_ee196.get("scene") or 0)
+                                    and int(_x1968b.get("line_index") or 0) == _line_index_196_8b
+                                )
+                                _same_line_order_196_8b = sum(
+                                    1
+                                    for _x1968b in _emoji_overlay_events_196_6[:max(0, int(_emoji_event_no_196_8a) - 1)]
+                                    if int(_x1968b.get("scene") or 0) == int(_ee196.get("scene") or 0)
+                                    and int(_x1968b.get("line_index") or 0) == _line_index_196_8b
+                                )
+
+                                # Sprint196-10A: dedicated left/right slots, outside subtitle glyphs.
+                                _slot_196_8b = 92
+                                _gap_196_8b = 10
+                                _side_196_10 = str(_ee196.get("side") or "right").strip().lower()
+                                _same_side_order_196_10 = sum(
+                                    1 for _x19610 in _emoji_overlay_events_196_6[:max(0, int(_emoji_event_no_196_8a) - 1)]
+                                    if int(_x19610.get("scene") or 0) == int(_ee196.get("scene") or 0)
+                                    and str(_x19610.get("side") or "right").strip().lower() == _side_196_10
+                                )
+                                if _side_196_10 == "left":
+                                    _x196 = int(_box_x_196_8b - _gap_196_8b - _ew196 - _same_side_order_196_10 * _slot_196_8b)
+                                else:
+                                    _x196 = int(_box_x_196_8b + _box_w_196_8b + _gap_196_8b + _same_side_order_196_10 * _slot_196_8b)
+                                _x196 = max(140, min(940 - _ew196, _x196))
+
+                                _line_h_196_8b = _box_h_196_8b / float(_line_count_196_8b)
+                                _line_center_y196 = (
+                                    _box_y_196_8b
+                                    + (_line_index_196_8b + 0.5) * _line_h_196_8b
+                                )
+                                _y196 = int(_line_center_y196 - _eh196 / 2)
+                                _y196 = max(0, min(1920 - _eh196, _y196))
+                                if _side196_12 in {"left", "right"}:
+                                    _x196 = _x196_12
+                                    _y196 = _y196_12
+                                _emoji_png_events_196_6.append({
+                                        **_ee196,
+                                        "path": str(_epath196),
+                                        "x": _x196,
+                                        "y": _y196,
+                                        "w": _ew196,
+                                        "h": _eh196,
+                                    })
+                        except Exception as _emoji_exc196:
+                            print("[Sprint196-6 History Color Emoji] RENDER ERROR", type(_emoji_exc196).__name__, str(_emoji_exc196), flush=True)
+                    else:
+                        print("[Sprint196-6 History Color Emoji] FONT/PIL MISSING", {
+                            "font": str(_emoji_font_path_196_6 or ""), "pil": bool(Image is not None)
+                        }, flush=True)
+                # Sprint196-13 HISTORY EMOJI MANIFEST
+                # Persist the exact PNG/timing/position data so the One Click layer can
+                # deterministically finalize the already-rendered history MP4.
+                try:
+                    import json as _json_196_13
+                    _emoji_manifest_196_13 = _history_root / "emoji_196_13_manifest.json"
+                    _emoji_manifest_196_13.write_text(
+                        _json_196_13.dumps(
+                            [
+                                {
+                                    "scene": int(x.get("scene") or 0),
+                                    "emoji": str(x.get("emoji") or ""),
+                                    "side": str(x.get("side") or ""),
+                                    "start": float(x.get("start") or 0.0),
+                                    "end": float(x.get("end") or 0.0),
+                                    "path": str(x.get("path") or ""),
+                                    "x": int(x.get("x") or 0),
+                                    "y": int(x.get("y") or 0),
+                                    "w": int(x.get("w") or 0),
+                                    "h": int(x.get("h") or 0),
+                                }
+                                for x in list(_emoji_png_events_196_6)
+                            ],
+                            ensure_ascii=False,
+                            indent=2,
+                        ),
+                        encoding="utf-8",
+                    )
+                    print("[Sprint196-13 History Emoji Manifest] READY", {
+                        "path": str(_emoji_manifest_196_13),
+                        "count": len(_emoji_png_events_196_6),
+                    }, flush=True)
+                except Exception as _emoji_manifest_exc_196_13:
+                    print("[Sprint196-13 History Emoji Manifest] ERROR",
+                          type(_emoji_manifest_exc_196_13).__name__,
+                          str(_emoji_manifest_exc_196_13), flush=True)
+
+                print("[Sprint196-6 History Color Emoji] READY", {
+                    "requested": len(_emoji_overlay_events_196_6),
+                    "rendered": len(_emoji_png_events_196_6),
+                    "scenes": [x.get("scene") for x in _emoji_png_events_196_6],
+                    "mode": "png-overlay-not-libass",
+                }, flush=True)
+
+                # Sprint196-16 FINAL EMOJI MANIFEST WRITE
+                # Write once AFTER all emoji PNG events are complete.
+                try:
+                    import json as _json_196_16
+                    _emoji_manifest_final_196_16 = (
+                        _history_root / "emoji_196_13_manifest.json"
+                    )
+                    _emoji_manifest_final_196_16.write_text(
+                        _json_196_16.dumps(
+                            [
+                                {
+                                    "scene": int(x.get("scene") or 0),
+                                    "emoji": str(x.get("emoji") or ""),
+                                    "side": str(x.get("side") or ""),
+                                    "start": float(x.get("start") or 0.0),
+                                    "end": float(x.get("end") or 0.0),
+                                    "path": str(x.get("path") or ""),
+                                    "x": int(x.get("x") or 0),
+                                    "y": int(x.get("y") or 0),
+                                    "w": int(x.get("w") or 0),
+                                    "h": int(x.get("h") or 0),
+                                }
+                                for x in list(_emoji_png_events_196_6)
+                            ],
+                            ensure_ascii=False,
+                            indent=2,
+                        ),
+                        encoding="utf-8",
+                    )
+                    print(
+                        "[Sprint196-16 Final Emoji Manifest] READY",
+                        {
+                            "count": len(_emoji_png_events_196_6),
+                            "path": str(_emoji_manifest_final_196_16),
+                        },
+                        flush=True,
+                    )
+                except Exception as _exc_196_16:
+                    print(
+                        "[Sprint196-16 Final Emoji Manifest] ERROR",
+                        type(_exc_196_16).__name__,
+                        str(_exc_196_16),
+                        flush=True,
+                    )
                 print("[Sprint194-38 History Emphasis Render Verify] READY", {"count": len(_emphasis_verify_194_38), "items": _emphasis_verify_194_38, "ass_path": str(_ass), "ass_has_gold": any("2CA7D4" in x for x in _ass_lines)}, flush=True)
 
                 # Sprint194-16: 역할 기반 SFX. 외부 파일 의존 없이 FFmpeg로 짧은 효과음을 생성합니다.
@@ -7892,15 +8798,136 @@ class WorkflowEngine:
                     "box_count": len(_subtitle_boxes_194_64), "scene1_mobile_wrap": True,
                     "safe_area": {"left": 140, "right": 140, "max_box_width": 800, "caption_center_y": 1250, "ass_margin_v": 620},
                 }, flush=True)
+
+                # Sprint196-10D generated-PNG diagnostic
+                print("[Sprint196-10D Emoji PNG Events]", {
+                    "count": len(_emoji_png_events_196_6),
+                    "events": [
+                        {
+                            "scene": x.get("scene"),
+                            "emoji": x.get("emoji"),
+                            "side": x.get("side"),
+                            "path": str(x.get("path") or ""),
+                            "x": x.get("x"),
+                            "y": x.get("y"),
+                        }
+                        for x in list(_emoji_png_events_196_6)
+                    ],
+                }, flush=True)
+
+                # Sprint196-6: emoji PNGs are appended after every audio input, so existing
+                # audio labels/indices stay untouched. Burn ASS first, then overlay color PNGs.
+                _emoji_input_start_196_6 = _next_input
+                for _ep196 in _emoji_png_events_196_6:
+                    _inputs += ["-loop", "1", "-framerate", "30", "-i", str(_ep196["path"])]
+
+                _video_filter_parts_196_6 = []
+                if _emoji_png_events_196_6:
+                    _video_filter_parts_196_6.append(f"[0:v]{_vf_ass}[vemoji_base196]")
+                    _prev_v196 = "vemoji_base196"
+                    for _ek196, _ep196 in enumerate(_emoji_png_events_196_6):
+                        _input_idx196 = _emoji_input_start_196_6 + _ek196
+                        _next_v196 = f"vemoji_{_ek196}"
+                        _enable196 = f"between(t,{float(_ep196['start']):.3f},{float(_ep196['end']):.3f})"
+                        _video_filter_parts_196_6.append(
+                            f"[{_prev_v196}][{_input_idx196}:v]overlay=x={int(_ep196['x'])}:y={int(_ep196['y'])}:"
+                            f"enable='{_enable196}':eof_action=pass:repeatlast=1[{_next_v196}]"
+                        )
+                        _prev_v196 = _next_v196
+                    _video_filter_parts_196_6.append(f"[{_prev_v196}]format=yuv420p[vout196]")
+                    _video_map_196_6 = "[vout196]"
+                else:
+                    _video_map_196_6 = "0:v:0"
+
+                _all_filter_parts_196_6 = list(_filter_parts) + list(_video_filter_parts_196_6)
                 _cmd = ["ffmpeg", "-y"] + _inputs
-                if _filter_parts:
-                    _cmd += ["-filter_complex", ";".join(_filter_parts)]
-                _cmd += ["-vf", _vf_ass, "-map", "0:v:0", "-map", _audio_map,
-                         "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-c:a", "aac", "-b:a", "192k",
+                if _all_filter_parts_196_6:
+                    _cmd += ["-filter_complex", ";".join(_all_filter_parts_196_6)]
+                if _emoji_png_events_196_6:
+                    _cmd += ["-map", _video_map_196_6, "-map", _audio_map]
+                else:
+                    _cmd += ["-vf", _vf_ass, "-map", _video_map_196_6, "-map", _audio_map]
+                _cmd += ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-c:a", "aac", "-b:a", "192k",
                          "-t", f"{_voice_duration:.3f}", "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(_final)]
                 _r = subprocess.run(_cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
                 if _r.returncode != 0 or not _final.is_file() or _final.stat().st_size <= 1024:
                     raise RuntimeError("history_final_render_failed: " + str((_r.stderr or _r.stdout or "")[-1600:]))
+                # Sprint196-11 HISTORY FINAL POST EMOJI OVERLAY
+                # Apply verified color PNGs in a clean second pass over the completed history MP4.
+                if _emoji_png_events_196_6:
+                    _emoji_post_tmp_196_11 = _history_root / "history_final_emoji_post_196_11.mp4"
+                    _post_inputs_196_11 = ["-i", str(_final)]
+                    for _ep196_11 in _emoji_png_events_196_6:
+                        _post_inputs_196_11 += [
+                            "-loop", "1", "-framerate", "30",
+                            "-i", str(_ep196_11["path"]),
+                        ]
+
+                    _post_filters_196_11 = []
+                    _post_prev_196_11 = "0:v"
+                    for _k196_11, _ep196_11 in enumerate(_emoji_png_events_196_6, start=1):
+                        _post_next_196_11 = f"emoji_post_{_k196_11}"
+                        _post_enable_196_11 = (
+                            f"between(t,{float(_ep196_11['start']):.3f},"
+                            f"{float(_ep196_11['end']):.3f})"
+                        )
+                        _post_filters_196_11.append(
+                            f"[{_post_prev_196_11}][{_k196_11}:v]"
+                            f"overlay=x={int(_ep196_11['x'])}:y={int(_ep196_11['y'])}:"
+                            f"enable='{_post_enable_196_11}':eof_action=pass:repeatlast=1"
+                            f"[{_post_next_196_11}]"
+                        )
+                        _post_prev_196_11 = _post_next_196_11
+
+                    _post_filters_196_11.append(
+                        f"[{_post_prev_196_11}]format=yuv420p[vemoji_post19611]"
+                    )
+
+                    _post_cmd_196_11 = (
+                        ["ffmpeg", "-y"]
+                        + _post_inputs_196_11
+                        + [
+                            "-filter_complex", ";".join(_post_filters_196_11),
+                            "-map", "[vemoji_post19611]",
+                            "-map", "0:a?",
+                            "-c:v", "libx264",
+                            "-preset", "veryfast",
+                            "-crf", "20",
+                            "-c:a", "copy",
+                            "-t", f"{_voice_duration:.3f}",
+                            "-pix_fmt", "yuv420p",
+                            "-movflags", "+faststart",
+                            str(_emoji_post_tmp_196_11),
+                        ]
+                    )
+
+                    _post_r_196_11 = subprocess.run(
+                        _post_cmd_196_11,
+                        capture_output=True,
+                        text=True,
+                        encoding="utf-8",
+                        errors="replace",
+                        check=False,
+                    )
+                    if (
+                        _post_r_196_11.returncode != 0
+                        or not _emoji_post_tmp_196_11.is_file()
+                        or _emoji_post_tmp_196_11.stat().st_size <= 1024
+                    ):
+                        raise RuntimeError(
+                            "history_final_emoji_post_overlay_failed: "
+                            + str((_post_r_196_11.stderr or _post_r_196_11.stdout or "")[-1800:])
+                        )
+
+                    _final.unlink(missing_ok=True)
+                    _emoji_post_tmp_196_11.replace(_final)
+                    print("[Sprint196-11 History Final Emoji Post Overlay] READY", {
+                        "count": len(_emoji_png_events_196_6),
+                        "final": str(_final),
+                        "bytes": _final.stat().st_size if _final.is_file() else 0,
+                        "audio_preserved": True,
+                        "mode": "clean-second-pass",
+                    }, flush=True)
                 print("[Sprint194-38 History Final Burn Verify] READY", {"final": str(_final), "bytes": _final.stat().st_size if _final.is_file() else 0, "ass": str(_ass), "emphasis_count": len(_emphasis_verify_194_38), "sfx_count": len(_sfx_events), "ffmpeg_rc": _r.returncode}, flush=True)
 
                 _final_d = _probe_dur_194_9(_final)
@@ -8194,6 +9221,8 @@ class WorkflowEngine:
         tts_volume_percent=100,
         tts_speech_speed=1.0,
         clip_subtitles=None,
+        clip_emoji_left=None,
+        clip_emoji_right=None,
         clip_subtitle_effects=None,
         clip_sfx=None,
         clip_playback_speeds=None,
@@ -8221,6 +9250,8 @@ class WorkflowEngine:
                 tts_volume_percent=tts_volume_percent,
                 tts_speech_speed=tts_speech_speed,
                 clip_subtitles=list(clip_subtitles or []),
+                clip_emoji_left=list(clip_emoji_left or []),
+                clip_emoji_right=list(clip_emoji_right or []),
                 clip_subtitle_effects=list(clip_subtitle_effects or []),
                 clip_sfx=list(clip_sfx or []),
                 clip_playback_speeds=list(clip_playback_speeds or []),
